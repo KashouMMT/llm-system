@@ -1,0 +1,17 @@
+# Python Virtual Environment File
+.venv
+venv/
+env/
+
+# General Env file (Secrets)
+.env
+
+# Python Cache
+**/__pycache__/
+*.py[cod]
+
+# Logs
+app/logs/
+
+# Personal Notes
+TODO
