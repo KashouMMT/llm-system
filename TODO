@@ -49,6 +49,8 @@ message data that have summary + recent messages)
 - Recursive summary trees / structured memory objects
 - Refresh, learn RAG back again.
 
+# Random Mismash Notes:
+
 - uvicorn api:fastapi:app --reload
 - python app/main.py
 
