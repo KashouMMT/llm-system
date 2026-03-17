@@ -1,0 +1,107 @@
+# Things to do
+
+1. Maybe use MySQL, MongoDB for User account and chat history storage. Refer to 6.
+
+2. Long term conversation persistant across session. Refer to 6.
+
+3. Config settings is being constant by .env. Need to be dynamic by user conversation.
+
+4. Summarization is done by Tokenization.
+- If conversation exceed over a certain token, find midpoint and half it. 
+- However... it'd be awkward if the important critical conversation is cut off halfway and summarized it.
+
+5. Vector DB (RAG)
+- Chroma
+- FAISS
+- Pinecone
+
+6. Databases to use.
+- (1) Short Term Memory Storage -> should use Redis instead of in-memory // self.store = {}
+- (2) Chat conversation -> MongoDB?
+- (3) User Information -> MySQL?   
+- Or maybe use PostgreSQL for both 2 and 3 ? since PostgreSQL is friendly with Vector DB?
+
+7. Idea For Tables (For now)
+
+(1) Conversation Table
+- session_id
+- user_id
+- persona_name
+- model_name
+- temperature
+- top_p
+- max_tokens
+- created_at
+- updated_at
+
+(2) Message Table
+- conversation_id
+- role (user/ai/system)
+- content
+- timestamp
+- summary? 
+(Idea -> Keep summary as field. 
+If llm decided to summarize the conversation, stored it there, 
+else empty. Later, if user reinitiate the conversation, load the conversation start from
+message data that have summary + recent messages)
+
+# Notes (To learn):
+- Recursive summary trees / structured memory objects
+- Refresh, learn RAG back again.
+
+- uvicorn api:fastapi:app --reload
+- python app/main.py
+
+
+Your Current Architecture (Very Good Now)
+
+You now have:
+
+app
+ ├── services
+ │     chat_service.py
+ │
+ ├── memory
+ │     short_term_memory.py
+ │     summary_memory.py
+ │     vector_memory.py
+ │     memory_router.py
+ │
+ ├── llm
+ │     chain_factory.py
+ │     prompt_factory.py
+ │     llm_factory.py
+ │
+ └── persona
+       system_prompt_builder.py
+
+This is very close to production LLM backend architecture.
+
+Next Step I Recommend (Huge Improvement)
+
+Right now your memory pipeline is:
+
+history → summarize
+
+But the real next upgrade is:
+
+conversation
+     ↓
+memory extractor (LLM)
+     ↓
+vector memory
+
+Example conversation:
+
+User: My grandma loves diamond watches
+
+Extractor stores:
+
+UserPreference:
+grandmother likes diamond jewelry
+
+Which your AI can remember forever across sessions.
+
+This is how assistants become personalized.
+
+If you want, I can show you the cleanest way to implement runtime memory extraction with your current architecture (it fits perfectly into your MemoryRouter).

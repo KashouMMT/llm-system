@@ -11,7 +11,4 @@ env/
 *.py[cod]
 
 # Logs
-app/logs/
-
-# Personal Notes
-TODO
+logs/
