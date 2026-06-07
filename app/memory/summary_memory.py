@@ -1,4 +1,4 @@
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.utils.logger import logger
 
@@ -41,7 +41,7 @@ Summary:
         summary = self.summarize_messages(old_messages)
         
         new_messages = [
-            HumanMessage(content=f"Conversation summary: {summary}")
+            SystemMessage(content=f"Conversation summary:\n{summary}")
         ] + recent_messages
         
         history.messages.clear()

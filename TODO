@@ -1,6 +1,6 @@
 # Things to do
 
-1. Maybe use MySQL, MongoDB for User account and chat history storage. Refer to 6.
+1. Centralize everything. Use PostgreSQL for user account, chat history and vector db.
 
 2. Long term conversation persistant across session. Refer to 6.
 
@@ -11,15 +11,14 @@
 - However... it'd be awkward if the important critical conversation is cut off halfway and summarized it.
 
 5. Vector DB (RAG)
-- Chroma
-- FAISS
-- Pinecone
+- Possible canidates:
+  - Chroma
+  - FAISS
+  - Pinecone
+- For now, just use PostgreSQL for simplicity. We'll de-centralize if the scale become bigger.
 
 6. Databases to use.
-- (1) Short Term Memory Storage -> should use Redis instead of in-memory // self.store = {}
-- (2) Chat conversation -> MongoDB?
-- (3) User Information -> MySQL?   
-- Or maybe use PostgreSQL for both 2 and 3 ? since PostgreSQL is friendly with Vector DB?
+- Use PostgreSQL
 
 7. Idea For Tables (For now)
 
@@ -33,17 +32,13 @@
 - max_tokens
 - created_at
 - updated_at
+- summary_text
 
 (2) Message Table
 - conversation_id
 - role (user/ai/system)
 - content
 - timestamp
-- summary? 
-(Idea -> Keep summary as field. 
-If llm decided to summarize the conversation, stored it there, 
-else empty. Later, if user reinitiate the conversation, load the conversation start from
-message data that have summary + recent messages)
 
 # Notes (To learn):
 - Recursive summary trees / structured memory objects
@@ -51,7 +46,7 @@ message data that have summary + recent messages)
 
 # Random Mismash Notes:
 
-- uvicorn api:fastapi:app --reload
+- uvicorn api.fastapi:app --reload
 - python app/main.py
 
 
@@ -107,3 +102,14 @@ Which your AI can remember forever across sessions.
 This is how assistants become personalized.
 
 If you want, I can show you the cleanest way to implement runtime memory extraction with your current architecture (it fits perfectly into your MemoryRouter).
+
+
+####
+
+Hi, do you have any rooms available tonight?
+
+I'm looking for something affordable
+
+Do you have anything with a sea view?
+
+The deluxe room sounds good, I'll take it

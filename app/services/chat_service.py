@@ -18,7 +18,7 @@ class ChatService:
         
         start = time.time()
         
-        response = self.chain.ainvoke(
+        response = await self.chain.ainvoke(
             {"user_input": user_input},
             config={"configurable": {"session_id": session_id}},
         )

@@ -1,121 +1,105 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { useRef, useEffect, useState } from "react";
+import { useChat } from "./useChat";
+
+import styles from "./assets/style.module.css";
+
+type Message = {
+	id: number;
+	text: string;
+	sender: "user" | "bot";
+};
 
 function App() {
-  const [count, setCount] = useState(0)
+	const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+	const [messages, setMessages] = useState<Message[]>([
+		{
+			id: 1,
+			text: "Hello! How can I assist you today?",
+			sender: "bot",
+		},
+	]);
 
-      <div className="ticks"></div>
+	const [input, setInput] = useState("");
+	const [sessionId] = useState(() => crypto.randomUUID());
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+	const { sendMessageStream, loading } = useChat();
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+	const sendMessage = async () => {
+		if (!input.trim()) return;
+
+		const userText = input;
+
+		const userMessage: Message = {
+			id: Date.now(),
+			text: userText,
+			sender: "user",
+		};
+
+		const botMessageId = Date.now() + 1;
+
+		setMessages((prev) => [
+			...prev,
+			userMessage,
+			{ id: botMessageId, text: "", sender: "bot" },
+		]);
+
+		setInput("");
+
+		await sendMessageStream(userText, sessionId, (chunk) => {
+			setMessages((prev) =>
+				prev.map((msg) =>
+					msg.id === botMessageId
+						? { ...msg, text: msg.text + chunk }
+						: msg,
+				),
+			);
+		});
+	};
+
+	useEffect(() => {
+		bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+	}, [messages]);
+
+	return (
+		<div className={`${styles["chat-container"]}`}>
+			<div className={`${styles["chat-window"]}`}>
+				{messages.map((msg) =>  {
+                    const showBookButton = msg.sender === "bot" && msg.text.includes("/book_now");
+
+                    const cleanText = msg.text.replace("/book_now","").trim();
+
+                    return (
+					<div
+						key={msg.id}
+						className={`${styles.message} ${
+							msg.sender === "user" ? styles.user : styles.bot
+						}`}
+					>
+						{cleanText || "…"}
+                        {showBookButton && (
+                            <button className={styles.bookButton}
+                            onClick={() => alert("Booking flow goes here")}>
+                                Book a room now
+                            </button>
+                        )}
+					</div>
+				)})}
+                <div ref={bottomRef} />
+			</div>
+			<div className={`${styles["input-area"]}`}>
+				<input
+					value={input}
+					onChange={(e) => setInput(e.target.value)}
+					placeholder="Send a message"
+					onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+				/>
+				<button onClick={sendMessage} disabled={loading}>
+					↑
+				</button>
+			</div>
+		</div>
+	);
 }
 
-export default App
+export default App;

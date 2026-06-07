@@ -1,4 +1,6 @@
 import logging
+import sys
+
 from pathlib import Path
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -35,8 +37,9 @@ def setup_logger():
     logger.addHandler(file_handler)
     
     if str(CONSOLE_LOG).lower() == "true":
-        console_handler = logging.StreamHandler()
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(formatter)
+        console_handler.stream.reconfigure(encoding='utf-8')
         logger.addHandler(console_handler)
     
     return logger
