@@ -5,3 +5,4 @@ ollama
 python-dotenv
 fastapi
 uvicorn
+psycopg[binary]

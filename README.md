@@ -5,16 +5,13 @@ A Chat LLM System With LangChain Libraray And Ollama.
 
 ```
 ai-llm-project/
-├── api/                                  # API endpoints
-│   └── fastapi.py                        # Fastapi main entry point
 ├── app/                                  # Main LLM Related Files
-│   ├── main.py                           # Direct Conversation with LLM on console output.
+│   ├── main.py                           # Main Entry point
 │   ├── config/                           # Configuration Folder
-│   │   └── settings.py                   # Configuration file for LLM 
-│   ├── persona/                          # Character Prompt function related folder
-|   |   └── load_prompt.py                # Load Prompt from prompt folder/file.txt
-│   ├── prompts/                          # Character Behavior and Personality Data Folder.
-│   │   └── default_prompt.txt            # Default Prompt
+│   │   └── settings.py                   # Load env values and other constant variables
+│   ├── database/                         # PostgreSQL Database Configuration 
+│   │   ├── connection.py                 # Create connection with database
+│   │   └── init_db.py                    # Initialize database and tables if not exist
 │   ├── llm/                              # LLM Folder
 │   │   ├── chain_factory.py              # Lang Chain orchestrator
 │   │   ├── llm_factory.py                # Ollama Client
@@ -25,6 +22,13 @@ ai-llm-project/
 │   │   ├── short_term_memory.py          # Short Term Memory Access
 │   │   ├── summary_memory.py             # Conversation Summarization
 │   │   └── vector_memory.py              # Vector DB (RAG) // To implement in future
+│   ├── persona/                          # Character Prompt function related folder
+│   │   └── load_prompt.py                # Load Prompt from prompt folder/file.txt
+│   ├── prompts/                          # Character Behavior and Personality Data Folder.
+│   ├── runtime/                          # Application Bootstrap Folder for main.py
+│   │   ├── application.py                # Initialize LLM
+│   │   ├── cli.py                        # CLI interface
+│   │   ├── server.py                     # FastAPI REST API
 │   ├── services/                         # Services folder
 │   │   └── chat_service.py               # Main Chat Service
 │   └── utils/                            # Utility Folder

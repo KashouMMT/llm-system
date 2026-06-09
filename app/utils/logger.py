@@ -44,4 +44,9 @@ def setup_logger():
     
     return logger
 
+def set_log_level(level: str):
+    logger.setLevel(
+        getattr(logging, level.upper(), logging.INFO)
+    )
+
 logger = setup_logger()
