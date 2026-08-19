@@ -3,7 +3,7 @@ A Chat LLM System With LangChain Libraray And Ollama.
 
 ## Folder Structure
 
-```
+``` 
 ai-llm-project/
 ├── app/                                  # Main LLM Related Files
 │   ├── main.py                           # Main Entry point
@@ -25,6 +25,8 @@ ai-llm-project/
 │   ├── persona/                          # Character Prompt function related folder
 │   │   └── load_prompt.py                # Load Prompt from prompt folder/file.txt
 │   ├── prompts/                          # Character Behavior and Personality Data Folder.
+│   ├── repositories/                     # Functions for executing sql script to tables.
+│   │   └── message_repository.py         # Message Table script.
 │   ├── runtime/                          # Application Bootstrap Folder for main.py
 │   │   ├── application.py                # Initialize LLM
 │   │   ├── cli.py                        # CLI interface
@@ -38,3 +40,8 @@ ai-llm-project/
 ├── README.md
 └── requirements.txt
 ```
+
+LangChain is mainly there for 
+Prompt Builder
++
+LLM Wrapper

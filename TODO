@@ -1,115 +1,365 @@
 # Things to do
 
-1. Centralize everything. Use PostgreSQL for user account, chat history and vector db.
+1. Config settings is being constant by .env. Need to be dynamic by user conversation.
 
-2. Long term conversation persistant across session. Refer to 6.
-
-3. Config settings is being constant by .env. Need to be dynamic by user conversation.
-
-4. Summarization is done by Tokenization.
+2. Summarization is done by Tokenization.
 - If conversation exceed over a certain token, find midpoint and half it. 
 - However... it'd be awkward if the important critical conversation is cut off halfway and summarized it.
 
-5. Vector DB (RAG)
+3. Vector DB (RAG)
 - Possible canidates:
   - Chroma
   - FAISS
   - Pinecone
 - For now, just use PostgreSQL for simplicity. We'll de-centralize if the scale become bigger.
 
-6. Databases to use.
-- Use PostgreSQL
+4. Duplicate Repositories
+Application
+    ├── MessageRepository
+    └── MemoryRouter
+            └── MessageRepository
+Need to cleanup
 
-7. Idea For Tables (For now)
-
-(1) Conversation Table
-- session_id
-- user_id
-- persona_name
-- model_name
-- temperature
-- top_p
-- max_tokens
-- created_at
-- updated_at
-- summary_text
-
-(2) Message Table
-- conversation_id
-- role (user/ai/system)
-- content
-- timestamp
 
 # Notes (To learn):
 - Recursive summary trees / structured memory objects
 - Refresh, learn RAG back again.
 
-# Random Mismash Notes:
+## How Typical AI Agent memory works. 
+### First do in-memory first. Then slowly progress to Database Postgresql for persistent.
+
+Phase 0
+In-Memory Prototype
+    ↓
+Phase 1
+messages
+    ↓
+Phase 2
+conversation_summaries
+    ↓
+Phase 3
+vector_memory
+    ↓
+Phase 4
+user_memories
+    ↓
+Phase 5
+relationship_state
+    ↓
+Phase 6
+emotion_state
+
+# Problems
+
+## Phase 2 — Conversation Summary
+### Problem 2.1 — Summary Trigger Strategy
+
+Question:
+- When should summarization happen?
+
+### Problem 2.2 — Summary Boundary
+
+Question:
+- Where should summary begin/end?
+Avoid:
+- Cut conversation in middle of important topic
+Need:
+- Summarize completed conversation chunks
+
+### Problem 2.3 — Summary Storage Design
+
+Question:
+- How should summaries be stored?
+
+### Problem 2.4 — Summary Injection
+Question:
+
+- How is summary inserted into prompt?
+
+### Problem 2.5 — Summary Refresh Strategy
+Question:
+
+- Do summaries replace old summaries? Or create layered summaries?
+
+## Phase 3 — User Memory
+### Problem 3.1 — Memory Extraction
+
+Question:
+
+- How does AI detect important facts?
+
+### Problem 3.2 — Memory Validation
+
+Question:
+
+- Can LLM write directly into DB?
+
+Current answer:
+
+- No.
+
+### Problem 3.3 — Memory Schema
+
+Question:
+
+- What columns should user_memories have?
+
+Potential:
+
+id
+session_id
+memory_key
+memory_value
+importance
+created_at
+updated_at
+
+### Problem 3.4 — Memory Importance
+
+Question:
+
+- How important is this memory?
+
+### Problem 3.5 — Memory Update
+
+Question:
+
+- What if user changes their mind?
+
+Example:
+
+Favorite color = purple
+↓
+Favorite color = blue
+
+Need update strategy.
+
+### Problem 3.6 — Memory Deletion
+
+Question:
+
+- How are outdated memories removed?
+
+Need:
+
+Replace, Archive, Forget rules.
+
+## Phase 4 — Memory Retrieval
+### Problem 4.1 — Memory Selection
+
+Question:
+
+- Which memories should be loaded?
+
+### Problem 4.2 — Retrieval Ranking
+
+Question:
+
+- How do we rank memories?
+
+Potential factors:
+
+Importance, Recency, Relevance
+
+### Problem 4.3 — Memory Context Budget
+
+Question:
+
+- How many memories can be injected?
+
+## Phase 5 — Relationship State
+### Problem 5.1 — Relationship Model
+
+Question:
+
+- What defines relationship?
+
+Possible dimensions:
+
+Trust, Closeness, Affection, Respect, Attachment
+
+### Problem 5.2 — Relationship Updates
+
+Question:
+
+- How does relationship change?
+
+Example:
+
+User compliments AI
+↓
+Affection +5
+
+Need update rules.
+
+### Problem 5.3 — Relationship Persistence
+
+Question:
+
+- How should relationship state be stored?
+
+Potential:
+
+relationship_states table.
+
+### Problem 5.4 — Relationship Prompt Injection
+
+Question:
+
+- How does relationship affect behavior?
+
+Need prompt format.
+
+## Phase 6 — Emotion State
+### Problem 6.1 — Emotion Model
+
+Question:
+
+Single emotion? or Emotion meters?
+
+Current preference:
+
+Joy: 10.23
+Sadness: 0.00
+Fear: 0.00
+Anger: 0.01
+Excitement: 40.00
+Trust: 34.32
+
+numeric values.
+
+### Problem 6.2 — Emotion Update Rules
+
+Question:
+
+- How does conversation change emotions?
+
+Example:
+
+User shares success
+↓
+Joy +10
+
+Need update strategy.
+
+### Problem 6.3 — Emotion Decay
+
+Question:
+
+Should emotions naturally fade?
+
+Current answer:
+
+Probably yes.
+
+### Problem 6.4 — Emotion Persistence
+
+Question:
+
+- How should emotions be stored?
+
+Need schema.
+
+### Problem 6.5 — Emotion Prompt Injection
+
+Question:
+
+- How does emotion affect response generation?
+
+Need prompt design.
+
+
+## Future Phase — Vector Memory
+### Problem 7.1 — Is Vector Memory Actually Needed?
+
+Question:
+
+- Can retrieval be solved without embeddings?
+
+Need evaluation.
+
+### Problem 7.2 — Embedding Strategy
+
+Question:
+
+- What gets embedded?
+
+Options:
+
+Messages
+Summaries
+User Memories
+
+Need decision.
+
+### Problem 7.3 — Vector Store Design
+
+Question:
+
+pgvector? Qdrant? Chroma?
+
+Need decision.
+
+### Problem T1 — Database Connection Pooling
+
+Current:
+
+One connection per query
+
+Future:
+
+Connection pool
+
+### Problem T2 — Session Management
+
+Need:
+
+chat_sessions
+
+table.
+
+### Problem T3 — Structured Repository Models
+
+Replace:
+
+(id, role, content, created_at)
+
+with:
+
+MessageRecord
+
+dataclass.
+
+# Random Note 1
 
 - uvicorn api.fastapi:app --reload
 - python app/main.py
 
+## Random Notes 2
 
-Your Current Architecture (Very Good Now)
+One Small Improvement I'd Make
 
-You now have:
+Your table currently:
 
-app
- ├── services
- │     chat_service.py
- │
- ├── memory
- │     short_term_memory.py
- │     summary_memory.py
- │     vector_memory.py
- │     memory_router.py
- │
- ├── llm
- │     chain_factory.py
- │     prompt_factory.py
- │     llm_factory.py
- │
- └── persona
-       system_prompt_builder.py
+CREATE TABLE messages (
+    id BIGSERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);
 
-This is very close to production LLM backend architecture.
+For future history retrieval I'd add:
 
-Next Step I Recommend (Huge Improvement)
+CREATE INDEX IF NOT EXISTS idx_messages_session
+ON messages(session_id);
 
-Right now your memory pipeline is:
+inside create_tables().
 
-history → summarize
+Because almost every query you'll perform is:
 
-But the real next upgrade is:
+WHERE session_id = ?
 
-conversation
-     ↓
-memory extractor (LLM)
-     ↓
-vector memory
+Not critical today.
 
-Example conversation:
-
-User: My grandma loves diamond watches
-
-Extractor stores:
-
-UserPreference:
-grandmother likes diamond jewelry
-
-Which your AI can remember forever across sessions.
-
-This is how assistants become personalized.
-
-If you want, I can show you the cleanest way to implement runtime memory extraction with your current architecture (it fits perfectly into your MemoryRouter).
-
-
-####
-
-Hi, do you have any rooms available tonight?
-
-I'm looking for something affordable
-
-Do you have anything with a sea view?
-
-The deluxe room sounds good, I'll take it
+Very useful later.

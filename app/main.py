@@ -19,17 +19,21 @@ def main():
     )
     
     parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable Debug Logging"
+        "--log-level",
+        default="INFO",
+        choices=[
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR",
+            "CRITICAL"
+        ],
+        help="Set log Level for logging. Default is INFO"
     )
     
     args = parser.parse_args()
     
-    if args.debug:
-        set_log_level("DEBUG")
-    else:
-        set_log_level("INFO")
+    set_log_level(args.log_level)
     
     application = create_application()
     

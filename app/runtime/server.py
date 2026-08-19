@@ -4,9 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 
-import time
-import uuid
-
 class ChatRequest(BaseModel):
     session_id: str
     messages: str
@@ -28,26 +25,22 @@ def create_api(application):
         allow_headers=["*"],
     )
     
-    @app.post("/chat", response_model=ChatResponse)
-    async def chat(req: ChatRequest):
+    @app.get("/history/{session_id}")
+    async def get_history(session_id: str):
         
-        request_id = uuid.uuid4().hex[:8]
-        
-        start = time.time()
-        
-        response = await application.chat_service.chat(
-            user_input=req.messages,
-            session_id=req.session_id
+        messages = application.message_repository.get_messages(
+            session_id
         )
         
-        latency = time.time() - start
-        
-        return ChatResponse(
-            response=response,
-            request_id=request_id,
-            latency=latency
-        )
-        
+        return [
+            {
+                "id": row[0],
+                "role": row[1],
+                "content": row[2],
+                "created_at": row[3]
+            }
+            for row in messages
+        ]
 
     @app.post("/chat/stream")
     async def chat_stream(req: ChatRequest):

@@ -51,6 +51,7 @@ def create_tables():
     
     try:
         with conn.cursor() as cur:
+            
             cur.execute(
             """
             CREATE TABLE IF NOT EXISTS messages (
@@ -60,6 +61,30 @@ def create_tables():
                 content TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT NOW()
             )
+            """
+            )
+            
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversation_summary_state (
+                session_id TEXT PRIMARY KEY,
+                summary TEXT NOT NULL,
+                last_summarized_message_id BIGINT NOT NULL DEFAULT 0,
+                updated_at TIMESTAMP DEFAULT NOW()
+            )
+            """
+            )
+            
+            cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS conversation_summaries (
+                id BIGSERIAL PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                start_message_id BIGINT NOT NULL,
+                end_message_id BIGINT NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT NOW()
+            )    
             """
             )
             

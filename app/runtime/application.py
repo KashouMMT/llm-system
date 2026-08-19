@@ -3,11 +3,9 @@ from app.persona.load_prompt import load_prompt
 from app.llm.llm_factory import LLMFactory
 from app.llm.prompt_factory import PromptFactory
 from app.llm.chain_factory import ChainFactory
-
 from app.memory.memory_router import MemoryRouter
-
 from app.services.chat_service import ChatService
-
+from app.repositories.message_repository import MessageRepository
 from app.database.init_db import initialize_database
 
 
@@ -17,6 +15,7 @@ class Application:
         self.system_prompt = load_prompt()
         self.llm = LLMFactory.create()
         self.memory = MemoryRouter(self.llm)
+        self.message_repository = MessageRepository()
         self.prompt = PromptFactory.create(self.system_prompt)
         self.chain = ChainFactory.create(
             self.prompt,
@@ -27,7 +26,8 @@ class Application:
         self.chat_service = ChatService(
             self.chain,
             self.memory,
-            self.system_prompt
+            self.system_prompt,
+            self.message_repository
         )
         
 def create_application():
