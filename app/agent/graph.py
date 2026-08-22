@@ -134,7 +134,7 @@ class AgentGraph:
         self,
         input_messages: Sequence[BaseMessage],
         thread_id: str,
-    ) -> AsyncIterator[dict]:
+    ) -> AsyncIterator[tuple[BaseMessage, dict]]:
         start = time.perf_counter()
 
         logger.debug(
@@ -149,18 +149,12 @@ class AgentGraph:
             }
         }
 
-        async for event in self.graph.astream(
+        async for message_chunk, metadata in self.graph.astream(
             {"messages": input_messages},
             config=config,
-            stream_mode="updates",
+            stream_mode="messages",
         ):
-            logger.debug(
-                "Graph event received | thread=%s nodes=%s",
-                thread_id,
-                list(event.keys()),
-            )
-
-            yield event
+            yield message_chunk, metadata
 
         elapsed = time.perf_counter() - start
 

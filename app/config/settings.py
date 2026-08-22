@@ -26,33 +26,52 @@ def get_positive_float(
 
     if value < 0:
         raise ValueError(f"{environment_name} must be greater than 0.")
+    
+    return value
 
 
 # LLM CONFIGURATION
 MODEL_NAME = os.getenv("MODEL_NAME", "dolphin-phi:latest")
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "default")
 TEMPERATURE = get_positive_float("TEMPERATURE", 0.7)
 MAX_TOKENS = get_positive_int("MAX_TOKENS", 512)
-CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 4096)
+CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 8192)
 TOP_P = get_positive_float("TOP_P", 0.9)
 
+# SUMMARY CONFIGURATION
+SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
+MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 50)
+# MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES.
+MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 12)
+MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 12)
+
+# USER INPUT
+MAX_USER_INPUT_CHARS = get_positive_int("MAX_USER_INPUT_CHARS", 4000)
+
+# OTHER CONFIGURATION
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+CONSOLE_LOG = os.getenv("CONSOLE_LOG", "false")
+
+# POSTGRESQL CONFIGURATION
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", 5432))
+DB_NAME = os.getenv("DB_NAME", "llm_system")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+DATABASE_URL = (
+    f"postgresql://"
+    f"{DB_USER}:"
+    f"{quote(DB_PASSWORD, safe='')}"
+    f"@{DB_HOST}:"
+    f"{DB_PORT}/"
+    f"{DB_NAME}"
+)
+
 # PROMPT
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "default")
 DEFAULT_PROMPT = """
 You are a helpful, intelligent, and reliable AI assistant.
 Provide clear, accurate, and thoughtful responses.
 """.strip()
-
-# SUMMARY CONFIGURATION
-SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
-MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int(
-    "MAX_CONTEXT_HISTORY_MESSAGES",
-    int(os.getenv("RECENT_MESSAGE_LIMIT", "20")),
-)
-MAX_CHECKPOINT_MESSAGES = get_positive_int(
-    "MAX_CHECKPOINT_MESSAGES",
-    50,
-)
-MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 100)
 SUMMARY_CHUNK_PROMPT = """
 You are a memory compression system.
 
@@ -133,24 +152,3 @@ NEW SUMMARY:
 
 {chunk_summary}
 """.strip()
-
-
-# OTHER CONFIGURATION
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-CONSOLE_LOG = os.getenv("CONSOLE_LOG", "false")
-
-# POSTGRESQL CONFIGURATION
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", 5432))
-DB_NAME = os.getenv("DB_NAME", "llm_system")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
-
-DATABASE_URL = (
-    f"postgresql://"
-    f"{DB_USER}:"
-    f"{quote(DB_PASSWORD, safe='')}"
-    f"@{DB_HOST}:"
-    f"{DB_PORT}/"
-    f"{DB_NAME}"
-)

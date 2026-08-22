@@ -3,13 +3,14 @@ from uuid import UUID
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from app.config.settings import MAX_USER_INPUT_CHARS
 from app.runtime.application import Application
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=MAX_USER_INPUT_CHARS)
 
 
 def create_api(application: Application) -> FastAPI:

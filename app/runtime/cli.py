@@ -1,3 +1,4 @@
+import asyncio
 from uuid import UUID
 
 from app.runtime.application import Application
@@ -103,7 +104,7 @@ async def run_cli(
     print()
 
     while True:
-        user_input = input("You: ")
+        user_input = await asyncio.to_thread(input, "You: ")
 
         command = user_input.strip().lower()
 

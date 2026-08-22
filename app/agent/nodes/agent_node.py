@@ -3,7 +3,7 @@ from collections.abc import Callable, Sequence
 from uuid import UUID
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
@@ -26,7 +26,7 @@ def create_agent_node(
     """
     llm_with_tools = llm.bind_tools(tools)
 
-    def agent_node(
+    async def agent_node(
         state: AgentState,
         config: RunnableConfig,
     ) -> dict:
@@ -62,13 +62,22 @@ def create_agent_node(
             conversation_id,
         )
 
-        response: AIMessage = llm_with_tools.invoke(
+        gathered: AIMessageChunk | None = None
+
+        async for chunk in llm_with_tools.astream(
             [
                 SystemMessage(content=system_prompt),
                 *prepared_context,
                 *current_turn_messages,
-            ]
-        )
+            ],
+            config=config,
+        ):
+            gathered = chunk if gathered is None else gathered + chunk
+
+        if gathered is None:
+            raise RuntimeError("LLM produced no output chunks for this turn.")
+
+        response = gathered
 
         llm_elapsed = time.perf_counter() - llm_start
 

@@ -8,6 +8,8 @@ from app.agent.checkpointer import create_checkpointer
 from app.agent.context.conversation_context_builder import (
     ConversationContextBuilder,
 )
+from app.agent.context.history_context_builder import HistoryContextBuilder
+from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.agent.graph import AgentGraph
 from app.agent.tools import TOOLS
 from app.config.settings import (
@@ -20,7 +22,9 @@ from app.llm.prompt_factory import PromptFactory
 from app.persona.load_prompt import load_prompt
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.summary_repository import SummaryRepository
 from app.services.chat_service import ChatService
+from app.services.summarization_service import SummarizationService
 from app.utils.logger import logger
 
 
@@ -30,6 +34,7 @@ class Application:
 
     Owns the lifecycle of the application's shared resources.
     """
+
     def __init__(self) -> None:
         self.llm = None
         self.system_prompt: str = ""
@@ -39,10 +44,14 @@ class Application:
 
         self.agent_graph: AgentGraph | None = None
         self.conversation_context_builder: ConversationContextBuilder | None = None
+        self.summary_context_builder: SummaryContextBuilder | None = None
+        self.history_context_builder: HistoryContextBuilder | None = None
 
         self.conversation_repository = ConversationRepository()
         self.message_repository = MessageRepository()
+        self.summary_repository = SummaryRepository()
 
+        self.summarization_service: SummarizationService | None = None
         self.chat_service: ChatService | None = None
 
     async def initialize(self) -> None:
@@ -89,10 +98,23 @@ class Application:
 
             logger.info("LangGraph checkpointer initialized")
 
-            logger.info("Creating conversation context builder")
-            self.conversation_context_builder = ConversationContextBuilder(
+            logger.info("Creating summary context builder")
+            self.summary_context_builder = SummaryContextBuilder(
+                summary_repository=self.summary_repository,
+            )
+            logger.info("Summary context builder initialized")
+
+            logger.info("Creating history context builder")
+            self.history_context_builder = HistoryContextBuilder(
                 message_repository=self.message_repository,
                 max_history_messages=MAX_CONTEXT_HISTORY_MESSAGES,
+            )
+            logger.info("History context builder initialized")
+
+            logger.info("Creating conversation context builder")
+            self.conversation_context_builder = ConversationContextBuilder(
+                summary_context_builder=self.summary_context_builder,
+                history_context_builder=self.history_context_builder,
             )
             logger.info("Conversation context builder initialized")
 
@@ -107,10 +129,19 @@ class Application:
             )
             logger.info("AgentGraph initialized")
 
+            logger.info("Creating summarization service")
+            self.summarization_service = SummarizationService(
+                llm=self.llm,
+                message_repository=self.message_repository,
+                summary_repository=self.summary_repository,
+            )
+            logger.info("Summarization service initialized")
+
             logger.info("Creating ChatService")
             self.chat_service = ChatService(
                 agent_graph=self.agent_graph,
                 conversation_repository=self.conversation_repository,
+                summarization_service=self.summarization_service,
             )
             logger.info("ChatService initialized")
 
@@ -147,6 +178,9 @@ class Application:
             self.checkpointer = None
             self.agent_graph = None
             self.conversation_context_builder = None
+            self.summary_context_builder = None
+            self.history_context_builder = None
+            self.summarization_service = None
             self.chat_service = None
             self.llm = None
 

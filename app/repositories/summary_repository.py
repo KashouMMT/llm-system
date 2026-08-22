@@ -144,3 +144,78 @@ class SummaryRepository:
 
         finally:
             conn.close()
+    
+    def save_summary_chunk_and_advance(
+        self,
+        conversation_id: UUID,
+        start_message_id: int,
+        end_message_id: int,
+        chunk_summary: str,
+        updated_summary: str, 
+    ) -> None:
+        """
+        Save one summary chunk and advance the summary state atomically.
+
+        Both writes commit together. If either fails, both roll back — so a
+        crash mid-write can never leave last_summarized_message_id advanced
+        without its corresponding chunk saved, or vice versa, which would
+        otherwise cause the next run to re-summarize and duplicate a chunk.
+        """
+        conn = get_connection()
+        
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO conversation_summaries (
+                        conversation_id,
+                        start_message_id,
+                        end_message_id,
+                        summary
+                    )
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        conversation_id,
+                        start_message_id,
+                        end_message_id,
+                        chunk_summary
+                    ),
+                )
+                
+                cur.execute(
+                    """
+                    INSERT INTO conversation_summary_state (
+                        conversation_id,
+                        summary,
+                        last_summarized_message_id
+                    )
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (conversation_id)
+                    DO UPDATE SET
+                        summary = EXCLUDED.summary,
+                        last_summarized_message_id =
+                            EXCLUDED.last_summarized_message_id,
+                        updated_at = NOW()
+                    """,
+                    (
+                        conversation_id,
+                        updated_summary,
+                        end_message_id
+                    ),
+                )
+                
+                conn.commit()
+                
+                logger.debug(
+                    "Summary chunk saved and state advanced | "
+                    "conversation=%s through_message=%s",
+                    conversation_id,
+                    end_message_id,
+                )
+        except Exception:
+            conn.rollback()
+            raise
+        
+        finally:
+            conn.close()

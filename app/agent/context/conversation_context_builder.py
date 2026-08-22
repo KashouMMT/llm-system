@@ -1,13 +1,10 @@
 import time
 from uuid import UUID
 
-from langchain_core.messages import (
-    AIMessage,
-    BaseMessage,
-    HumanMessage,
-)
+from langchain_core.messages import BaseMessage
 
-from app.repositories.message_repository import MessageRepository
+from app.agent.context.history_context_builder import HistoryContextBuilder
+from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.utils.logger import logger
 
 
@@ -16,21 +13,21 @@ class ConversationContextBuilder:
     Builds stable background context for one user request.
 
     Current sources:
-        - Recent completed conversation history.
+        - Durable conversation summary (messages already summarized away).
+        - Recent history: messages not yet folded into that summary.
 
     Future sources:
-        - Conversation summary for older completed messages.
         - RAG documents relevant to the current user query.
         - Durable user-memory facts.
     """
 
     def __init__(
         self,
-        message_repository: MessageRepository,
-        max_history_messages: int,
+        summary_context_builder: SummaryContextBuilder,
+        history_context_builder: HistoryContextBuilder,
     ) -> None:
-        self.message_repository = message_repository
-        self.max_history_messages = max_history_messages
+        self.summary_context_builder = summary_context_builder
+        self.history_context_builder = history_context_builder
 
     def build(
         self,
@@ -51,24 +48,28 @@ class ConversationContextBuilder:
             len(user_query),
         )
 
-        recent_history = self.build_recent_history(
+        summary_context = self.summary_context_builder.build(conversation_id)
+
+        recent_history = self.history_context_builder.build(
             conversation_id=conversation_id,
+            after_message_id=summary_context.last_summarized_message_id,
         )
 
         prepared_context: list[BaseMessage] = [
+            *summary_context.messages,
             *recent_history,
         ]
 
         # Future order:
         #
         # prepared_context = [
-        #     *self.build_summary_memory(conversation_id),
+        #     *summary_context.messages,
         #     *recent_history,
-        #     *self.retrieve_rag_context(
+        #     *self.rag_context_builder.build(
         #         conversation_id=conversation_id,
         #         user_query=user_query,
         #     ),
-        #     *self.build_user_memory(conversation_id),
+        #     *self.user_memory_context_builder.build(conversation_id),
         # ]
 
         elapsed = time.perf_counter() - start
@@ -82,32 +83,3 @@ class ConversationContextBuilder:
         )
 
         return prepared_context
-
-    def build_recent_history(
-        self,
-        conversation_id: UUID,
-    ) -> list[BaseMessage]:
-        """
-        Load completed transcript messages from the application database.
-        """
-        rows = self.message_repository.get_recent_messages(
-            conversation_id=conversation_id,
-            limit=self.max_history_messages,
-        )
-
-        history_messages: list[BaseMessage] = []
-
-        for _, role, content, _ in rows:
-            if role == "user":
-                history_messages.append(HumanMessage(content=content))
-
-            elif role == "assistant":
-                history_messages.append(AIMessage(content=content))
-
-        logger.debug(
-            "Recent transcript context loaded | conversation=%s messages=%s",
-            conversation_id,
-            len(history_messages),
-        )
-
-        return history_messages
