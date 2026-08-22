@@ -1,6 +1,8 @@
 langchain
 langchain-community
 langchain-ollama
+langgraph
+langgraph-checkpoint-postgres
 ollama
 python-dotenv
 fastapi

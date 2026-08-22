@@ -2,13 +2,13 @@ import psycopg
 
 from app.config.settings import (
     DB_HOST,
-    DB_PORT,
     DB_NAME,
-    DB_USER,
     DB_PASSWORD,
+    DB_PORT,
+    DB_USER,
 )
-
 from app.utils.logger import logger
+
 
 def get_connection():
     try:
@@ -17,11 +17,11 @@ def get_connection():
             port=DB_PORT,
             dbname=DB_NAME,
             user=DB_USER,
-            password=DB_PASSWORD
+            password=DB_PASSWORD,
         )
-        
+
         logger.info("PostgreSQL connected")
-        
+
         return conn
 
     except Exception as e:

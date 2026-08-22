@@ -1,0 +1,105 @@
+import time
+from collections.abc import Callable, Sequence
+from uuid import UUID
+
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import BaseTool
+
+from app.agent.state import AgentState, get_current_turn_messages
+from app.utils.logger import logger
+
+AgentNode = Callable[[AgentState, RunnableConfig], dict]
+
+
+def create_agent_node(
+    llm: BaseChatModel,
+    system_prompt: str,
+    tools: Sequence[BaseTool],
+) -> AgentNode:
+    """
+    Create the LLM decision node.
+
+    Prepared background context comes from the prepare_context node.
+    The active tool sequence comes from LangGraph state.
+    """
+    llm_with_tools = llm.bind_tools(tools)
+
+    def agent_node(
+        state: AgentState,
+        config: RunnableConfig,
+    ) -> dict:
+        start = time.perf_counter()
+
+        thread_id = config["configurable"]["thread_id"]
+        conversation_id = UUID(thread_id)
+
+        prepared_context = state.get("prepared_context")
+
+        if prepared_context is None:
+            raise RuntimeError(
+                "Prepared context is missing. "
+                "The prepare_context node must run before the agent node."
+            )
+
+        current_turn_messages = get_current_turn_messages(
+            state["messages"],
+        )
+
+        logger.debug(
+            "Agent node started | conversation=%s "
+            "prepared_context_messages=%s current_turn_messages=%s",
+            conversation_id,
+            len(prepared_context),
+            len(current_turn_messages),
+        )
+
+        llm_start = time.perf_counter()
+
+        logger.info(
+            "LLM invocation started | conversation=%s",
+            conversation_id,
+        )
+
+        response: AIMessage = llm_with_tools.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                *prepared_context,
+                *current_turn_messages,
+            ]
+        )
+
+        llm_elapsed = time.perf_counter() - llm_start
+
+        logger.info(
+            "LLM invocation completed | conversation=%s elapsed=%.2fs",
+            conversation_id,
+            llm_elapsed,
+        )
+
+        if response.tool_calls:
+            logger.info(
+                "LLM requested tools | conversation=%s tools=%s",
+                conversation_id,
+                [tool["name"] for tool in response.tool_calls],
+            )
+        else:
+            logger.debug(
+                "LLM returned final response | conversation=%s",
+                conversation_id,
+            )
+
+        total_elapsed = time.perf_counter() - start
+
+        logger.debug(
+            "Agent node completed | conversation=%s elapsed=%.2fs",
+            conversation_id,
+            total_elapsed,
+        )
+
+        return {
+            "messages": [response],
+        }
+
+    return agent_node

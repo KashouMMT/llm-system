@@ -1,26 +1,58 @@
 import os
+from urllib.parse import quote
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def get_positive_int(
+    environment_name: str,
+    default: int,
+) -> int:
+    value = int(os.getenv(environment_name, str(default)))
+
+    if value < 1:
+        raise ValueError(f"{environment_name} must be greater than or equal to 1.")
+
+    return value
+
+
+def get_positive_float(
+    environment_name: str,
+    default: float,
+) -> float:
+    value = float(os.getenv(environment_name, str(default)))
+
+    if value < 0:
+        raise ValueError(f"{environment_name} must be greater than 0.")
+
+
 # LLM CONFIGURATION
 MODEL_NAME = os.getenv("MODEL_NAME", "dolphin-phi:latest")
-TEMPERATURE = float(os.getenv("TEMPERATURE", 0.7))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", 512))
-CONTEXT_WINDOW = int(os.getenv("CONTEXT_WINDOW", 4096))
-TOP_P = float(os.getenv("TOP_P", 0.9))
+TEMPERATURE = get_positive_float("TEMPERATURE", 0.7)
+MAX_TOKENS = get_positive_int("MAX_TOKENS", 512)
+CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 4096)
+TOP_P = get_positive_float("TOP_P", 0.9)
 
 # PROMPT
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT","default")
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "default")
 DEFAULT_PROMPT = """
 You are a helpful, intelligent, and reliable AI assistant.
 Provide clear, accurate, and thoughtful responses.
 """.strip()
 
 # SUMMARY CONFIGURATION
-SUMMARY_TOKEN_THRESHOLD = int(os.getenv("SUMMARY_TOKEN_THRESHOLD",1200))
-RECENT_MESSAGE_LIMIT = int(os.getenv("RECENT_MESSAGE_LIMIT",20))
-MAX_UNSUMMARIZED_MESSAGES = int(os.getenv("MAX_UNSUMMARIZED_MESSAGES",100))
+SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
+MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int(
+    "MAX_CONTEXT_HISTORY_MESSAGES",
+    int(os.getenv("RECENT_MESSAGE_LIMIT", "20")),
+)
+MAX_CHECKPOINT_MESSAGES = get_positive_int(
+    "MAX_CHECKPOINT_MESSAGES",
+    50,
+)
+MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 100)
 SUMMARY_CHUNK_PROMPT = """
 You are a memory compression system.
 
@@ -104,12 +136,21 @@ NEW SUMMARY:
 
 
 # OTHER CONFIGURATION
-LOG_LEVEL = os.getenv("LOG_LEVEL","INFO")
-CONSOLE_LOG = os.getenv("CONSOLE_LOG","false")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+CONSOLE_LOG = os.getenv("CONSOLE_LOG", "false")
 
 # POSTGRESQL CONFIGURATION
-DB_HOST = os.getenv("DB_HOST","localhost")
-DB_PORT = int(os.getenv("DB_PORT",5432))
-DB_NAME = os.getenv("DB_NAME","llm_system")
-DB_USER = os.getenv("DB_USER","postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD","postgres")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", 5432))
+DB_NAME = os.getenv("DB_NAME", "llm_system")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+
+DATABASE_URL = (
+    f"postgresql://"
+    f"{DB_USER}:"
+    f"{quote(DB_PASSWORD, safe='')}"
+    f"@{DB_HOST}:"
+    f"{DB_PORT}/"
+    f"{DB_NAME}"
+)

@@ -1,140 +1,21 @@
-in llm folder chains.py file
+To verify:
 
-It use the | pipelines expression called LCEL pipelines
+1. Define ownership:
+   database transcript vs LangGraph workflow state
 
-basically, it helps with merging tons of functions into just simple pipelines
+2. Fix/verify current-turn context:
+   preserve the full tool-call sequence
 
-Like.. you'd have to writes tons of def for each functions
-for example: 
-chat model call def, invoke chain def, prompt def etc.
+3. Test direct answers and tool calls
 
-but with LCEL pipelines, it simplify the integration process.
+4. Change transcript persistence:
+   save user first; track failed/incomplete turns
 
+5. Implement true streaming
 
-Ollama is a local runtime server for running llm in your local PC devices.
-It manage your cpu and gpu to run the llm in your device.
+6. Measure latency:
+   database, context construction, model first-token time, tool time
 
-Langchain is a framework.. or "Orchestration framework" as ChatGPT said.
-From what it sounds like, it's for integration and communication of AI system.
-Memory, RAG, Tools calling, streaming, prompt management, etc.
-And LCEL comes in there.
+7. Add SummaryMemory
 
-
-###################################################################################################
-
-Companion AI Memory Evolution
-Phase 1 — Persistent Chat History
-
-Store raw conversation.
-
-messages
-
-Examples:
-
-User: I like Persona 5.
-AI: That's a popular JRPG.
-
-Purpose:
-
-Conversation continuity
-Auditing/debugging
-Foundation for everything else
-
-This is what you're building now.
-
-Phase 2 — Conversation Summaries
-
-Store compressed versions of old conversations.
-
-conversation_summaries
-
-Example:
-
-Summary:
-User enjoys JRPGs, especially Persona 5.
-User is building a companion chatbot project.
-
-Purpose:
-
-Reduce context window usage
-Long conversation retention
-Faster memory loading
-Phase 3 — Vector Memory (RAG)
-
-Store embeddings.
-
-vector_memory
-
-Example:
-
-User discussed PostgreSQL architecture.
-User discussed React frontend plans.
-
-Purpose:
-
-Semantic retrieval
-Find relevant memories without scanning everything
-
-This becomes very useful once message count grows.
-
-Phase 4 — User Memories
-
-Store extracted facts.
-
-user_memories
-
-Examples:
-
-favorite_game = Persona 5
-favorite_language = Python
-occupation = Software Developer
-
-Purpose:
-
-Structured long-term knowledge
-Fast lookup
-Consistent personalization
-
-A companion AI should not search thousands of messages every time it wants to remember a favorite game.
-
-Phase 5 — Relationship State
-
-Store how the AI perceives the relationship.
-
-relationship_state
-
-Examples:
-
-trust_level = 75
-friendship_level = 60
-interaction_count = 320
-
-Purpose:
-
-Companion behavior progression
-Dynamic tone changes
-Sense of history
-
-This is where your project starts becoming a true companion rather than a generic chatbot.
-
-Phase 6 — Emotion State
-
-Store the AI's emotional state.
-
-emotion_state
-
-Examples:
-
-current_emotion = curious
-intensity = 0.7
-
-or
-
-current_emotion = excited
-trigger = user_shared_success
-
-Purpose:
-
-Emotional continuity
-More believable personality
-Companion-like interactions
+8. Add RAG

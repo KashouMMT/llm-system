@@ -12,3 +12,9 @@ env/
 
 # Logs
 logs/
+
+# Others
+notes.txt
+TODO
+LISENSE
+documentation/**
