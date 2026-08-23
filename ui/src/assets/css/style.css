@@ -1,0 +1,117 @@
+:root {
+	--bg: #ffffff;
+	--bg-subtle: #f1f1f1;
+	--text: #000000;
+	--text-muted: #555555;
+	--border: #cccccc;
+	--accent: #000000;
+	--accent-contrast: #ffffff;
+	--accent-hover: #333333;
+}
+
+[data-theme="dark"] {
+	--bg: #000000;
+	--bg-subtle: #1a1a1a;
+	--text: #ffffff;
+	--text-muted: #aaaaaa;
+	--border: #333333;
+	--accent: #ffffff;
+	--accent-contrast: #000000;
+	--accent-hover: #cccccc;
+}
+
+html,
+body {
+	background-color: var(--bg);
+	color: var(--text);
+}
+
+.chat-layout {
+	height: calc(100vh - 56px);
+	display: flex;
+}
+
+/* Navbar */
+
+.navbar {
+	background-color: var(--bg);
+	border-bottom: 1px solid var(--border);
+}
+
+.navbar-brand,
+.nav-link {
+	color: var(--text) !important;
+}
+
+.nav-link.active {
+	font-weight: 600;
+}
+
+.navbar-toggler {
+	border-color: var(--border);
+}
+
+.navbar-toggler-icon {
+	filter: var(--theme-toggler-icon-filter, none);
+}
+
+[data-theme="dark"] .navbar-toggler-icon {
+	filter: invert(1);
+}
+
+.theme-toggle {
+	background: transparent;
+	border: 1px solid var(--border);
+	color: var(--text);
+	border-radius: 0.375rem;
+	padding: 0.375rem 0.75rem;
+}
+
+.theme-toggle:hover {
+	background-color: var(--bg-subtle);
+	color: var(--text);
+}
+
+/* Bootstrap component overrides for a monochrome accent */
+
+.btn-primary {
+	--bs-btn-color: var(--accent-contrast);
+	--bs-btn-bg: var(--accent);
+	--bs-btn-border-color: var(--accent);
+	--bs-btn-hover-color: var(--accent-contrast);
+	--bs-btn-hover-bg: var(--accent-hover);
+	--bs-btn-hover-border-color: var(--accent-hover);
+	--bs-btn-active-color: var(--accent-contrast);
+	--bs-btn-active-bg: var(--accent-hover);
+	--bs-btn-active-border-color: var(--accent-hover);
+}
+
+.btn-outline-secondary {
+	--bs-btn-color: var(--text);
+	--bs-btn-border-color: var(--border);
+	--bs-btn-hover-color: var(--accent-contrast);
+	--bs-btn-hover-bg: var(--accent);
+	--bs-btn-hover-border-color: var(--accent);
+}
+
+.form-control {
+	background-color: var(--bg);
+	color: var(--text);
+	border-color: var(--border);
+}
+
+.form-control:focus {
+	background-color: var(--bg);
+	color: var(--text);
+	border-color: var(--accent);
+	box-shadow: 0 0 0 0.2rem rgba(128, 128, 128, 0.25);
+}
+
+.border-top {
+	border-color: var(--border) !important;
+}
+
+.text-body-secondary,
+.text-secondary {
+	color: var(--text-muted) !important;
+}
