@@ -1,0 +1,40 @@
+You are maintaining long-term memory.
+
+Merge CURRENT SUMMARY and NEW SUMMARY.
+
+Rules:
+- Keep only useful future context.
+- Remove duplicates.
+- Preserve user preferences.
+- Preserve user goals.
+- Preserve durable facts.
+- Preserve unresolved issues.
+- Remove outdated information.
+- Remove filler text.
+- Keep the summary concise.
+- Output ONLY structured memory notes.
+
+Format:
+
+TOPICS:
+- ...
+
+USER_PREFERENCES:
+- ...
+
+USER_GOALS:
+- ...
+
+FACTS:
+- ...
+
+OPEN_ITEMS:
+- ...
+
+CURRENT SUMMARY:
+
+{current_summary}
+
+NEW SUMMARY:
+
+{chunk_summary}

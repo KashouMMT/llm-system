@@ -14,24 +14,28 @@ A conversational LLM system built on LangChain, LangGraph, and Ollama, with Post
 pip install -r requirements.txt
 ```
 
-Configure via a `.env` file (all values optional, defaults shown):
+Configure via a `.env` file. `MODEL_NAME` and `DB_PASSWORD` are **required** — they have no usable default and startup fails if they are empty. Everything else is optional (defaults shown).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MODEL_NAME` | `dolphin-phi:latest` | Ollama model tag |
-| `TEMPERATURE` | `0.7` | Sampling temperature |
-| `MAX_TOKENS` | `512` | Max tokens generated per response (`num_predict`) |
+| `MODEL_NAME` | *(required)* | Ollama model tag |
+| `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/`; falls back to a built-in prompt if the file is missing |
+| `TEMPERATURE` | `0.3` | Sampling temperature |
+| `MAX_TOKENS` | `1536` | Max tokens generated per response (`num_predict`) |
 | `CONTEXT_WINDOW` | `8192` | Model context window (`num_ctx`) |
+| `TOP_K` | `40` | Top-k sampling |
 | `TOP_P` | `0.9` | Nucleus sampling |
-| `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/` |
-| `SUMMARY_TOKEN_THRESHOLD` | `1200` | Estimated token count of unsummarized messages that triggers summarization |
-| `MAX_CONTEXT_HISTORY_MESSAGES` / `RECENT_MESSAGE_LIMIT` | `20` | Max recent (post-summary) messages fed into each turn |
+| `SUMMARY_TOKEN_THRESHOLD` | `2500` | Estimated token count of unsummarized messages that triggers summarization |
 | `MAX_CHECKPOINT_MESSAGES` | `50` | Max messages kept in LangGraph's checkpoint state after a turn |
-| `MAX_UNSUMMARIZED_MESSAGES` | `12` | Hard cap that forces summarization regardless of token estimate |
+| `MAX_CONTEXT_HISTORY_MESSAGES` | `16` | Max recent (post-summary) messages fed into each turn |
+| `MAX_UNSUMMARIZED_MESSAGES` | `16` | Hard cap that forces summarization regardless of token estimate. Keep it ≤ `MAX_CONTEXT_HISTORY_MESSAGES`, otherwise the backlog can outgrow the history window and older unsummarized messages become invisible to the model |
 | `MAX_USER_INPUT_CHARS` | `4000` | Max characters accepted in a single user message |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `CONSOLE_LOG` | `false` | Also log to console |
-| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` | `localhost` / `5432` / `llm_system` / `postgres` / `postgres` | PostgreSQL connection |
+| `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `localhost` / `5432` / `llm_system` / `postgres` | PostgreSQL connection |
+| `DB_PASSWORD` | *(required)* | PostgreSQL password |
+
+The summarization prompts are not environment-configurable: `app/prompts/default_summary_chunk_prompt.txt` and `app/prompts/default_summary_merge_prompt.txt` are read at import time and must exist and be non-empty.
 
 ## Running
 
@@ -69,7 +73,7 @@ State is checkpointed per conversation (`thread_id` = conversation UUID) via `As
 - `HistoryContextBuilder` reads transcript messages after that watermark, capped at `MAX_CONTEXT_HISTORY_MESSAGES`.
 - `ConversationContextBuilder` composes `[summary_messages, recent_history]` into the `prepared_context` fed to the agent node. Documented extension points: RAG retrieval and durable user-memory facts.
 
-**Summarization** (`app/services/summarization_service.py`): after each turn, `ChatService` schedules `SummarizationService.trigger_if_needed`, which estimates tokens (`len(text) // 4`) over messages not yet summarized and, if over `SUMMARY_TOKEN_THRESHOLD` (or `MAX_UNSUMMARIZED_MESSAGES` is exceeded), generates a chunk summary via the LLM, merges it into the existing summary via a second LLM call, and advances the watermark — all through `SummaryRepository`.
+**Summarization** (`app/services/summarization_service.py`): after each turn, `ChatService` schedules `SummarizationService.trigger_if_needed`, which estimates tokens (`len(text) // 4`) over messages not yet summarized and, if over `SUMMARY_TOKEN_THRESHOLD` (or `MAX_UNSUMMARIZED_MESSAGES` is exceeded), generates a chunk summary via the LLM, merges it into the existing summary via a second LLM call, and advances the watermark — all through `SummaryRepository` (chunk insert + state update commit in one transaction). The updated summary is never written into LangGraph checkpoint state; it is read back from PostgreSQL by `SummaryContextBuilder` on the next turn.
 
 **Persistence** — two separate stores:
 - Application data (PostgreSQL, `app/database/`, `app/repositories/`): `conversations`, `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log). Tables are created on startup if missing.
@@ -119,7 +123,10 @@ llm-system/
 │   ├── logs/                                     # Logs
 │   ├── persona/
 │   │   └── load_prompt.py                        # Load prompt from prompts folder below
-│   ├── prompts/                                  # Character behavior and personality for LLM. Basically system prompts.
+│   ├── prompts/                                  # System prompts (persona files) + summarization prompts
+│   │   ├── default.txt                           # Fallback persona, selected by SYSTEM_PROMPT
+│   │   ├── default_summary_chunk_prompt.txt      # Prompt for summarizing one batch of new messages
+│   │   └── default_summary_merge_prompt.txt      # Prompt for merging a chunk summary into the durable summary
 │   ├── repositories/                             # Functions for executing SQL against tables.
 │   │   ├── conversation_repository.py            # Conversations (One)->(Many) Messages
 │   │   ├── message_repository.py                 # Persistent transcript data. Source of truth for conversation history.

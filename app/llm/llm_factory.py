@@ -5,6 +5,7 @@ from app.config.settings import (
     MAX_TOKENS,
     MODEL_NAME,
     TEMPERATURE,
+    TOP_K,
     TOP_P,
 )
 from app.utils.logger import logger
@@ -20,5 +21,6 @@ class LLMFactory:
             temperature=TEMPERATURE,
             num_ctx=CONTEXT_WINDOW,
             num_predict=MAX_TOKENS,
+            top_k=TOP_K,
             top_p=TOP_P,
         )

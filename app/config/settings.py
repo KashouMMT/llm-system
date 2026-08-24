@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from urllib.parse import quote
 
 from dotenv import load_dotenv
@@ -26,38 +27,78 @@ def get_positive_float(
 
     if value < 0:
         raise ValueError(f"{environment_name} must be greater than 0.")
-    
+
     return value
 
 
+def get_valid_string(
+    environment_name: str,
+    default: str,
+) -> str:
+    value = os.getenv(environment_name, default)
+
+    if not isinstance(value, str):
+        raise ValueError(  # noqa: TRY004
+            f"{environment_name} must be a string."
+        )
+
+    value = value.strip()
+
+    if not value:
+        raise ValueError(f"{environment_name} must not be empty.")
+
+    return value
+
+
+def read_prompt(filename: str) -> str:
+    base_path = Path(__file__).resolve().parent.parent
+    prompts_dir = base_path / "prompts"
+    prompt_path = prompts_dir / filename
+
+    if not prompt_path.is_file():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+
+    content = prompt_path.read_text(encoding="utf-8").strip()
+
+    if not content:
+        raise ValueError(f"Prompt file must not be empty: {prompt_path}")
+
+    return content
+
+
 # LLM CONFIGURATION
-MODEL_NAME = os.getenv("MODEL_NAME", "dolphin-phi:latest")
-SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", "default")
-TEMPERATURE = get_positive_float("TEMPERATURE", 0.7)
-MAX_TOKENS = get_positive_int("MAX_TOKENS", 512)
+MODEL_NAME = get_valid_string("MODEL_NAME", "")
+SYSTEM_PROMPT = get_valid_string("SYSTEM_PROMPT", "default")
+TEMPERATURE = get_positive_float("TEMPERATURE", 0.3)
+MAX_TOKENS = get_positive_int("MAX_TOKENS", 1536)
 CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 8192)
+TOP_K = get_positive_int("TOP_K", 40)
 TOP_P = get_positive_float("TOP_P", 0.9)
 
 # SUMMARY CONFIGURATION
-SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
+SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 2500)
 MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 50)
 # MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES.
-MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 12)
-MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 12)
+MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 16)
+MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 16)
 
 # USER INPUT
 MAX_USER_INPUT_CHARS = get_positive_int("MAX_USER_INPUT_CHARS", 4000)
 
-# OTHER CONFIGURATION
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-CONSOLE_LOG = os.getenv("CONSOLE_LOG", "false")
+# PROMPT
+DEFAULT_PROMPT = """
+You are a helpful, intelligent, and reliable AI assistant.
+Provide clear, accurate, and thoughtful responses.
+""".strip()
+SUMMARY_CHUNK_PROMPT = read_prompt("default_summary_chunk_prompt.txt")
+SUMMARY_MERGE_PROMPT = read_prompt("default_summary_merge_prompt.txt")
 
 # POSTGRESQL CONFIGURATION
-DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = int(os.getenv("DB_PORT", 5432))
-DB_NAME = os.getenv("DB_NAME", "llm_system")
-DB_USER = os.getenv("DB_USER", "postgres")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "postgres")
+DB_HOST = get_valid_string("DB_HOST", "localhost")
+DB_PORT = get_positive_int("DB_PORT", 5432)
+DB_NAME = get_valid_string("DB_NAME", "llm_system")
+DB_USER = get_valid_string("DB_USER", "postgres")
+DB_PASSWORD = get_valid_string("DB_PASSWORD", "")
 DATABASE_URL = (
     f"postgresql://"
     f"{DB_USER}:"
@@ -67,88 +108,6 @@ DATABASE_URL = (
     f"{DB_NAME}"
 )
 
-# PROMPT
-DEFAULT_PROMPT = """
-You are a helpful, intelligent, and reliable AI assistant.
-Provide clear, accurate, and thoughtful responses.
-""".strip()
-SUMMARY_CHUNK_PROMPT = """
-You are a memory compression system.
-
-Extract durable conversation memory.
-
-Rules:
-- Extract only information explicitly stated by the user.
-- Do not infer facts about the user.
-- Do not store assistant assumptions.
-- Do not store assistant opinions.
-- Ignore fictional roleplay details unless confirmed by the user as real.
-- Ignore temporary conversational details.
-- Prefer long-term useful information.
-- If no information exists for a section, leave it empty.
-
-Return ONLY structured notes.
-
-Format:
-
-TOPICS:
-- ...
-
-USER_PREFERENCES:
-- ...
-
-USER_GOALS:
-- ...
-
-FACTS:
-- ...
-
-OPEN_ITEMS:
-- ...
-
-Conversation:
-
-{conversation}
-""".strip()
-SUMMARY_MERGE_PROMPT = """
-You are maintaining long-term memory.
-
-Merge CURRENT SUMMARY and NEW SUMMARY.
-
-Rules:
-- Keep only useful future context.
-- Remove duplicates.
-- Preserve user preferences.
-- Preserve user goals.
-- Preserve durable facts.
-- Preserve unresolved issues.
-- Remove outdated information.
-- Remove filler text.
-- Keep the summary concise.
-- Output ONLY structured memory notes.
-
-Format:
-
-TOPICS:
-- ...
-
-USER_PREFERENCES:
-- ...
-
-USER_GOALS:
-- ...
-
-FACTS:
-- ...
-
-OPEN_ITEMS:
-- ...
-
-CURRENT SUMMARY:
-
-{current_summary}
-
-NEW SUMMARY:
-
-{chunk_summary}
-""".strip()
+# OTHER CONFIGURATION
+LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
+CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
