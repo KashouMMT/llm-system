@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from app.config.settings import MAX_USER_INPUT_CHARS
 from app.runtime.application import Application
+from app.utils.logger import logger
 
 
 class ChatRequest(BaseModel):
@@ -24,14 +25,11 @@ def create_api(application: Application) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
+
     @app.post("/conversations")
     async def create_conversation():
 
-        conversation_id = (
-            application.conversation_repository
-            .create_conversation()
-        )
+        conversation_id = application.conversation_repository.create_conversation()
 
         return {
             "id": str(conversation_id),
@@ -40,10 +38,7 @@ def create_api(application: Application) -> FastAPI:
     @app.get("/conversations")
     async def get_conversations():
 
-        conversations = (
-            application.conversation_repository
-            .get_conversations()
-        )
+        conversations = application.conversation_repository.get_conversations()
 
         return [
             {
@@ -56,26 +51,18 @@ def create_api(application: Application) -> FastAPI:
         ]
 
     @app.get("/conversations/{conversation_id}/messages")
-    async def get_messages(
-        conversation_id: UUID
-    ):
-        
-        exists = (
-            application.conversation_repository
-            .exists(conversation_id)
-        )
-        
+    async def get_messages(conversation_id: UUID):
+
+        exists = application.conversation_repository.exists(conversation_id)
+
         if not exists:
             raise HTTPException(
                 status_code=404,
                 detail="Conversation not found",
             )
-            
-        messages = (
-            application.message_repository
-            .get_messages(conversation_id)
-        )
-        
+
+        messages = application.message_repository.get_messages(conversation_id)
+
         return [
             {
                 "id": row[0],
@@ -87,38 +74,41 @@ def create_api(application: Application) -> FastAPI:
         ]
 
     @app.post("/conversations/{conversation_id}/chat/stream")
-    async def chat_stream(
-        conversation_id: UUID,
-        request: ChatRequest
-    ):
-        
-        exists = (
-            application.conversation_repository
-            .exists(conversation_id)
-        )
+    async def chat_stream(conversation_id: UUID, request: ChatRequest):
+
+        exists = application.conversation_repository.exists(conversation_id)
 
         if not exists:
             raise HTTPException(
                 status_code=404,
                 detail="Conversation not found",
             )
-            
+
         async def generator():
-            
+
             if application.chat_service is None:
-                raise RuntimeError(
-                    "Application has not been initialized"
+                raise RuntimeError("Application has not been initialized")
+
+            try:
+                async for chunk in application.chat_service.chat_stream(
+                    user_input=request.message,
+                    conversation_id=conversation_id,
+                ):
+                    yield chunk
+
+            except Exception:  # noqa: BLE001
+                # Headers are already sent, so HTTPException cannot apply here.
+                # Emit a visible marker so the client does not mistake a
+                # truncated stream for a complete answer.
+                logger.exception(
+                    "Chat stream failed | conversation=%s",
+                    conversation_id,
                 )
-                
-            async for chunk in application.chat_service.chat_stream(
-                user_input=request.message,
-                conversation_id=conversation_id,
-            ):
-                yield chunk
-                
+                yield "\n\n[error] The response was interrupted. Please try again."
+
         return StreamingResponse(
             generator(),
             media_type="text/plain",
         )
-    
+
     return app

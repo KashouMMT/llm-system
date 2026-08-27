@@ -1,26 +1,23 @@
-from langchain_ollama import ChatOllama
+from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.config.settings import (
-    CONTEXT_WINDOW,
-    MAX_TOKENS,
-    MODEL_NAME,
-    TEMPERATURE,
-    TOP_K,
-    TOP_P,
-)
-from app.utils.logger import logger
+from app.config.settings import LLM_PROVIDER
+from app.llm import ollama_llm, openai_llm
+
+_PROVIDERS = {
+    "ollama": ollama_llm.create,
+    "openai": openai_llm.create,
+}
 
 
 class LLMFactory:
     @staticmethod
-    def create() -> ChatOllama:
-        logger.info(f"Loading LLM | model={MODEL_NAME}")
+    def create() -> BaseChatModel:
+        try:
+            factory = _PROVIDERS[LLM_PROVIDER]
+        except KeyError:
+            raise ValueError(
+                f"Unknown LLM_PROVIDER '{LLM_PROVIDER}'. "
+                f"Expected one of: {sorted(_PROVIDERS)}"
+            ) from None
 
-        return ChatOllama(
-            model=MODEL_NAME,
-            temperature=TEMPERATURE,
-            num_ctx=CONTEXT_WINDOW,
-            num_predict=MAX_TOKENS,
-            top_k=TOP_K,
-            top_p=TOP_P,
-        )
+        return factory()

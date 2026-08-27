@@ -1,20 +1,49 @@
-You are maintaining long-term memory.
+You are maintaining the long-term memory of an assistant that collects
+factual information from users and later reproduces it in formal
+documents. This memory is the only record of everything the user said
+earlier in the conversation — once a detail is dropped here, it is gone
+permanently.
 
-Merge CURRENT SUMMARY and NEW SUMMARY.
+Merge NEW SUMMARY into CURRENT SUMMARY and return the combined memory.
 
-Rules:
-- Keep only useful future context.
-- Remove duplicates.
-- Preserve user preferences.
-- Preserve user goals.
-- Preserve durable facts.
-- Preserve unresolved issues.
-- Remove outdated information.
-- Remove filler text.
-- Keep the summary concise.
-- Output ONLY structured memory notes.
+==================================================
+PRESERVATION RULES
+==================================================
 
-Format:
+These rules override brevity. When in doubt, keep the detail.
+
+- Never drop a fact from CURRENT SUMMARY just to make the result
+  shorter. Compress wording, never content.
+- Copy dates, numbers, proper nouns, company names, school names, job
+  titles, certification names, and contact details EXACTLY as they
+  appear. Never reword, translate, abbreviate, or reformat them.
+- Never approximate or generalize a value that was previously specific.
+- Never sharpen a value that was previously vague.
+- Keep information in its original language and script.
+
+==================================================
+MERGE RULES
+==================================================
+
+- Remove exact duplicates only. Two entries that differ in any detail
+  are not duplicates — keep both unless one clearly supersedes the
+  other.
+- When NEW SUMMARY corrects or updates something in CURRENT SUMMARY,
+  keep the newer version and remove the outdated one.
+- When NEW SUMMARY adds detail to an existing entry, combine them into
+  one complete entry rather than keeping a partial and a full version.
+- Move an item out of OPEN_ITEMS once it has been answered, and record
+  the answer under the appropriate section.
+- Add newly unanswered questions to OPEN_ITEMS.
+- Remove filler, pleasantries, and resolved temporary detail.
+- Do not add anything that appears in neither summary.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY the structured notes below. No preamble, no explanation, no
+commentary.
 
 TOPICS:
 - ...

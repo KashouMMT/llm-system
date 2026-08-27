@@ -67,20 +67,41 @@ def read_prompt(filename: str) -> str:
 
 
 # LLM CONFIGURATION
-MODEL_NAME = get_valid_string("MODEL_NAME", "")
+LLM_PROVIDER = get_valid_string("LLM_PROVIDER", "ollama") # "ollama" | "openai"
+# Transient 429/5xx from shared free-tier pools are common; the OpenAI SDK
+# retries these internally with backoff.
+LLM_MAX_RETRIES = get_positive_int("LLM_MAX_RETRIES", 3)
+LLM_TIMEOUT_SECONDS = get_positive_float("LLM_TIMEOUT_SECONDS", 120.0)
+MODEL_NAME = get_valid_string("MODEL_NAME", "qwen3.5:9b")
 SYSTEM_PROMPT = get_valid_string("SYSTEM_PROMPT", "default")
+# Low temperature: this assistant must not invent facts it was not given.
 TEMPERATURE = get_positive_float("TEMPERATURE", 0.3)
-MAX_TOKENS = get_positive_int("MAX_TOKENS", 1536)
-CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 8192)
+# A full 履歴書 + 職務経歴書 does not fit in 1024 tokens and gets cut off
+# mid-document. Raise this before lowering CONTEXT_WINDOW.
+MAX_TOKENS = get_positive_int("MAX_TOKENS", 2048)
+# The system prompt alone is ~2,800 tokens. 8192 leaves too little room for
+# summary + history once MAX_TOKENS is reserved for the reply, and Ollama
+# truncates from the FRONT — silently dropping the system prompt.
+CONTEXT_WINDOW = get_positive_int("CONTEXT_WINDOW", 16384)
 TOP_K = get_positive_int("TOP_K", 40)
 TOP_P = get_positive_float("TOP_P", 0.9)
 
+# Only used when LLM_PROVIDER=ollama
+OLLAMA_BASE_URL = get_valid_string("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# Only used when LLM_PROVIDER=openai (also covers OpenRouter/Groq/DeepSeek/etc,
+# since they all speak the OpenAI Chat Completions API)
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+
 # SUMMARY CONFIGURATION
-SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 2500)
-MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 50)
+SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
+# Checkpoint messages are never sent to the LLM (agent_node only reads the
+# current turn), so this only bounds Postgres checkpoint row size.
+MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 20)
 # MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES.
-MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 16)
-MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 16)
+MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 12)
+MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 12)
 
 # USER INPUT
 MAX_USER_INPUT_CHARS = get_positive_int("MAX_USER_INPUT_CHARS", 4000)

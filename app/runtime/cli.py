@@ -2,6 +2,7 @@ import asyncio
 from uuid import UUID
 
 from app.runtime.application import Application
+from app.utils.logger import logger
 
 
 def select_conversation(
@@ -121,14 +122,23 @@ async def run_cli(
         if application.chat_service is None:
             raise RuntimeError("Application has not been initialized.")
 
-        async for token in application.chat_service.chat_stream(
-            user_input=user_input,
-            conversation_id=conversation_id,
-        ):
-            print(
-                token,
-                end="",
-                flush=True,
-            )
+        try:
+            async for token in application.chat_service.chat_stream(
+                user_input=user_input,
+                conversation_id=conversation_id,
+            ):
+                print(
+                    token,
+                    end="",
+                    flush=True,
+                )
 
-        print()
+            print()
+
+        except Exception:  # noqa: BLE001
+            # ChatService already logged the traceback with request context.
+            logger.warning("Chat request failed; returning to prompt")
+            print(
+                "\n[error] The request failed. "
+                "Your conversation is intact — please try again."
+            )

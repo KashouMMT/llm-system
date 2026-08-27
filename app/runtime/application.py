@@ -18,8 +18,7 @@ from app.config.settings import (
 )
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
-from app.llm.prompt_factory import PromptFactory
-from app.persona.load_prompt import load_prompt
+from app.llm.system_prompt import load_system_prompt
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.summary_repository import SummaryRepository
@@ -74,9 +73,10 @@ class Application:
             logger.info("Application database initialized")
 
             logger.info("Loading system prompt")
-            loaded_system_prompt = load_prompt()
-            self.system_prompt = PromptFactory.create(
-                loaded_system_prompt,
+            self.system_prompt = load_system_prompt()
+            logger.info(
+                "System prompt initialized | characters=%s",
+                len(self.system_prompt),
             )
 
             logger.info("System prompt initialized")
