@@ -1,301 +1,299 @@
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from app.database.connection import get_connection
+from psycopg.rows import class_row
+from psycopg_pool import AsyncConnectionPool
+
 from app.utils.logger import logger
 
-ConversationRow = tuple[
-    UUID,
-    str,
-    datetime,
-    datetime,
-]
+
+@dataclass(frozen=True)
+class Conversation:
+    id: UUID
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class Turn:
+    """The two rows created when a turn is opened, before generation runs."""
+
+    user_message_id: int
+    user_created_at: datetime
+    assistant_message_id: int
+    assistant_created_at: datetime
 
 
 class ConversationRepository:
-    def create_conversation(
+    def __init__(self, pool: AsyncConnectionPool) -> None:
+        self._pool = pool
+
+    async def create_conversation(
         self,
         title: str = "New Conversation",
     ) -> UUID:
         conversation_id = uuid4()
 
-        conn = get_connection()
-
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO conversations (
-                        id,
-                        title
-                    )
-                    VALUES (%s, %s)
-                    """,
-                    (
-                        conversation_id,
-                        title,
-                    ),
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                INSERT INTO conversations (
+                    id,
+                    title
                 )
-
-            conn.commit()
-
-            logger.info(
-                "Conversation created | id=%s",
-                conversation_id,
+                VALUES (%s, %s)
+                """,
+                (
+                    conversation_id,
+                    title,
+                ),
             )
 
-            return conversation_id
+        logger.info(
+            "Conversation created | id=%s",
+            conversation_id,
+        )
 
-        finally:
-            conn.close()
+        return conversation_id
 
-    def get_conversation(
+    async def get_conversation(
         self,
         conversation_id: UUID,
-    ) -> ConversationRow | None:
-        conn = get_connection()
+    ) -> Conversation | None:
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor(row_factory=class_row(Conversation)) as cur,
+        ):
+            await cur.execute(
+                """
+                SELECT
+                    id,
+                    title,
+                    created_at,
+                    updated_at
+                FROM conversations
+                WHERE id = %s
+                """,
+                (conversation_id,),
+            )
 
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        title,
-                        created_at,
-                        updated_at
-                    FROM conversations
-                    WHERE id = %s
-                    """,
-                    (conversation_id,),
-                )
+            return await cur.fetchone()
 
-                return cur.fetchone()
+    async def get_conversations(self) -> Sequence[Conversation]:
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor(row_factory=class_row(Conversation)) as cur,
+        ):
+            await cur.execute(
+                """
+                SELECT
+                    id,
+                    title,
+                    created_at,
+                    updated_at
+                FROM conversations
+                ORDER BY updated_at DESC
+                """
+            )
 
-        finally:
-            conn.close()
+            rows = await cur.fetchall()
 
-    def get_conversations(self) -> Sequence[ConversationRow]:
-        conn = get_connection()
+            logger.debug(
+                "Loaded %s conversations",
+                len(rows),
+            )
 
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT
-                        id,
-                        title,
-                        created_at,
-                        updated_at
-                    FROM conversations
-                    ORDER BY updated_at DESC
-                    """
-                )
+            return rows
 
-                rows = cur.fetchall()
-
-                logger.debug(
-                    "Loaded %s conversations",
-                    len(rows),
-                )
-
-                return rows
-
-        finally:
-            conn.close()
-
-    def exists(
+    async def exists(
         self,
         conversation_id: UUID,
     ) -> bool:
-        conn = get_connection()
-
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT EXISTS(
-                        SELECT 1
-                        FROM conversations
-                        WHERE id = %s
-                    )
-                    """,
-                    (conversation_id,),
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM conversations
+                    WHERE id = %s
                 )
+                """,
+                (conversation_id,),
+            )
 
-                result = cur.fetchone()
+            result = await cur.fetchone()
 
-                return bool(result[0])
+            return bool(result[0])
 
-        finally:
-            conn.close()
-
-    def save_completed_turn(
+    async def create_turn(
         self,
         conversation_id: UUID,
         user_content: str,
-        assistant_content: str,
-    ) -> tuple[int, int]:
+        client_message_id: UUID,
+    ) -> Turn:
         """
-        Persist one completed conversation turn atomically.
+        Open one conversation turn atomically, before generation starts.
 
-        If either message write or the conversation timestamp update fails,
-        PostgreSQL rolls back all writes from this method.
+        The user message is persisted immediately and unconditionally: it was
+        typed by a person, and losing it because a connection dropped is the
+        worst available outcome. The assistant row is created empty and
+        'streaming' so every client can see that an answer is on its way, and
+        so a crash leaves a visible row to sweep rather than silence.
+
+        All three statements share one transaction — the pool commits when the
+        connection block exits cleanly and rolls back if it raises.
+
+        Raises psycopg.errors.UniqueViolation if client_message_id was already
+        used — that is the idempotency guard, enforced by the database because
+        retries race.
         """
-        conn = get_connection()
-
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO messages (
-                        conversation_id,
-                        role,
-                        content
-                    )
-                    VALUES (%s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        conversation_id,
-                        "user",
-                        user_content,
-                    ),
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                INSERT INTO messages (
+                    conversation_id,
+                    role,
+                    content,
+                    status,
+                    client_message_id
                 )
-
-                user_message_id = cur.fetchone()[0]
-
-                cur.execute(
-                    """
-                    INSERT INTO messages (
-                        conversation_id,
-                        role,
-                        content
-                    )
-                    VALUES (%s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        conversation_id,
-                        "assistant",
-                        assistant_content,
-                    ),
-                )
-
-                assistant_message_id = cur.fetchone()[0]
-
-                cur.execute(
-                    """
-                    UPDATE conversations
-                    SET updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (conversation_id,),
-                )
-
-                if cur.rowcount != 1:
-                    raise ValueError(f"Conversation not found: {conversation_id}")
-
-            conn.commit()
-
-            logger.debug(
-                "Completed turn saved | conversation=%s user_message=%s "
-                "assistant_message=%s",
-                conversation_id,
-                user_message_id,
-                assistant_message_id,
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (
+                    conversation_id,
+                    "user",
+                    user_content,
+                    "complete",
+                    client_message_id,
+                ),
             )
 
-            return (
-                user_message_id,
-                assistant_message_id,
+            user_message_id, user_created_at = await cur.fetchone()
+
+            await cur.execute(
+                """
+                INSERT INTO messages (
+                    conversation_id,
+                    role,
+                    content,
+                    status,
+                    reply_to_message_id
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (
+                    conversation_id,
+                    "assistant",
+                    "",
+                    "streaming",
+                    user_message_id,
+                ),
             )
 
-        except Exception:
-            conn.rollback()
-            raise
+            assistant_message_id, assistant_created_at = await cur.fetchone()
 
-        finally:
-            conn.close()
+            await cur.execute(
+                """
+                UPDATE conversations
+                SET updated_at = NOW()
+                WHERE id = %s
+                """,
+                (conversation_id,),
+            )
 
-    def update_title(
+            if cur.rowcount != 1:
+                raise ValueError(f"Conversation not found: {conversation_id}")
+
+        logger.debug(
+            "Turn opened | conversation=%s user_message=%s assistant_message=%s",
+            conversation_id,
+            user_message_id,
+            assistant_message_id,
+        )
+
+        return Turn(
+            user_message_id=user_message_id,
+            user_created_at=user_created_at,
+            assistant_message_id=assistant_message_id,
+            assistant_created_at=assistant_created_at,
+        )
+
+    async def update_title(
         self,
         conversation_id: UUID,
         title: str,
     ) -> None:
-        conn = get_connection()
-
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE conversations
-                    SET
-                        title = %s,
-                        updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (
-                        title,
-                        conversation_id,
-                    ),
-                )
-
-            conn.commit()
-
-            logger.debug(
-                "Conversation title updated | id=%s",
-                conversation_id,
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                UPDATE conversations
+                SET
+                    title = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    title,
+                    conversation_id,
+                ),
             )
 
-        finally:
-            conn.close()
+        logger.debug(
+            "Conversation title updated | id=%s",
+            conversation_id,
+        )
 
-    def touch(
+    async def touch(
         self,
         conversation_id: UUID,
     ) -> None:
-        conn = get_connection()
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                UPDATE conversations
+                SET updated_at = NOW()
+                WHERE id = %s
+                """,
+                (conversation_id,),
+            )
 
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    UPDATE conversations
-                    SET updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (conversation_id,),
-                )
-
-            conn.commit()
-
-        finally:
-            conn.close()
-
-    def delete_conversation(
+    async def delete_conversation(
         self,
         conversation_id: UUID,
     ) -> None:
-        conn = get_connection()
-
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    DELETE FROM conversations
-                    WHERE id = %s
-                    """,
-                    (conversation_id,),
-                )
-
-            conn.commit()
-
-            logger.info(
-                "Conversation deleted | id=%s",
-                conversation_id,
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                DELETE FROM conversations
+                WHERE id = %s
+                """,
+                (conversation_id,),
             )
 
-        finally:
-            conn.close()
+        logger.info(
+            "Conversation deleted | id=%s",
+            conversation_id,
+        )

@@ -72,7 +72,7 @@ LLM_PROVIDER = get_valid_string("LLM_PROVIDER", "ollama") # "ollama" | "openai"
 # retries these internally with backoff.
 LLM_MAX_RETRIES = get_positive_int("LLM_MAX_RETRIES", 3)
 LLM_TIMEOUT_SECONDS = get_positive_float("LLM_TIMEOUT_SECONDS", 120.0)
-MODEL_NAME = get_valid_string("MODEL_NAME", "qwen3.5:9b")
+MODEL_NAME = get_valid_string("MODEL_NAME", "qwen3.5:4b")
 SYSTEM_PROMPT = get_valid_string("SYSTEM_PROMPT", "default")
 # Low temperature: this assistant must not invent facts it was not given.
 TEMPERATURE = get_positive_float("TEMPERATURE", 0.3)
@@ -120,6 +120,11 @@ DB_PORT = get_positive_int("DB_PORT", 5432)
 DB_NAME = get_valid_string("DB_NAME", "llm_system")
 DB_USER = get_valid_string("DB_USER", "postgres")
 DB_PASSWORD = get_valid_string("DB_PASSWORD", "")
+# psycopg_pool keeps this many connections open and reuses them. Opening a
+# connection per query costs a TCP handshake plus a Postgres backend fork,
+# which is wasted work on every single repository call.
+DB_POOL_MIN_SIZE = get_positive_int("DB_POOL_MIN_SIZE", 2)
+DB_POOL_MAX_SIZE = get_positive_int("DB_POOL_MAX_SIZE", 10)
 DATABASE_URL = (
     f"postgresql://"
     f"{DB_USER}:"
@@ -132,3 +137,9 @@ DATABASE_URL = (
 # OTHER CONFIGURATION
 LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
 CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
+
+# REALTIME (SSE)
+SSE_HEARTBEAT_SECONDS = get_positive_float("SSE_HEARTBEAT_SECONDS", 15.0)
+# A subscriber that falls this far behind is dropped rather than buffered
+# without bound. The client reconnects and refetches.
+SSE_QUEUE_MAXSIZE = get_positive_int("SSE_QUEUE_MAXSIZE", 256)

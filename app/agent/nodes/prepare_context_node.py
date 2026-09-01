@@ -1,5 +1,5 @@
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage
@@ -11,7 +11,7 @@ from app.agent.context.conversation_context_builder import (
 from app.agent.state import AgentState, get_current_turn_messages
 from app.utils.logger import logger
 
-PrepareContextNode = Callable[[AgentState, RunnableConfig], dict]
+PrepareContextNode = Callable[[AgentState, RunnableConfig], Awaitable[dict]]
 
 
 def create_prepare_context_node(
@@ -21,7 +21,7 @@ def create_prepare_context_node(
     Create the node that prepares background context once per user request.
     """
 
-    def prepare_context_node(
+    async def prepare_context_node(
         state: AgentState,
         config: RunnableConfig,
     ) -> dict:
@@ -29,6 +29,10 @@ def create_prepare_context_node(
 
         thread_id = config["configurable"]["thread_id"]
         conversation_id = UUID(thread_id)
+        
+        current_user_message_id = config["configurable"].get(
+            "current_user_message_id",
+        )
 
         current_turn_messages = get_current_turn_messages(
             state["messages"],
@@ -46,9 +50,10 @@ def create_prepare_context_node(
                 "Only text user messages are currently supported."
             )
 
-        prepared_context = conversation_context_builder.build(
+        prepared_context = await conversation_context_builder.build(
             conversation_id=conversation_id,
             user_query=current_user_message.content,
+            before_message_id=current_user_message_id,
         )
 
         elapsed = time.perf_counter() - start

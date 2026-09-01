@@ -10,7 +10,7 @@ from app.config.settings import (
     SUMMARY_MERGE_PROMPT,
     SUMMARY_TOKEN_THRESHOLD,
 )
-from app.repositories.message_repository import MessageRepository, MessageRow
+from app.repositories.message_repository import Message, MessageRepository
 from app.repositories.summary_repository import SummaryRepository
 from app.utils.logger import logger
 
@@ -45,30 +45,30 @@ class SummarizationService:
         # check; do not rely on it anywhere precision matters.
         return len(text) // 4
 
-    def _get_unsummarized_messages(
+    async def _get_unsummarized_messages(
         self,
         conversation_id: UUID,
-    ) -> list[MessageRow]:
-        last_id = self.summary_repository.get_last_summarized_message_id(
+    ) -> list[Message]:
+        last_id = await self.summary_repository.get_last_summarized_message_id(
             conversation_id,
         )
 
         return list(
-            self.message_repository.get_messages_after_id(
+            await self.message_repository.get_messages_after_id(
                 conversation_id=conversation_id,
                 message_id=last_id,
             )
         )
 
-    def should_summarize(
+    async def should_summarize(
         self,
         conversation_id: UUID,
-        unsummarized_rows: list[MessageRow] | None = None,
+        unsummarized_rows: list[Message] | None = None,
     ) -> bool:
         rows = (
             unsummarized_rows
             if unsummarized_rows is not None
-            else self._get_unsummarized_messages(conversation_id)
+            else await self._get_unsummarized_messages(conversation_id)
         )
 
         if not rows:
@@ -84,7 +84,7 @@ class SummarizationService:
             )
             return True
 
-        combined_text = "\n".join(row[2] for row in rows)
+        combined_text = "\n".join(row.content for row in rows)
         estimated_tokens = self.estimate_tokens(combined_text)
 
         logger.debug(
@@ -96,8 +96,8 @@ class SummarizationService:
 
         return estimated_tokens >= self.token_threshold
 
-    async def _generate_chunk_summary(self, rows: list[MessageRow]) -> str:
-        conversation = "\n".join(f"{role}: {content}" for _, role, content, _ in rows)
+    async def _generate_chunk_summary(self, rows: list[Message]) -> str:
+        conversation = "\n".join(f"{row.role}: {row.content}" for row in rows)
 
         prompt = SUMMARY_CHUNK_PROMPT.format(conversation=conversation)
 
@@ -128,7 +128,7 @@ class SummarizationService:
     async def summarize(
         self,
         conversation_id: UUID,
-        unsummarized_rows: list[MessageRow] | None = None,
+        unsummarized_rows: list[Message] | None = None,
     ) -> None:
         """
         Summarize all currently unsummarized messages for one conversation.
@@ -141,7 +141,7 @@ class SummarizationService:
         rows = (
             unsummarized_rows
             if unsummarized_rows is not None
-            else self._get_unsummarized_messages(conversation_id)
+            else await self._get_unsummarized_messages(conversation_id)
         )
 
         if not rows:
@@ -149,7 +149,7 @@ class SummarizationService:
 
         chunk_summary = await self._generate_chunk_summary(rows)
 
-        current_summary = self.summary_repository.get_current_summary(
+        current_summary = await self.summary_repository.get_current_summary(
             conversation_id,
         )
 
@@ -158,10 +158,10 @@ class SummarizationService:
             chunk_summary=chunk_summary,
         )
 
-        start_message_id = rows[0][0]
-        end_message_id = rows[-1][0]
+        start_message_id = rows[0].id
+        end_message_id = rows[-1].id
 
-        self.summary_repository.save_summary_chunk_and_advance(
+        await self.summary_repository.save_summary_chunk_and_advance(
             conversation_id=conversation_id,
             start_message_id=start_message_id,
             end_message_id=end_message_id,
@@ -186,9 +186,12 @@ class SummarizationService:
         Any failure here must never propagate into the chat response path —
         callers are expected to isolate errors around this call.
         """
-        rows = self._get_unsummarized_messages(conversation_id)
+        rows = await self._get_unsummarized_messages(conversation_id)
 
-        if not self.should_summarize(conversation_id, unsummarized_rows=rows):
+        if not await self.should_summarize(
+            conversation_id,
+            unsummarized_rows=rows,
+        ):
             return
 
         await self.summarize(conversation_id, unsummarized_rows=rows)

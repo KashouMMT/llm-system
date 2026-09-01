@@ -24,10 +24,11 @@ class HistoryContextBuilder:
         self.message_repository = message_repository
         self.max_history_messages = max_history_messages
 
-    def build(
+    async def build(
         self,
         conversation_id: UUID,
         after_message_id: int,
+        before_message_id: int | None = None,
     ) -> list[BaseMessage]:
         """
         Load transcript messages newer than after_message_id.
@@ -36,9 +37,10 @@ class HistoryContextBuilder:
         it is already represented by the durable summary, so including it
         here would feed the model the same content twice.
         """
-        rows = self.message_repository.get_messages_after_id(
+        rows = await self.message_repository.get_messages_after_id(
             conversation_id=conversation_id,
             message_id=after_message_id,
+            before_message_id=before_message_id,
         )
 
         if len(rows) > self.max_history_messages:
@@ -50,16 +52,16 @@ class HistoryContextBuilder:
                 self.max_history_messages,
             )
 
-            rows = rows[-self.max_history_messages :]
+            rows = list(rows)[-self.max_history_messages :]
 
         history_messages: list[BaseMessage] = []
 
-        for _, role, content, _ in rows:
-            if role == "user":
-                history_messages.append(HumanMessage(content=content))
+        for message in rows:
+            if message.role == "user":
+                history_messages.append(HumanMessage(content=message.content))
 
-            elif role == "assistant":
-                history_messages.append(AIMessage(content=content))
+            elif message.role == "assistant":
+                history_messages.append(AIMessage(content=message.content))
 
         logger.debug(
             "History context loaded | conversation=%s messages=%s",

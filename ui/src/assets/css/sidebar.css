@@ -33,6 +33,12 @@
 	margin-bottom: 0.2rem;
 	border-radius: 0.5rem;
 	cursor: pointer;
+	text-decoration: none;
+}
+
+.sidebar-conversation.active {
+	background-color: var(--border);
+	font-weight: 600;
 }
 
 .sidebar-conversation:hover {

@@ -134,6 +134,7 @@ class AgentGraph:
         self,
         input_messages: Sequence[BaseMessage],
         thread_id: str,
+        current_user_message_id: int | None = None,
     ) -> AsyncIterator[tuple[BaseMessage, dict]]:
         start = time.perf_counter()
 
@@ -146,6 +147,10 @@ class AgentGraph:
         config: RunnableConfig = {
             "configurable": {
                 "thread_id": thread_id,
+                # The current turn is already persisted when generation
+                # starts. prepare_context uses this to exclude it from
+                # history, so the model does not see the question twice.
+                "current_user_message_id": current_user_message_id,
             }
         }
 

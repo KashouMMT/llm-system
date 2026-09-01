@@ -1,15 +1,17 @@
 import asyncio
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.runtime.application import Application
+from app.runtime.event_bus import EVENT_MESSAGE_DELTA
+from app.services.chat_service import TERMINAL_EVENTS
 from app.utils.logger import logger
 
 
-def select_conversation(
+async def select_conversation(
     application: Application,
 ) -> UUID:
 
-    conversations = application.conversation_repository.get_conversations()
+    conversations = await application.conversation_repository.get_conversations()
 
     print("\n=== Conversations ===")
 
@@ -17,23 +19,20 @@ def select_conversation(
         print("No existing conversations found.")
         print("Starting a new conversation...")
 
-        conversation_id = application.conversation_repository.create_conversation()
+        conversation_id = (
+            await application.conversation_repository.create_conversation()
+        )
 
         print(f"Conversation: {conversation_id}")
 
         return conversation_id
 
-    for index, row in enumerate(conversations, start=1):
-        conversation_id = row[0]
-        title = row[1]
-        created_at = row[2]
-        updated_at = row[3]
-
+    for index, conversation in enumerate(conversations, start=1):
         print(
             f"{index}. "
-            f"{title or 'Untitled conversation'} "
-            f"(created: {created_at})"
-            f"(updated: {updated_at})"
+            f"{conversation.title or 'Untitled conversation'} "
+            f"(created: {conversation.created_at})"
+            f"(updated: {conversation.updated_at})"
         )
 
     print()
@@ -47,7 +46,9 @@ def select_conversation(
             raise SystemExit
 
         if choice == "n":
-            conversation_id = application.conversation_repository.create_conversation()
+            conversation_id = (
+            await application.conversation_repository.create_conversation()
+        )
 
             print("\nNew conversation created.")
             print(f"Conversation: {conversation_id}")
@@ -70,22 +71,27 @@ def select_conversation(
         return conversation_id
 
 
-def print_history(
+async def print_history(
     application: Application,
     conversation_id: UUID,
 ) -> None:
 
-    messages = application.message_repository.get_messages(conversation_id)
+    messages = await application.message_repository.get_messages(
+        conversation_id,
+    )
 
     print("\n=== Chat History ===")
 
     if not messages:
         print("No messages found.")
 
-    for row in messages:
-        _, role, content, created_at = row
+    for message in messages:
+        marker = "" if message.status == "complete" else f" [{message.status}]"
 
-        print(f"[{created_at}] {role.upper()}: {content}")
+        print(
+            f"[{message.created_at}] "
+            f"{message.role.upper()}{marker}: {message.content}"
+        )
 
     print("====================\n")
 
@@ -94,7 +100,7 @@ async def run_cli(
     application: Application,
 ) -> None:
 
-    conversation_id = select_conversation(application)
+    conversation_id = await select_conversation(application)
 
     print()
     print("Chat started")
@@ -115,28 +121,69 @@ async def run_cli(
             break
 
         if command == "/history":
-            print_history(application, conversation_id)
+            await print_history(application, conversation_id)
 
             continue
 
         if application.chat_service is None:
             raise RuntimeError("Application has not been initialized.")
 
+        if not application.conversation_lock.try_acquire(conversation_id):
+            print("\n[busy] A response is already being generated.")
+            continue
+
+        generation = None
+
         try:
-            async for token in application.chat_service.chat_stream(
-                user_input=user_input,
-                conversation_id=conversation_id,
-            ):
-                print(
-                    token,
-                    end="",
-                    flush=True,
+            async with application.event_bus.subscribe(
+                conversation_id,
+            ) as subscription:
+                turn = await application.chat_service.begin_turn(
+                    conversation_id=conversation_id,
+                    user_input=user_input,
+                    client_message_id=uuid4(),
                 )
 
-            print()
+                generation = application.spawn(
+                    application.chat_service.generate(
+                        conversation_id=conversation_id,
+                        user_message_id=turn.user_message_id,
+                        assistant_message_id=turn.assistant_message_id,
+                        user_input=user_input,
+                    )
+                )
+
+                while True:
+                    event = await subscription.next_event(timeout=1.0)
+
+                    if event is None:
+                        if generation.done():
+                            break
+                        continue
+
+                    if event.payload.get("message_id") != turn.assistant_message_id:
+                        continue
+
+                    if event.type == EVENT_MESSAGE_DELTA:
+                        print(event.payload["text"], end="", flush=True)
+
+                    elif event.type in TERMINAL_EVENTS.values():
+                        status = event.payload["status"]
+
+                        if status != "complete":
+                            print(f"\n[{status}]")
+
+                        break
+
+                print()
 
         except Exception:  # noqa: BLE001
-            # ChatService already logged the traceback with request context.
+            # Only ours to release if generation never started. Once it
+            # has, _finalize owns the lock — releasing here would let a
+            # second run start on the same checkpoint thread.
+            if generation is None:
+                application.conversation_lock.release(conversation_id)
+
             logger.warning("Chat request failed; returning to prompt")
             print(
                 "\n[error] The request failed. "

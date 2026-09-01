@@ -31,17 +31,18 @@ class SummaryContextBuilder:
     def __init__(self, summary_repository: SummaryRepository) -> None:
         self.summary_repository = summary_repository
 
-    def build(self, conversation_id: UUID) -> SummaryContext:
+    async def build(self, conversation_id: UUID) -> SummaryContext:
         """
         Read the summary state once and return both the summary message
         and its watermark.
         """
-        state = self.summary_repository.get_summary_state(conversation_id)
+        state = await self.summary_repository.get_summary_state(conversation_id)
 
         if state is None:
             return SummaryContext()
 
-        summary, last_summarized_message_id = state
+        summary = state.summary
+        last_summarized_message_id = state.last_summarized_message_id
 
         if not summary:
             return SummaryContext(

@@ -2,6 +2,7 @@ import psycopg
 
 from app.config.settings import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
 from app.database.connection import get_connection
+from app.database.migrations import run_migrations
 from app.utils.logger import logger
 
 
@@ -145,5 +146,6 @@ def create_tables() -> None:
 def initialize_database() -> None:
     create_db_if_not_exist()
     create_tables()
+    run_migrations()
 
     logger.info("Database initialization complete")

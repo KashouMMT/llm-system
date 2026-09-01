@@ -35,11 +35,15 @@ async def main():
         if args.api:
             api = create_api(application)
 
-            uvicorn.run(
+            # uvicorn.run() would start a second event loop, and the
+            # connection pool is bound to this one. Serve in place.
+            config = uvicorn.Config(
                 api,
                 host="0.0.0.0",
                 port=8000,
             )
+
+            await uvicorn.Server(config).serve()
             
         else:
             await run_cli(application)

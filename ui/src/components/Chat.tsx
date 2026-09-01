@@ -1,57 +1,132 @@
-import { type FormEvent, useState } from "react";
+import {
+	type FormEvent,
+	type UIEvent,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
+
 import "../assets/css/chat.css";
+import type { Message, MessageStatus } from "../api/types";
+import type { ChatError, useChat } from "../hooks/useChat";
+import type {
+	ConversationStream,
+	StreamStatus,
+} from "../hooks/useConversationStream";
 
 type ChatProps = {
+	conversationId: string | undefined;
+	messages: Message[];
+	isLoading: boolean;
+	loadError: Error | null;
+	stream: ConversationStream;
+	chat: ReturnType<typeof useChat>;
 	onToggleSidebar: () => void;
 };
 
-type Message = {
-	id: number;
-	role: "user" | "ai";
-	content: string;
+// How close to the bottom counts as "following along".
+const NEAR_BOTTOM_PX = 80;
+
+const STATUS_LABEL: Record<StreamStatus, string> = {
+	idle: "No conversation",
+	connecting: "Connecting…",
+	open: "Online",
+	closed: "Disconnected",
 };
 
-const Chat = ({ onToggleSidebar }: ChatProps) => {
+// Only the outcomes worth explaining to the reader; a finished answer and
+// one still arriving need no note.
+const OUTCOME_NOTE: Partial<Record<MessageStatus, string>> = {
+	interrupted: "The server stopped before this answer finished.",
+	cancelled: "This answer was cancelled.",
+	failed: "This answer failed to generate.",
+};
+
+const errorText = (error: ChatError): string => {
+	switch (error.kind) {
+		case "busy":
+			return "This conversation is already generating an answer.";
+		case "missing":
+			return "This conversation no longer exists.";
+		case "invalid":
+			return error.message;
+		case "network":
+			return "Could not reach the server.";
+		default:
+			return error.message;
+	}
+};
+
+const Chat = ({
+	conversationId,
+	messages,
+	isLoading,
+	loadError,
+	stream,
+	chat,
+	onToggleSidebar,
+}: ChatProps) => {
 	const [input, setInput] = useState("");
 
-	const [messages, setMessages] = useState<Message[]>([
-		{
-			id: 1,
-			role: "ai",
-			content: "Hello! How can I help you today?",
-		},
-		{
-			id: 2,
-			role: "user",
-			content: "Hey! I'm testing this chat interface.",
-		},
-		{
-			id: 3,
-			role: "ai",
-			content:
-				"Nice! The message area is scrollable, so you can have as many messages as you want.",
-		},
-	]);
+	const scrollRef = useRef<HTMLDivElement>(null);
+
+	// Whether the reader is following the bottom of the transcript. A ref,
+	// not state: it changes on every scroll event and nothing renders from
+	// it, so putting it in state would only cause renders.
+	const pinnedRef = useRef(true);
+
+	// Derived from the transcript rather than from this tab's own send, so
+	// a turn started in another tab disables this composer too.
+	const isGenerating = messages.some(
+		(message) => message.status === "streaming",
+	);
+
+	// No dependency list on purpose: drafts change identity on every
+	// animation frame while tokens arrive, and this must run after each of
+	// those commits.
+	useEffect(() => {
+		const element = scrollRef.current;
+
+		if (!element || !pinnedRef.current) {
+			return;
+		}
+
+		element.scrollTop = element.scrollHeight;
+	});
+
+	const handleScroll = (event: UIEvent<HTMLDivElement>) => {
+		const element = event.currentTarget;
+
+		pinnedRef.current =
+			element.scrollHeight - element.scrollTop - element.clientHeight <
+			NEAR_BOTTOM_PX;
+	};
 
 	const handleSubmit = (event: FormEvent) => {
 		event.preventDefault();
 
-		const content = input.trim();
+		const text = input;
 
-		if (!content) {
+		if (!text.trim() || !conversationId) {
 			return;
 		}
 
-		const message: Message = {
-			id: Date.now(),
-			role: "user",
-			content,
-		};
-
-		setMessages((previousMessages) => [...previousMessages, message]);
-
 		setInput("");
+		pinnedRef.current = true;
+
+		void chat.send(text).then((result) => {
+			// A refused turn must not cost the user their typing.
+			if (result === null) {
+				setInput(text);
+			}
+		});
 	};
+
+	const canSend =
+		Boolean(conversationId) &&
+		Boolean(input.trim()) &&
+		!chat.isSending &&
+		!isGenerating;
 
 	return (
 		<section className="chat-section">
@@ -68,38 +143,135 @@ const Chat = ({ onToggleSidebar }: ChatProps) => {
 					<div>
 						<h5 className="mb-0">AI Assistant</h5>
 
-						<small className="text-secondary">Online</small>
+						<small className="text-secondary">
+							{isGenerating
+								? "Generating…"
+								: STATUS_LABEL[stream.status]}
+						</small>
 					</div>
 				</div>
 
-				<div className="chat-messages">
-					{messages.map((message) => (
-						<div
-							key={message.id}
-							className={
-								message.role === "user"
-									? "message message-user"
-									: "message message-ai"
-							}
-						>
-							<div className="message-content">
-								{message.content}
+				<div
+					className="chat-messages"
+					ref={scrollRef}
+					onScroll={handleScroll}
+				>
+					{!conversationId && (
+						<p className="text-secondary">
+							Pick a conversation, or start a new one.
+						</p>
+					)}
+
+					{isLoading && (
+						<p className="text-secondary">Loading messages…</p>
+					)}
+
+					{loadError && (
+						<p className="text-danger">
+							Could not load this conversation.
+						</p>
+					)}
+
+					{conversationId &&
+						!isLoading &&
+						!loadError &&
+						messages.length === 0 && (
+							<p className="text-secondary">
+								No messages yet — say something.
+							</p>
+						)}
+
+					{messages.map((message) => {
+						// While a turn is in flight the database row is
+						// still empty — the text exists only on the wire,
+						// in the draft. The terminal event replaces the
+						// row's content and drops the draft, so this falls
+						// back to the stored text on its own.
+						const content =
+							stream.drafts[message.id] ?? message.content;
+
+						const note = OUTCOME_NOTE[message.status];
+
+						return (
+							<div
+								key={message.id}
+								className={
+									message.role === "user"
+										? "message message-user"
+										: "message message-ai"
+								}
+							>
+								<div className="message-content">
+									{content ||
+										(message.status === "streaming" ? (
+											<span className="text-secondary">
+												…
+											</span>
+										) : null)}
+
+									{note && (
+										<div className="mt-2 small text-secondary">
+											{note}
+										</div>
+									)}
+								</div>
 							</div>
-						</div>
-					))}
+						);
+					})}
 				</div>
+
+				{stream.joinedLate && (
+					<div className="alert alert-info m-3 mb-0 py-2 small">
+						Joined while an answer was already in progress — showing
+						it from here.
+					</div>
+				)}
+
+				{chat.error && (
+					<div className="alert alert-warning m-3 mb-0 py-2 d-flex align-items-center justify-content-between">
+						<span className="small">{errorText(chat.error)}</span>
+
+						<span className="d-flex gap-2">
+							{chat.error.kind !== "busy" && (
+								<button
+									type="button"
+									className="btn btn-sm btn-outline-secondary"
+									onClick={() => void chat.retry()}
+								>
+									Retry
+								</button>
+							)}
+
+							<button
+								type="button"
+								className="btn-close"
+								aria-label="Dismiss"
+								onClick={chat.clearError}
+							/>
+						</span>
+					</div>
+				)}
 
 				<form className="chat-input" onSubmit={handleSubmit}>
 					<input
 						type="text"
 						className="form-control"
-						placeholder="Type a message..."
+						placeholder={
+							conversationId
+								? "Type a message..."
+								: "Select a conversation first"
+						}
 						value={input}
+						disabled={!conversationId}
 						onChange={(event) => setInput(event.target.value)}
 					/>
 
-					<button type="submit" className="btn btn-primary">
-						Send
+					<button
+						type="submit"
+						className="btn btn-primary"
+						disabled={!canSend}
+					>
+						{chat.isSending ? "Sending…" : "Send"}
 					</button>
 				</form>
 			</div>

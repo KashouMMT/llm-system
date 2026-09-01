@@ -29,16 +29,19 @@ class ConversationContextBuilder:
         self.summary_context_builder = summary_context_builder
         self.history_context_builder = history_context_builder
 
-    def build(
+    async def build(
         self,
         conversation_id: UUID,
         user_query: str,
+        before_message_id: int | None = None,
     ) -> list[BaseMessage]:
         """
         Assemble context that remains stable during one agent/tool loop.
 
         The current user message is not included here because it belongs to
-        LangGraph's active turn state.
+        LangGraph's active turn state. It is now persisted before generation
+        starts, so before_message_id is what keeps it out — the exclusion is
+        explicit rather than a consequence of write ordering.
         """
         start = time.perf_counter()
 
@@ -48,11 +51,12 @@ class ConversationContextBuilder:
             len(user_query),
         )
 
-        summary_context = self.summary_context_builder.build(conversation_id)
+        summary_context = await self.summary_context_builder.build(conversation_id)
 
-        recent_history = self.history_context_builder.build(
+        recent_history = await self.history_context_builder.build(
             conversation_id=conversation_id,
             after_message_id=summary_context.last_summarized_message_id,
+            before_message_id=before_message_id,
         )
 
         prepared_context: list[BaseMessage] = [

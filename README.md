@@ -1,12 +1,13 @@
 # llm-system
 
-A conversational LLM system built on LangChain, LangGraph, and Ollama, with PostgreSQL-backed persistence and rolling summarization for long-running conversations. Runs as a CLI or a FastAPI server; a React UI (empty shell, not yet implemented) is intended as the eventual frontend.
+A conversational LLM system built on LangChain and LangGraph, with PostgreSQL-backed persistence and rolling summarization for long-running conversations. The model provider is selectable at startup (`LLM_PROVIDER`): a local Ollama instance, or any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, DeepSeek). Runs as a CLI or a FastAPI server, with a React + TypeScript frontend in `ui/` that receives tokens over Server-Sent Events.
 
 ## Requirements
 
 - Python 3.11+
 - PostgreSQL (reachable instance; the app creates its database and tables on startup if they don't exist)
-- [Ollama](https://ollama.com) running locally with the target model pulled
+- One model provider: either [Ollama](https://ollama.com) running locally with the target model pulled, or an API key for an OpenAI-compatible endpoint
+- Node.js 20+ (frontend only)
 
 ## Setup
 
@@ -14,28 +15,50 @@ A conversational LLM system built on LangChain, LangGraph, and Ollama, with Post
 pip install -r requirements.txt
 ```
 
-Configure via a `.env` file. `MODEL_NAME` and `DB_PASSWORD` are **required** — they have no usable default and startup fails if they are empty. Everything else is optional (defaults shown).
+Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable default and startup fails if it is empty. `LLM_API_KEY` is required when `LLM_PROVIDER=openai`. Everything else is optional (defaults shown).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `MODEL_NAME` | *(required)* | Ollama model tag |
-| `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/`; falls back to a built-in prompt if the file is missing |
-| `TEMPERATURE` | `0.3` | Sampling temperature |
-| `MAX_TOKENS` | `1536` | Max tokens generated per response (`num_predict`) |
-| `CONTEXT_WINDOW` | `8192` | Model context window (`num_ctx`) |
-| `TOP_K` | `40` | Top-k sampling |
+| `LLM_PROVIDER` | `ollama` | `ollama` or `openai`. Selects which factory in `app/llm/` builds the client |
+| `MODEL_NAME` | `qwen3.5:9b` | Model identifier for the selected provider (e.g. an Ollama tag, or `deepseek/deepseek-chat-v3.1:free` on OpenRouter) |
+| `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/`; falls back to a built-in prompt if the file is missing or empty |
+| `TEMPERATURE` | `0.3` | Sampling temperature. Deliberately low — this assistant must not invent facts it was not given |
+| `MAX_TOKENS` | `2048` | Max tokens generated per response (`num_predict` on Ollama, `max_tokens` on OpenAI) |
 | `TOP_P` | `0.9` | Nucleus sampling |
-| `SUMMARY_TOKEN_THRESHOLD` | `2500` | Estimated token count of unsummarized messages that triggers summarization |
-| `MAX_CHECKPOINT_MESSAGES` | `50` | Max messages kept in LangGraph's checkpoint state after a turn |
-| `MAX_CONTEXT_HISTORY_MESSAGES` | `16` | Max recent (post-summary) messages fed into each turn |
-| `MAX_UNSUMMARIZED_MESSAGES` | `16` | Hard cap that forces summarization regardless of token estimate. Keep it ≤ `MAX_CONTEXT_HISTORY_MESSAGES`, otherwise the backlog can outgrow the history window and older unsummarized messages become invisible to the model |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | **Ollama only.** Ollama server address |
+| `CONTEXT_WINDOW` | `16384` | **Ollama only** (`num_ctx`). The system prompt alone is ~2,800 tokens, and Ollama truncates from the *front* — too small a window silently drops the system prompt |
+| `TOP_K` | `40` | **Ollama only.** Top-k sampling |
+| `LLM_API_KEY` | *(empty)* | **OpenAI-compatible only.** Required when `LLM_PROVIDER=openai` |
+| `LLM_BASE_URL` | *(empty)* | **OpenAI-compatible only.** Set for non-OpenAI hosts (OpenRouter, Groq, DeepSeek); empty means `https://api.openai.com/v1` |
+| `LLM_MAX_RETRIES` | `3` | **OpenAI-compatible only.** Transient 429/5xx are common on shared free-tier pools; the SDK retries with backoff |
+| `LLM_TIMEOUT_SECONDS` | `120.0` | **OpenAI-compatible only.** Per-request timeout |
+| `SUMMARY_TOKEN_THRESHOLD` | `1200` | Estimated token count of unsummarized messages that triggers summarization |
+| `MAX_CHECKPOINT_MESSAGES` | `20` | Max messages kept in LangGraph's checkpoint state after a turn. Checkpoint messages are never sent to the LLM, so this only bounds Postgres row size |
+| `MAX_CONTEXT_HISTORY_MESSAGES` | `12` | Max recent (post-summary) messages fed into each turn |
+| `MAX_UNSUMMARIZED_MESSAGES` | `12` | Hard cap that forces summarization regardless of token estimate. Keep it ≤ `MAX_CONTEXT_HISTORY_MESSAGES`, otherwise the backlog can outgrow the history window and older unsummarized messages become invisible to the model |
 | `MAX_USER_INPUT_CHARS` | `4000` | Max characters accepted in a single user message |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `CONSOLE_LOG` | `false` | Also log to console |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `localhost` / `5432` / `llm_system` / `postgres` | PostgreSQL connection |
 | `DB_PASSWORD` | *(required)* | PostgreSQL password |
+| `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | `2` / `10` | Async connection pool size (`psycopg_pool.AsyncConnectionPool`) |
+| `SSE_HEARTBEAT_SECONDS` | `15` | Idle interval between `: keepalive` comments on `GET /events`, so proxies don't drop the connection |
+| `SSE_QUEUE_MAXSIZE` | `256` | Per-subscriber event queue depth; a subscriber that falls this far behind is dropped rather than buffered without bound |
 
 The summarization prompts are not environment-configurable: `app/prompts/default_summary_chunk_prompt.txt` and `app/prompts/default_summary_merge_prompt.txt` are read at import time and must exist and be non-empty.
+
+### Frontend
+
+```bash
+cd ui
+npm install
+```
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `VITE_API_BASE_URL` | `http://localhost:8000` | API origin the UI calls and opens its event stream against |
+
+The Vite dev server is pinned to port `5173` with `strictPort`, because the API's CORS allowlist names that exact origin. Without the pin, a busy port would silently move the UI to `5174` and every request — including the event stream — would fail CORS with an error that looks like the backend is down.
 
 ## Running
 
@@ -47,17 +70,23 @@ python -m app.main --log-level DEBUG
 
 CLI commands: `/exit` to quit, `/history` to print the current conversation's transcript.
 
+```bash
+cd ui && npm run dev             # Vite dev server on :5173
+```
+
+The UI requires the API to be running (`python -m app.main --api`).
+
 ## Architecture
 
-**Composition root.** [app/runtime/application.py](app/runtime/application.py) (`Application`) is an async context manager that owns the lifecycle of every shared resource: it initializes the database, loads the system prompt, builds the LLM client, opens the LangGraph PostgreSQL checkpointer, and wires the context builders, `AgentGraph`, `SummarizationService`, and `ChatService`. `app/main.py` opens one `Application` and hands it to either the CLI loop or the FastAPI app.
+**Composition root.** [app/runtime/application.py](app/runtime/application.py) (`Application`) is an async context manager that owns the lifecycle of every shared resource: it initializes the database and applies migrations, opens the async PostgreSQL connection pool, sweeps orphaned in-flight messages left by a previous crash, loads the system prompt, builds the LLM client, opens the LangGraph PostgreSQL checkpointer, and wires the context builders, `AgentGraph`, `EventBus`, `ConversationLock`, `SummarizationService`, and `ChatService`. `app/main.py` opens one `Application` and hands it to either the CLI loop or the FastAPI app, serving the API on the same event loop the pool was opened on.
 
-**Request flow.** `ChatService.chat_stream` (called from the CLI or the `/chat/stream` endpoint) streams tokens from `AgentGraph`, buffers the full response, and — only after the graph completes successfully — persists the user/assistant turn via `ConversationRepository` and kicks off summarization as an untracked background `asyncio.Task`. Summarization never blocks or can fail the chat response.
+**Request flow — generation is decoupled from the HTTP request.** `POST /conversations/{id}/messages` persists the user message and an empty, `status='streaming'` assistant message immediately (`ChatService.begin_turn`), then returns `202` without waiting for a response. Generation runs as a background task (`ChatService.generate`) that streams tokens from `AgentGraph`, buffers them in memory, and publishes each one to an in-process `EventBus`. Any number of clients — including the sender — read the same stream via `GET /events`, an SSE endpoint; there is exactly one token path, so multi-tab consistency falls out of the design rather than being handled as a special case. The response is written to PostgreSQL exactly once, when generation reaches a terminal state (`complete` / `cancelled` / `failed`), which is also what makes a client disconnect harmless — nothing about the turn depends on an HTTP connection staying open. A per-conversation `ConversationLock` (in-process) rejects a second concurrent send on the same conversation with `409`, since the LangGraph checkpointer is keyed by conversation and two concurrent runs would corrupt it. Summarization is scheduled afterward as an untracked background `asyncio.Task` and never blocks or can fail the chat response.
 
 **LangGraph agent** ([app/agent/graph.py](app/agent/graph.py)):
 
 ```
 START → prepare_context → agent ─┬─(tool call)→ tools → agent
-                                  └─(final answer)→ compact_checkpoint_state → END
+                                 └─(final answer)→ compact_checkpoint_state → END
 ```
 
 - `prepare_context` (`app/agent/nodes/prepare_context_node.py`) runs `ConversationContextBuilder` once per request to assemble background context.
@@ -76,10 +105,28 @@ State is checkpointed per conversation (`thread_id` = conversation UUID) via `As
 **Summarization** (`app/services/summarization_service.py`): after each turn, `ChatService` schedules `SummarizationService.trigger_if_needed`, which estimates tokens (`len(text) // 4`) over messages not yet summarized and, if over `SUMMARY_TOKEN_THRESHOLD` (or `MAX_UNSUMMARIZED_MESSAGES` is exceeded), generates a chunk summary via the LLM, merges it into the existing summary via a second LLM call, and advances the watermark — all through `SummaryRepository` (chunk insert + state update commit in one transaction). The updated summary is never written into LangGraph checkpoint state; it is read back from PostgreSQL by `SummaryContextBuilder` on the next turn.
 
 **Persistence** — two separate stores:
-- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `conversations`, `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log). Tables are created on startup if missing.
-- LangGraph checkpoint state: managed separately by `AsyncPostgresSaver` (`app/agent/checkpointer.py`) for graph replay/resumption.
+- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `conversations`, `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
+- LangGraph checkpoint state: managed separately by `AsyncPostgresSaver` (`app/agent/checkpointer.py`) for graph replay/resumption. It opens its own connection independent of the application pool.
 
-**LLM.** `app/llm/llm_factory.py` currently wraps `ChatOllama` only. `app/llm/prompt_factory.py` and the `app/prompts/*.txt` persona files (loaded via `SYSTEM_PROMPT`) allow swapping system prompts without code changes.
+**Realtime** (`app/runtime/event_bus.py`, `app/runtime/conversation_lock.py`):
+- `EventBus` is in-process pub/sub, keyed by conversation. `publish()` is synchronous and never blocks, so a slow subscriber cannot stall generation; each subscriber holds a bounded `asyncio.Queue` (`SSE_QUEUE_MAXSIZE`) and is dropped rather than buffered without limit if it falls behind. Event types: `message.created`, `message.delta`, `message.completed`, `message.cancelled`, `message.failed`, `conversation.updated`.
+- `ConversationLock` is an in-process `dict`-backed lock serializing generation per conversation. Correct without a `Lock`/mutex only because acquisition never awaits between the membership check and the insert.
+- Both are process-local. A multi-worker deployment would need `LISTEN/NOTIFY` (event bus) and a PostgreSQL advisory lock (conversation lock) instead — the interfaces are kept narrow enough that this is a swap, not a rewrite.
+
+**Frontend** (`ui/src/`): React 19 + TypeScript on Vite, with TanStack Query used only as a cache for the two REST resources — it is deliberately absent from the streaming path.
+
+The selected conversation lives in the URL (`/c/:conversationId`), so a refresh, a bookmark and a second tab all resolve to the same conversation. `ChatPage` reads that route parameter and wires four hooks, all keyed by it:
+
+- `useConversations` — the sidebar list, plus creation and cache invalidation. Also exports `useConversationsRefresh`, the seam that lets the event stream mark the list stale without importing a cache library.
+- `useMessages` — the persisted transcript, plus `useMessageCache` giving the stream write access to it. No writer ever invents a row: an event about a message that is not cached triggers a refetch instead.
+- `useConversationStream` — one `EventSource` per conversation, tied to the conversation rather than to sending, because the server treats the sender as an ordinary subscriber. Tokens accumulate in a ref and are published to React state once per animation frame, so rendering is decoupled from the model's output rate. Its state carries the conversation id it belongs to, which makes a conversation switch a comparison during render rather than a reset effect.
+- `useChat` — sends a turn and reports why one was refused. It owns no message state: the user's own message arrives back over the event stream like everyone else's, so there is one rendering path rather than two.
+
+`Chat.tsx` renders each message as `drafts[id] ?? message.content` — while a turn is in flight the database row is still empty and the text exists only on the wire; the terminal event writes the authoritative content and drops the draft, so the fallback resolves itself.
+
+Recovery is deliberately simple. Deltas are not replayable, so the stream re-reads the transcript on every connect and reconnect, and a client that joins mid-generation renders partial text until the terminal event delivers the full content. That is the entire answer to a dropped connection — no `Last-Event-ID`, no server-side replay buffer.
+
+**LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona named by `SYSTEM_PROMPT` from `app/prompts/*.txt`, falling back to a built-in prompt if the file is missing or empty — so a bad value degrades to a usable assistant rather than failing startup.
 
 ## API (`--api` mode)
 
@@ -87,8 +134,9 @@ State is checkpointed per conversation (`thread_id` = conversation UUID) via `As
 |---|---|---|
 | `POST` | `/conversations` | Create a conversation |
 | `GET` | `/conversations` | List conversations |
-| `GET` | `/conversations/{id}/messages` | Get a conversation's transcript |
-| `POST` | `/conversations/{id}/chat/stream` | Streamed chat turn (`text/plain`, body: `{"message": str}`) |
+| `GET` | `/conversations/{id}/messages` | Get a conversation's transcript (includes `status` per message: `streaming` / `complete` / `interrupted` / `cancelled` / `failed`) |
+| `POST` | `/conversations/{id}/messages` | Open a turn and start generating in the background. Body: `{"client_message_id": UUID, "message": str}`. Returns `202` with `{user_message_id, assistant_message_id}` immediately — the response is not in this call, only over `GET /events`. `client_message_id` is an idempotency key: a retried send with the same key returns the original ids (`200`) rather than generating a second answer. A second concurrent send on the same conversation while one is in flight gets `409` with the in-flight `assistant_message_id`, so the caller can subscribe to it instead |
+| `GET` | `/events?conversation_id={id}` | Server-sent events (`text/event-stream`) for one conversation. Any number of clients may subscribe and all receive the same stream, which is what keeps multiple tabs on the same conversation consistent |
 
 CORS is currently restricted to `http://localhost:5173` (the Vite dev server for `ui/`).
 
@@ -115,16 +163,20 @@ llm-system/
 │   ├── config/
 │   │   └── settings.py                           # Load env values, other constant variables
 │   ├── database/
-│   │   ├── connection.py                         # Create connection with database
-│   │   └── init_db.py                            # Initialize database and tables if not exist
-│   ├── llm/                                      # LLM Folder. In future, will support LLM switching.
-│   │   ├── llm_factory.py                        # Currently supports Ollama client
-│   │   └── prompt_factory.py                     # Prompt loading; in future, system prompt switching from user side
-│   ├── logs/                                     # Logs
-│   ├── persona/
-│   │   └── load_prompt.py                        # Load prompt from prompts folder below
+│   │   ├── connection.py                         # Sync connection (schema setup only) + the shared async pool
+│   │   ├── init_db.py                            # Create database/tables if missing, then run migrations
+│   │   └── migrations.py                         # Versioned schema changes to tables that already exist
+│   ├── llm/                                      # Model provider selection, isolated from the rest of the app
+│   │   ├── llm_factory.py                        # Provider registry; returns a LangChain BaseChatModel
+│   │   ├── ollama_llm.py                         # Builds ChatOllama (local models)
+│   │   ├── openai_llm.py                         # Builds ChatOpenAI; custom base_url covers OpenRouter/Groq/DeepSeek
+│   │   └── system_prompt.py                      # Loads the persona named by SYSTEM_PROMPT, with fallback
+│   ├── logs/                                     # Daily log files (gitignored)
 │   ├── prompts/                                  # System prompts (persona files) + summarization prompts
 │   │   ├── default.txt                           # Fallback persona, selected by SYSTEM_PROMPT
+│   │   ├── anna.txt                              # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
+│   │   ├── alice_the_bully.txt                   # Test persona
+│   │   ├── riko.txt                              # Test persona
 │   │   ├── default_summary_chunk_prompt.txt      # Prompt for summarizing one batch of new messages
 │   │   └── default_summary_merge_prompt.txt      # Prompt for merging a chunk summary into the durable summary
 │   ├── repositories/                             # Functions for executing SQL against tables.
@@ -134,14 +186,43 @@ llm-system/
 │   ├── runtime/
 │   │   ├── application.py                        # Initializes entire app. Composition root and lifecycle owner.
 │   │   ├── cli.py                                # CLI interface for app.
-│   │   └── server.py                             # FastAPI REST API for app.
+│   │   ├── server.py                             # FastAPI REST API for app.
+│   │   ├── event_bus.py                          # In-process pub/sub fan-out of conversation events (SSE source)
+│   │   └── conversation_lock.py                  # Serializes generation per conversation
 │   ├── services/
-│   │   ├── chat_service.py                       # Main chat service; schedules background summarization after a turn
+│   │   ├── chat_service.py                       # Opens turns, runs background generation, schedules summarization
 │   │   └── summarization_service.py              # Generates and persists durable conversation summaries (LLM calls)
 │   └── utils/
 │       └── logger.py                             # Logging
-├── ui/                                           # React UI. Communicates with FastAPI. Empty shell, not yet implemented.
+├── ui/                                           # React + TypeScript frontend (Vite)
+│   ├── index.html
+│   ├── vite.config.ts                            # Dev server pinned to :5173 to match the API's CORS origin
+│   ├── package.json
+│   └── src/
+│       ├── main.tsx                              # Root render; QueryClientProvider + BrowserRouter
+│       ├── App.tsx                               # Routes; /c/:conversationId carries the selected conversation
+│       ├── api/
+│       │   ├── client.ts                         # fetch wrapper, ApiError, endpoint functions, event stream URL
+│       │   └── types.ts                          # Message/Conversation shapes + SSE envelope and payload types
+│       ├── hooks/
+│       │   ├── useConversations.ts               # Sidebar list, creation, and cache invalidation for the stream
+│       │   ├── useMessages.ts                    # Transcript query + write access to its cache
+│       │   ├── useConversationStream.ts          # One EventSource per conversation; owns the live token drafts
+│       │   ├── useChat.ts                        # Opens a turn (POST); owns no message state
+│       │   └── useTheme.ts                       # Light/dark theme
+│       ├── layout/
+│       │   ├── ChatPage.tsx                      # Reads the route param and wires the four hooks together
+│       │   └── SettingPage.tsx
+│       ├── components/
+│       │   ├── Chat.tsx                          # Renders persisted messages merged with live drafts
+│       │   ├── Sidebar.tsx                       # Conversation list, active highlight, new chat
+│       │   ├── Navbar.tsx
+│       │   └── Footer.tsx
+│       └── assets/
+│           ├── css/                              # style.css, chat.css, sidebar.css
+│           └── images/
 ├── LICENSE
+├── THIRD-PARTY-NOTICES
 ├── README.md
 └── requirements.txt
 ```

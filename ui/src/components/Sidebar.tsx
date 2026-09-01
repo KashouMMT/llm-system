@@ -1,4 +1,10 @@
+import { NavLink, useNavigate } from "react-router-dom";
+
 import "../assets/css/sidebar.css";
+import {
+	useConversations,
+	useCreateConversation,
+} from "../hooks/useConversations";
 
 type SidebarProps = {
 	isOpen: boolean;
@@ -6,32 +12,19 @@ type SidebarProps = {
 };
 
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
-	const conversations = [
-		"How does LangGraph work?",
-		"React Router setup",
-		"Building an AI Agent",
-		"PostgreSQL memory design",
-		"Ollama model comparison",
-		"FastAPI streaming",
-		"RAG architecture discussion",
-		"Vector database options",
-		"LangChain vs LangGraph",
-		"AI Agent Platform idea",
-		"React component architecture",
-		"Bootstrap navbar problem",
-		"Python async programming",
-		"LLM context windows",
-		"Prompt engineering",
-		"Local AI development",
-		"Docker deployment",
-		"Nginx configuration",
-		"PostgreSQL optimization",
-		"Authentication design",
-		"Spring Boot architecture",
-		"TypeScript patterns",
-		"Frontend state management",
-		"AI memory implementation",
-	];
+	const navigate = useNavigate();
+
+	const conversationsQuery = useConversations();
+	const createConversation = useCreateConversation();
+
+	const handleCreate = () => {
+		createConversation.mutate(undefined, {
+			onSuccess: (conversation) => {
+				navigate(`/c/${conversation.id}`);
+				onClose();
+			},
+		});
+	};
 
 	return (
 		<>
@@ -42,22 +35,52 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 
 			<aside className={`sidebar ${isOpen ? "open" : ""}`}>
 				<div className="sidebar-header">
-					<button className="btn btn-primary w-100">
-						+ New chat
+					<button
+						type="button"
+						className="btn btn-primary w-100"
+						onClick={handleCreate}
+						disabled={createConversation.isPending}
+					>
+						{createConversation.isPending
+							? "Creating…"
+							: "+ New chat"}
 					</button>
 				</div>
 
 				<div className="sidebar-conversations">
-					{conversations.map((conversation, index) => (
-						<button
-							key={index}
-							className="sidebar-conversation"
+					{conversationsQuery.isPending && (
+						<p className="small text-secondary px-2">Loading…</p>
+					)}
+
+					{conversationsQuery.isError && (
+						<p className="small text-danger px-2">
+							Could not load conversations.
+						</p>
+					)}
+
+					{conversationsQuery.data?.length === 0 && (
+						<p className="small text-secondary px-2">
+							No conversations yet.
+						</p>
+					)}
+
+					{/* NavLink rather than a button: a real href means
+					    middle-click opens the same conversation in a second
+					    tab, which is the fastest way to see the shared
+					    stream working. */}
+					{conversationsQuery.data?.map((conversation) => (
+						<NavLink
+							key={conversation.id}
+							to={`/c/${conversation.id}`}
+							className={({ isActive }) =>
+								`sidebar-conversation${isActive ? " active" : ""}`
+							}
 							onClick={onClose}
 						>
 							<span className="conversation-title">
-								{conversation}
+								{conversation.title}
 							</span>
-						</button>
+						</NavLink>
 					))}
 				</div>
 			</aside>
