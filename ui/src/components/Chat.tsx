@@ -5,14 +5,16 @@ import {
 	useRef,
 	useState,
 } from "react";
-
-import "../assets/css/chat.css";
 import type { Message, MessageStatus } from "../api/types";
 import type { ChatError, useChat } from "../hooks/useChat";
 import type {
 	ConversationStream,
 	StreamStatus,
 } from "../hooks/useConversationStream";
+
+import Markdown from "./Markdown";
+
+import "../assets/css/chat.css";
 
 type ChatProps = {
 	conversationId: string | undefined;
@@ -69,11 +71,25 @@ const Chat = ({
 	const [input, setInput] = useState("");
 
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
 	// Whether the reader is following the bottom of the transcript. A ref,
 	// not state: it changes on every scroll event and nothing renders from
 	// it, so putting it in state would only cause renders.
 	const pinnedRef = useRef(true);
+
+	// Grows the box to fit typed content, up to the CSS max-height cap —
+	// past that, the textarea scrolls internally instead of growing further.
+	useEffect(() => {
+		const element = textareaRef.current;
+
+		if (!element) {
+			return;
+		}
+
+		element.style.height = "auto";
+		element.style.height = `${element.scrollHeight}px`;
+	}, [input]);
 
 	// Derived from the transcript rather than from this tab's own send, so
 	// a turn started in another tab disables this composer too.
@@ -202,12 +218,21 @@ const Chat = ({
 								}
 							>
 								<div className="message-content">
-									{content ||
-										(message.status === "streaming" ? (
-											<span className="text-secondary">
-												…
+									{content &&
+										(message.role === "assistant" ? (
+											<Markdown>{content}</Markdown>
+										) : (
+											content
+										))}
+
+									{!content &&
+										message.status === "streaming" && (
+											<span className="typing-indicator">
+												<span />
+												<span />
+												<span />
 											</span>
-										) : null)}
+										)}
 
 									{note && (
 										<div className="mt-2 small text-secondary">
@@ -253,9 +278,10 @@ const Chat = ({
 				)}
 
 				<form className="chat-input" onSubmit={handleSubmit}>
-					<input
-						type="text"
+					<textarea
 						className="form-control"
+						ref={textareaRef}
+						rows={1}
 						placeholder={
 							conversationId
 								? "Type a message..."

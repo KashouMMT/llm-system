@@ -353,6 +353,20 @@ class ChatService:
         if status == "complete":
             self._schedule_summarization(conversation_id)
 
+    def pending_tasks(self) -> set[asyncio.Task]:
+        """
+        Detached work this service still has in flight: finalization
+        writes and summarization runs.
+
+        Exposed so shutdown can wait for them before the connection pool
+        closes. A finalize task that loses its pool leaves an assistant
+        message stuck in 'streaming' until the next startup sweeps it.
+
+        A copy, because the set is mutated by done callbacks while a
+        caller iterates it.
+        """
+        return set(self._background_tasks)
+
     def _schedule_summarization(self, conversation_id: UUID) -> None:
         """
         Kick off summarization in the background, if not already running

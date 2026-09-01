@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.config.settings import MAX_USER_INPUT_CHARS, SSE_HEARTBEAT_SECONDS
+from app.config.settings import MAX_USER_INPUT_CHARS
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
 from app.runtime.event_bus import Event
@@ -214,7 +214,10 @@ def create_api(application: Application) -> FastAPI:
 
                 while True:
                     event = await subscription.next_event(
-                        timeout=SSE_HEARTBEAT_SECONDS,
+                        # Read each pass, so a change reaches streams that
+                        # are already open.
+                        timeout=application.runtime_settings.current
+                        .sse_heartbeat_seconds,
                     )
 
                     if subscription.overflowed:

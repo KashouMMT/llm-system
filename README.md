@@ -58,6 +58,15 @@ npm install
 |---|---|---|
 | `VITE_API_BASE_URL` | `http://localhost:8000` | API origin the UI calls and opens its event stream against |
 
+Assistant replies are rendered as Markdown. Four dependencies cover that, all confined to `Markdown.tsx` and `MermaidDiagram.tsx`:
+
+| Package | Role |
+|---|---|
+| `react-markdown` | Parses Markdown into React elements. Renders to elements rather than HTML strings, so model output cannot inject markup |
+| `remark-gfm` | GitHub-flavoured extensions: tables, strikethrough, task lists, autolinks |
+| `rehype-highlight` | Syntax highlighting inside fenced code blocks. Configured with `detect: false`, so only fences with an explicit language tag are highlighted |
+| `mermaid` | Renders a ```` ```mermaid ```` fence to SVG. Initialised with `securityLevel: "strict"`, since diagram source is untrusted model output |
+
 The Vite dev server is pinned to port `5173` with `strictPort`, because the API's CORS allowlist names that exact origin. Without the pin, a busy port would silently move the UI to `5174` and every request — including the event stream — would fail CORS with an error that looks like the backend is down.
 
 ## Running
@@ -80,7 +89,9 @@ The UI requires the API to be running (`python -m app.main --api`).
 
 **Composition root.** [app/runtime/application.py](app/runtime/application.py) (`Application`) is an async context manager that owns the lifecycle of every shared resource: it initializes the database and applies migrations, opens the async PostgreSQL connection pool, sweeps orphaned in-flight messages left by a previous crash, loads the system prompt, builds the LLM client, opens the LangGraph PostgreSQL checkpointer, and wires the context builders, `AgentGraph`, `EventBus`, `ConversationLock`, `SummarizationService`, and `ChatService`. `app/main.py` opens one `Application` and hands it to either the CLI loop or the FastAPI app, serving the API on the same event loop the pool was opened on.
 
-**Request flow — generation is decoupled from the HTTP request.** `POST /conversations/{id}/messages` persists the user message and an empty, `status='streaming'` assistant message immediately (`ChatService.begin_turn`), then returns `202` without waiting for a response. Generation runs as a background task (`ChatService.generate`) that streams tokens from `AgentGraph`, buffers them in memory, and publishes each one to an in-process `EventBus`. Any number of clients — including the sender — read the same stream via `GET /events`, an SSE endpoint; there is exactly one token path, so multi-tab consistency falls out of the design rather than being handled as a special case. The response is written to PostgreSQL exactly once, when generation reaches a terminal state (`complete` / `cancelled` / `failed`), which is also what makes a client disconnect harmless — nothing about the turn depends on an HTTP connection staying open. A per-conversation `ConversationLock` (in-process) rejects a second concurrent send on the same conversation with `409`, since the LangGraph checkpointer is keyed by conversation and two concurrent runs would corrupt it. Summarization is scheduled afterward as an untracked background `asyncio.Task` and never blocks or can fail the chat response.
+**Request flow — generation is decoupled from the HTTP request.** `POST /conversations/{id}/messages` persists the user message and an empty, `status='streaming'` assistant message immediately (`ChatService.begin_turn`), then returns `202` without waiting for a response. Generation runs as a background task (`ChatService.generate`) that streams tokens from `AgentGraph`, buffers them in memory, and publishes each one to an in-process `EventBus`. Any number of clients — including the sender — read the same stream via `GET /events`, an SSE endpoint; there is exactly one token path, so multi-tab consistency falls out of the design rather than being handled as a special case. The response is written to PostgreSQL exactly once, when generation reaches a terminal state (`complete` / `cancelled` / `failed`), which is also what makes a client disconnect harmless — nothing about the turn depends on an HTTP connection staying open. A per-conversation `ConversationLock` (in-process) rejects a second concurrent send on the same conversation with `409`, since the LangGraph checkpointer is keyed by conversation and two concurrent runs would corrupt it. Summarization is scheduled afterward as a background `asyncio.Task` and never blocks or can fail the chat response.
+
+**Shutdown.** An SSE response never ends on its own — the client stays connected and the generator keeps emitting heartbeats — so uvicorn is given `timeout_graceful_shutdown=5` to cut whatever is still open. `Application.shutdown()` then drains detached work in two passes before closing the connection pool, waiting briefly and then cancelling: first the generation tasks, then `ChatService`'s own tasks. The order matters, because cancelling a generation is what *creates* its finalization task, and that task still needs the pool to persist the partial answer. Whatever does not finish in time is caught by `sweep_streaming()` on the next startup.
 
 **LangGraph agent** ([app/agent/graph.py](app/agent/graph.py)):
 
@@ -124,9 +135,11 @@ The selected conversation lives in the URL (`/c/:conversationId`), so a refresh,
 
 `Chat.tsx` renders each message as `drafts[id] ?? message.content` — while a turn is in flight the database row is still empty and the text exists only on the wire; the terminal event writes the authoritative content and drops the draft, so the fallback resolves itself.
 
+Assistant messages are rendered through `Markdown.tsx`; user messages are not, so a user typing literal `**` sees it unchanged. A ```` ```mermaid ```` fence is diverted to `MermaidDiagram.tsx` and drawn as SVG. Because content streams in token by token, a fence is frequently incomplete mid-answer — the diagram keeps its last successful render and shows a pending note rather than flickering, and unclosed Markdown resolves itself once the closing marker arrives.
+
 Recovery is deliberately simple. Deltas are not replayable, so the stream re-reads the transcript on every connect and reconnect, and a client that joins mid-generation renders partial text until the terminal event delivers the full content. That is the entire answer to a dropped connection — no `Last-Event-ID`, no server-side replay buffer.
 
-**LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona named by `SYSTEM_PROMPT` from `app/prompts/*.txt`, falling back to a built-in prompt if the file is missing or empty — so a bad value degrades to a usable assistant rather than failing startup.
+**LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona named by `SYSTEM_PROMPT` from `app/prompts/*.txt`, falling back to a built-in prompt if the file is missing or empty — so a bad value degrades to a usable assistant rather than failing startup. Every persona, including that fallback, is composed with a shared `RESPONSE_FORMAT` block describing what the frontend can render (Markdown, mermaid, no LaTeX or raw HTML). That contract belongs to the interface rather than to any one persona, so it lives in code instead of being duplicated across prompt files. The composed prompt is measured against `SYSTEM_PROMPT_TOKEN_BUDGET` and logs a warning when it exceeds it — a warning rather than an error, because a long prompt still works and this module's contract is to degrade rather than block startup.
 
 ## API (`--api` mode)
 
@@ -175,8 +188,6 @@ llm-system/
 │   ├── prompts/                                  # System prompts (persona files) + summarization prompts
 │   │   ├── default.txt                           # Fallback persona, selected by SYSTEM_PROMPT
 │   │   ├── anna.txt                              # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
-│   │   ├── alice_the_bully.txt                   # Test persona
-│   │   ├── riko.txt                              # Test persona
 │   │   ├── default_summary_chunk_prompt.txt      # Prompt for summarizing one batch of new messages
 │   │   └── default_summary_merge_prompt.txt      # Prompt for merging a chunk summary into the durable summary
 │   ├── repositories/                             # Functions for executing SQL against tables.
@@ -215,6 +226,8 @@ llm-system/
 │       │   └── SettingPage.tsx
 │       ├── components/
 │       │   ├── Chat.tsx                          # Renders persisted messages merged with live drafts
+│       │   ├── Markdown.tsx                      # Renders assistant text as Markdown; routes mermaid fences
+│       │   ├── MermaidDiagram.tsx                # Renders one mermaid fence to SVG
 │       │   ├── Sidebar.tsx                       # Conversation list, active highlight, new chat
 │       │   ├── Navbar.tsx
 │       │   └── Footer.tsx

@@ -4,11 +4,10 @@ from uuid import UUID
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
+from app.config.runtime_settings import RuntimeSettingsHolder
 from app.config.settings import (
-    MAX_UNSUMMARIZED_MESSAGES,
     SUMMARY_CHUNK_PROMPT,
     SUMMARY_MERGE_PROMPT,
-    SUMMARY_TOKEN_THRESHOLD,
 )
 from app.repositories.message_repository import Message, MessageRepository
 from app.repositories.summary_repository import SummaryRepository
@@ -30,14 +29,12 @@ class SummarizationService:
         llm: BaseChatModel,
         message_repository: MessageRepository,
         summary_repository: SummaryRepository,
-        token_threshold: int = SUMMARY_TOKEN_THRESHOLD,
-        max_unsummarized_messages: int = MAX_UNSUMMARIZED_MESSAGES,
+        settings: RuntimeSettingsHolder,
     ) -> None:
         self.llm = llm
         self.message_repository = message_repository
         self.summary_repository = summary_repository
-        self.token_threshold = token_threshold
-        self.max_unsummarized_messages = max_unsummarized_messages
+        self.settings = settings
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
@@ -73,14 +70,18 @@ class SummarizationService:
 
         if not rows:
             return False
+        
+        # One snapshot for the whole check: a change landing between the
+        # two comparisons must not decide half of this answer.
+        settings = self.settings.current
 
-        if len(rows) >= self.max_unsummarized_messages:
+        if len(rows) >= settings.max_unsummarized_messages:
             logger.warning(
                 "Unsummarized backlog exceeds hard limit | "
                 "conversation=%s messages=%s limit=%s",
                 conversation_id,
                 len(rows),
-                self.max_unsummarized_messages,
+                settings.max_unsummarized_messages,
             )
             return True
 
@@ -94,7 +95,7 @@ class SummarizationService:
             estimated_tokens,
         )
 
-        return estimated_tokens >= self.token_threshold
+        return estimated_tokens >= settings.summary_token_threshold
 
     async def _generate_chunk_summary(self, rows: list[Message]) -> str:
         conversation = "\n".join(f"{row.role}: {row.content}" for row in rows)

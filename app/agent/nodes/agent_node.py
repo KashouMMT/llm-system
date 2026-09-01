@@ -9,13 +9,17 @@ from langchain_core.tools import BaseTool
 
 from app.agent.state import AgentState, get_current_turn_messages
 from app.utils.logger import logger
+from app.config.runtime_settings import RuntimeSettingsHolder
+from app.llm.sampling import bind_sampling
+from app.llm.system_prompt import load_system_prompt
 
 AgentNode = Callable[[AgentState, RunnableConfig], dict]
 
 
 def create_agent_node(
     llm: BaseChatModel,
-    system_prompt: str,
+    settings: RuntimeSettingsHolder,
+    provider: str,
     tools: Sequence[BaseTool],
 ) -> AgentNode:
     """
@@ -23,6 +27,10 @@ def create_agent_node(
 
     Prepared background context comes from the prepare_context node.
     The active tool sequence comes from LangGraph state.
+
+    Sampling parameters and the persona are read per invocation rather
+    than captured here, so a settings change reaches the next turn
+    without rebuilding the graph.
     """
     llm_with_tools = llm.bind_tools(tools)
 
@@ -54,6 +62,18 @@ def create_agent_node(
             len(prepared_context),
             len(current_turn_messages),
         )
+        
+        # One snapshot for this whole turn. A change landing mid-stream
+        # must not apply to half an answer.
+        current_settings = settings.current
+
+        system_prompt = load_system_prompt(current_settings.system_prompt_name)
+
+        model = bind_sampling(
+            llm_with_tools,
+            current_settings,
+            provider,
+        )
 
         llm_start = time.perf_counter()
 
@@ -64,7 +84,7 @@ def create_agent_node(
 
         gathered: AIMessageChunk | None = None
 
-        async for chunk in llm_with_tools.astream(
+        async for chunk in model.astream(
             [
                 SystemMessage(content=system_prompt),
                 *prepared_context,

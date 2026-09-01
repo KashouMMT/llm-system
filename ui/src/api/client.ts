@@ -53,7 +53,10 @@ async function request<TResponse>(
 		// because EventSource cannot send an Authorization header.
 		credentials: "include",
 		headers: {
-			"Content-Type": "application/json",
+			// Only set on requests that actually carry a body — declaring
+			// application/json on a bodyless GET isn't a safelisted CORS
+			// value and costs a preflight OPTIONS round trip for nothing.
+			...(init?.body ? { "Content-Type": "application/json" } : {}),
 			...init?.headers,
 		},
 	});

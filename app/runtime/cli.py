@@ -1,6 +1,12 @@
 import asyncio
+from dataclasses import fields
 from uuid import UUID, uuid4
 
+from app.config.runtime_settings import (
+    FIELD_PARSERS,
+    PERSISTED_FIELDS,
+    RuntimeSettings,
+)
 from app.runtime.application import Application
 from app.runtime.event_bus import EVENT_MESSAGE_DELTA
 from app.services.chat_service import TERMINAL_EVENTS
@@ -66,6 +72,8 @@ async def select_conversation(
             print("Invalid conversation number.")
             continue
 
+        conversation_id = conversations[index - 1].id
+
         print(f"\nResuming conversation: {conversation_id}")
 
         return conversation_id
@@ -96,6 +104,85 @@ async def print_history(
     print("====================\n")
 
 
+def print_settings(application: Application) -> None:
+    """
+    Show every runtime-adjustable setting and how long a change to it lasts.
+
+    The scope column is the point of this view: a persisted setting
+    survives a restart, a session one does not.
+    """
+    settings = application.runtime_settings.current
+    defaults = RuntimeSettings.from_env()
+
+    print("\n=== Runtime Settings ===")
+
+    for field in fields(settings):
+        name = field.name
+        value = getattr(settings, name)
+        scope = "persisted" if name in PERSISTED_FIELDS else "session"
+
+        # Marked so it is obvious which values are no longer the ones the
+        # environment supplied.
+        changed = " *" if value != getattr(defaults, name) else ""
+
+        print(f"  {name:<30} {value!r:<12} [{scope}]{changed}")
+
+    print()
+    print("  * differs from the environment default")
+    print("  /set <key> <value>   change a setting")
+    print("  /reset <key>         restore the environment default")
+    print("========================\n")
+
+
+async def set_setting(application: Application, argument: str) -> None:
+    parts = argument.split(maxsplit=1)
+
+    if len(parts) != 2:
+        print("Usage: /set <key> <value>")
+        return
+
+    key, value = parts
+
+    try:
+        await application.apply_settings({key: value})
+
+    except ValueError as error:
+        print(f"[rejected] {error}")
+        return
+
+    current = getattr(application.runtime_settings.current, key)
+    scope = "persisted" if key in PERSISTED_FIELDS else "this session only"
+
+    print(f"{key} = {current!r} ({scope})")
+
+
+async def reset_setting(application: Application, key: str) -> None:
+    """
+    Restore a setting to its environment default and drop any stored row.
+
+    Both halves matter: without the delete the old override would come
+    back on the next start, because the database layers over the
+    environment.
+    """
+    if key not in FIELD_PARSERS:
+        print(f"[rejected] Unknown or non-editable setting: {key}")
+        return
+
+    default = getattr(RuntimeSettings.from_env(), key)
+
+    try:
+        await application.apply_settings({key: default})
+
+    except ValueError as error:
+        print(f"[rejected] {error}")
+        return
+
+    if key in PERSISTED_FIELDS:
+        await application.settings_repository.delete(key)
+
+    print(f"{key} = {default!r} (restored from environment)")
+
+
 async def run_cli(
     application: Application,
 ) -> None:
@@ -108,12 +195,20 @@ async def run_cli(
     print()
     print("Type /exit to quit")
     print("Type /history to view chat history")
+    print("Type /settings to view runtime settings")
+    print("Type /set <key> <value> to change one, /reset <key> to restore it")
     print()
 
     while True:
         user_input = await asyncio.to_thread(input, "You: ")
 
-        command = user_input.strip().lower()
+        # Case is preserved for arguments — persona names and log levels
+        # are values, not commands.
+        stripped = user_input.strip()
+        command = stripped.lower()
+
+        if not stripped:
+            continue
 
         if command == "/exit":
             print("Goodbye")
@@ -122,6 +217,21 @@ async def run_cli(
 
         if command == "/history":
             await print_history(application, conversation_id)
+
+            continue
+
+        if command == "/settings":
+            print_settings(application)
+
+            continue
+
+        if command.startswith("/set "):
+            await set_setting(application, stripped[len("/set ") :])
+
+            continue
+
+        if command.startswith("/reset "):
+            await reset_setting(application, stripped[len("/reset ") :].strip())
 
             continue
 

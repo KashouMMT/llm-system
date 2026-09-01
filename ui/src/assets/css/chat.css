@@ -48,6 +48,59 @@
 	overflow-wrap: anywhere;
 }
 
+.message-content pre {
+	background-color: var(--bg-subtle);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 0.75rem;
+	overflow-x: auto;
+}
+
+.message-content code {
+	font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+	font-size: 0.85em;
+}
+
+.message-content :not(pre) > code {
+	background-color: var(--bg-subtle);
+	border-radius: 0.25rem;
+	padding: 0.1em 0.3em;
+}
+
+/* Syntax highlighting — weight/italic/opacity only, no new colors, to
+   match the app's existing monochrome palette. Swap in real colors here
+   later if you want a livelier code block. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-title.function_ {
+	font-weight: 700;
+}
+
+.hljs-string,
+.hljs-attr,
+.hljs-number {
+	opacity: 0.85;
+}
+
+.hljs-comment {
+	font-style: italic;
+	opacity: 0.6;
+}
+
+.mermaid-diagram {
+	background-color: var(--bg-subtle);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 0.75rem;
+	overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+	max-width: 100%;
+	height: auto;
+}
+
 .message-ai {
 	justify-content: flex-start;
 }
@@ -75,8 +128,47 @@
 	border-top: 1px solid var(--border);
 }
 
-.chat-input input {
+.chat-input textarea {
 	flex: 1;
+	resize: none;
+	overflow-y: auto;
+	max-height: 8rem;
+}
+
+.typing-indicator {
+	display: inline-flex;
+	gap: 0.3rem;
+	align-items: center;
+	padding: 0.2rem 0;
+}
+
+.typing-indicator span {
+	width: 0.4rem;
+	height: 0.4rem;
+	border-radius: 50%;
+	background-color: var(--text-muted);
+	animation: typing-jump 1.2s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(2) {
+	animation-delay: 0.15s;
+}
+
+.typing-indicator span:nth-child(3) {
+	animation-delay: 0.3s;
+}
+
+@keyframes typing-jump {
+	0%,
+	60%,
+	100% {
+		transform: translateY(0);
+		opacity: 0.6;
+	}
+	30% {
+		transform: translateY(-0.25rem);
+		opacity: 1;
+	}
 }
 
 @media (max-width: 767.98px) {

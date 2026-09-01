@@ -134,6 +134,23 @@ def create_tables() -> None:
                 ON conversation_summaries(conversation_id)
             """
             )
+            
+            # ---------------------------------------------------------
+            # Runtime-adjustable settings
+            # ---------------------------------------------------------
+            # Sparse on purpose: one row per key that has actually been
+            # overridden. An absent key falls through to the environment,
+            # so editing .env keeps working, and resetting a setting is a
+            # DELETE rather than writing the default back.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """
+            )
 
             conn.commit()
 

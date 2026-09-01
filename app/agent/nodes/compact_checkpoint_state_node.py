@@ -8,6 +8,7 @@ from langchain_core.messages import (
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from app.agent.state import AgentState
+from app.config.runtime_settings import RuntimeSettingsHolder
 from app.utils.logger import logger
 
 CompactCheckpointStateNode = Callable[[AgentState], dict]
@@ -47,22 +48,23 @@ def select_recent_complete_turns(
 
 
 def create_compact_checkpoint_state_node(
-    max_checkpoint_messages: int,
+    settings: RuntimeSettingsHolder,
 ) -> CompactCheckpointStateNode:
     """
     Create the end-of-turn node that bounds retained checkpoint state.
 
     It runs only after the agent produced a final response, never in the
     middle of a tool loop.
+
+    The limit is read per invocation; RuntimeSettings already guarantees
+    it is at least 1, so the old constructor-time check is redundant.
     """
-    if max_checkpoint_messages < 1:
-        raise ValueError(
-            "max_checkpoint_messages must be greater than or equal to 1."
-        )
 
     def compact_checkpoint_state_node(
         state: AgentState,
     ) -> dict:
+        max_checkpoint_messages = settings.current.max_checkpoint_messages
+
         current_messages = state["messages"]
 
         retained_messages = select_recent_complete_turns(

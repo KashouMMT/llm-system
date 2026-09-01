@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from app.config.settings import SSE_QUEUE_MAXSIZE
+from app.config.runtime_settings import RuntimeSettingsHolder
 from app.utils.logger import logger
 
 EVENT_SCHEMA_VERSION = 1
@@ -100,9 +100,9 @@ class EventBus:
     """
     def __init__(
         self,
-        queue_maxsize = SSE_QUEUE_MAXSIZE,
+        settings: RuntimeSettingsHolder,
     ) -> None:
-        self.queue_maxsize = queue_maxsize
+        self.settings = settings
         self._subscribers: dict[UUID, set[Subscription]] = {}
         
     @asynccontextmanager
@@ -113,7 +113,9 @@ class EventBus:
         
         subscription = Subscription(
             conversation_id=conversation_id,
-            maxsize=self.queue_maxsize,
+            # Read per subscribe: existing queues keep the size they were
+            # created with, new subscribers get the current value.
+            maxsize=self.settings.current.sse_queue_maxsize,
         )
         
         self._subscribers.setdefault(conversation_id, set()).add(subscription)

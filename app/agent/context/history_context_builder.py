@@ -2,6 +2,7 @@ from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
+from app.config.runtime_settings import RuntimeSettingsHolder
 from app.repositories.message_repository import MessageRepository
 from app.utils.logger import logger
 
@@ -19,10 +20,10 @@ class HistoryContextBuilder:
     def __init__(
         self,
         message_repository: MessageRepository,
-        max_history_messages: int,
+        settings: RuntimeSettingsHolder,
     ) -> None:
         self.message_repository = message_repository
-        self.max_history_messages = max_history_messages
+        self.settings = settings
 
     async def build(
         self,
@@ -42,17 +43,19 @@ class HistoryContextBuilder:
             message_id=after_message_id,
             before_message_id=before_message_id,
         )
+        
+        max_history_messages = self.settings.current.max_context_history_messages
 
-        if len(rows) > self.max_history_messages:
+        if len(rows) > max_history_messages:
             logger.warning(
                 "Unsummarized backlog exceeds history window | "
                 "conversation=%s backlog=%s window=%s",
                 conversation_id,
                 len(rows),
-                self.max_history_messages,
+                max_history_messages,
             )
 
-            rows = list(rows)[-self.max_history_messages :]
+            rows = list(rows)[-max_history_messages:]
 
         history_messages: list[BaseMessage] = []
 

@@ -20,6 +20,7 @@ from app.agent.nodes.prepare_context_node import (
     create_prepare_context_node,
 )
 from app.agent.state import AgentState
+from app.config.runtime_settings import RuntimeSettingsHolder
 from app.utils.logger import logger
 
 
@@ -41,23 +42,23 @@ class AgentGraph:
     def __init__(
         self,
         llm: BaseChatModel,
-        system_prompt: str,
+        settings: RuntimeSettingsHolder,
+        provider: str,
         tools: Sequence[BaseTool],
         checkpointer: AsyncPostgresSaver,
         conversation_context_builder: ConversationContextBuilder,
-        max_checkpoint_messages: int,
     ) -> None:
         self.llm = llm
-        self.system_prompt = system_prompt
+        self.settings = settings
+        self.provider = provider
         self.tools = tools
         self.checkpointer = checkpointer
         self.conversation_context_builder = conversation_context_builder
-        self.max_checkpoint_messages = max_checkpoint_messages
 
         logger.debug(
-            "Initializing AgentGraph | tools=%s max_checkpoint_messages=%s",
+            "Initializing AgentGraph | tools=%s provider=%s",
             [tool.name for tool in tools],
-            max_checkpoint_messages,
+            provider,
         )
 
         self.graph = self._build_graph()
@@ -73,14 +74,15 @@ class AgentGraph:
 
         agent_node = create_agent_node(
             llm=self.llm,
-            system_prompt=self.system_prompt,
+            settings=self.settings,
+            provider=self.provider,
             tools=self.tools,
         )
 
         tool_node = ToolNode(self.tools)
 
         compact_checkpoint_state_node = create_compact_checkpoint_state_node(
-            max_checkpoint_messages=self.max_checkpoint_messages,
+            settings=self.settings,
         )
 
         logger.debug("Adding graph node | node=prepare_context")
