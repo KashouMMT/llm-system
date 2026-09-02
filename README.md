@@ -20,7 +20,7 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai`. Selects which factory in `app/llm/` builds the client |
-| `MODEL_NAME` | `qwen3.5:9b` | Model identifier for the selected provider (e.g. an Ollama tag, or `deepseek/deepseek-chat-v3.1:free` on OpenRouter) |
+| `MODEL_NAME` | `qwen3.5:4b` | Model identifier for the selected provider (e.g. an Ollama tag, or `deepseek/deepseek-chat-v3.1:free` on OpenRouter) |
 | `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/`; falls back to a built-in prompt if the file is missing or empty |
 | `TEMPERATURE` | `0.3` | Sampling temperature. Deliberately low — this assistant must not invent facts it was not given |
 | `MAX_TOKENS` | `2048` | Max tokens generated per response (`num_predict` on Ollama, `max_tokens` on OpenAI) |
@@ -46,6 +46,18 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 | `SSE_QUEUE_MAXSIZE` | `256` | Per-subscriber event queue depth; a subscriber that falls this far behind is dropped rather than buffered without bound |
 
 The summarization prompts are not environment-configurable: `app/prompts/default_summary_chunk_prompt.txt` and `app/prompts/default_summary_merge_prompt.txt` are read at import time and must exist and be non-empty.
+
+### Runtime settings
+
+Most of the table above is a *default*, not a fixed value — 12 of those variables can be changed while the process is running, without a restart, and the change persists across restarts too. `DB_*`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_PROVIDER` and the other connection/provider settings cannot: they are bound into objects (a connection pool, an LLM client) that are only built once, at startup.
+
+| Tier | Behaviour | Examples |
+|---|---|---|
+| Runtime-editable, persisted | Change takes effect on the next turn; survives a restart (stored in `app_settings`) | `temperature`, `top_p`, `top_k`, `max_tokens`, `context_window`, `system_prompt_name`, `max_checkpoint_messages`, `max_context_history_messages`, `max_unsummarized_messages`, `summary_token_threshold`, `sse_heartbeat_seconds`, `sse_queue_maxsize` |
+| Runtime-editable, session-only | Change takes effect immediately; reverts to the environment on restart | `log_level` |
+| Startup-only | Requires a restart | everything else in the table above |
+
+In CLI mode, `/settings` lists every runtime-editable value and whether it is persisted, `/set <key> <value>` changes one, and `/reset <key>` restores its environment default. `Application.apply_settings()` is the single entry point both the CLI and (once built) an HTTP endpoint will call — validation, application, and persistence happen in one place regardless of caller.
 
 ### Frontend
 
@@ -77,7 +89,7 @@ python -m app.main --api         # FastAPI server on :8000
 python -m app.main --log-level DEBUG
 ```
 
-CLI commands: `/exit` to quit, `/history` to print the current conversation's transcript.
+CLI commands: `/exit` to quit, `/history` to print the current conversation's transcript, `/settings` to view runtime settings, `/set <key> <value>` to change one, `/reset <key>` to restore its environment default.
 
 ```bash
 cd ui && npm run dev             # Vite dev server on :5173
@@ -87,11 +99,13 @@ The UI requires the API to be running (`python -m app.main --api`).
 
 ## Architecture
 
-**Composition root.** [app/runtime/application.py](app/runtime/application.py) (`Application`) is an async context manager that owns the lifecycle of every shared resource: it initializes the database and applies migrations, opens the async PostgreSQL connection pool, sweeps orphaned in-flight messages left by a previous crash, loads the system prompt, builds the LLM client, opens the LangGraph PostgreSQL checkpointer, and wires the context builders, `AgentGraph`, `EventBus`, `ConversationLock`, `SummarizationService`, and `ChatService`. `app/main.py` opens one `Application` and hands it to either the CLI loop or the FastAPI app, serving the API on the same event loop the pool was opened on.
+**Composition root.** [app/runtime/application.py](app/runtime/application.py) (`Application`) is an async context manager that owns the lifecycle of every shared resource. `RuntimeSettingsHolder` is built first, from the environment, before the pool even opens — `EventBus` needs it at construction time. Once the pool is open, persisted overrides are layered on top of the environment defaults. `initialize()` then applies migrations, sweeps orphaned in-flight messages left by a previous crash, loads the system prompt, builds the LLM client, opens the LangGraph PostgreSQL checkpointer, and wires the context builders, `AgentGraph`, `EventBus`, `ConversationLock`, `SummarizationService`, and `ChatService`. `app/main.py` opens one `Application` and hands it to either the CLI loop or the FastAPI app, serving the API on the same event loop the pool was opened on, and catches `KeyboardInterrupt` at the top level so a second Ctrl+C during shutdown prints a message instead of a stack trace.
 
 **Request flow — generation is decoupled from the HTTP request.** `POST /conversations/{id}/messages` persists the user message and an empty, `status='streaming'` assistant message immediately (`ChatService.begin_turn`), then returns `202` without waiting for a response. Generation runs as a background task (`ChatService.generate`) that streams tokens from `AgentGraph`, buffers them in memory, and publishes each one to an in-process `EventBus`. Any number of clients — including the sender — read the same stream via `GET /events`, an SSE endpoint; there is exactly one token path, so multi-tab consistency falls out of the design rather than being handled as a special case. The response is written to PostgreSQL exactly once, when generation reaches a terminal state (`complete` / `cancelled` / `failed`), which is also what makes a client disconnect harmless — nothing about the turn depends on an HTTP connection staying open. A per-conversation `ConversationLock` (in-process) rejects a second concurrent send on the same conversation with `409`, since the LangGraph checkpointer is keyed by conversation and two concurrent runs would corrupt it. Summarization is scheduled afterward as a background `asyncio.Task` and never blocks or can fail the chat response.
 
 **Shutdown.** An SSE response never ends on its own — the client stays connected and the generator keeps emitting heartbeats — so uvicorn is given `timeout_graceful_shutdown=5` to cut whatever is still open. `Application.shutdown()` then drains detached work in two passes before closing the connection pool, waiting briefly and then cancelling: first the generation tasks, then `ChatService`'s own tasks. The order matters, because cancelling a generation is what *creates* its finalization task, and that task still needs the pool to persist the partial answer. Whatever does not finish in time is caught by `sweep_streaming()` on the next startup.
+
+**Runtime settings** (`app/config/runtime_settings.py`, `app/repositories/settings_repository.py`, `app/llm/sampling.py`). `RuntimeSettings` is a frozen dataclass; changing a value means swapping the whole instance (`RuntimeSettingsHolder.apply()`), never mutating a field, so a reader that has already taken its snapshot for the current turn cannot see a half-applied change. Consumers fall into two groups: some (`HistoryContextBuilder`, `EventBus`) hold the holder and read `.current` per use; the agent node and the checkpoint-compaction node instead take one snapshot at the top of each turn, since their settings are baked into objects built for that turn only (the model, the checkpoint limit). `FIELD_PARSERS` doubles as the allowlist — a key with no parser (`db_password`, `llm_api_key`, …) cannot be set through `apply()` by any caller, so there is no second list to keep in sync with the database or an eventual HTTP endpoint. Persisted overrides live in the sparse `app_settings` table — one row per key that has actually been changed, so an unset key still falls through to the environment and resetting a setting is a `DELETE` rather than writing the default back; `log_level` is deliberately excluded from persistence, since it is the one lever that must still work from the environment or `--log-level` when startup itself is failing. `sampling.py` applies temperature/top_p/top_k/max_tokens/context_window to the LLM client via `.bind()` (never by rebuilding it, so a settings change cannot swap the client out from under a generation already streaming) — Ollama and OpenAI take different shapes: `ChatOllama` only reads these from its own constructor fields when assembling the request's `options` object, so they must be bound as a single nested `options={...}` dict rather than as flat kwargs, while `ChatOpenAI` accepts them as top-level kwargs directly.
 
 **LangGraph agent** ([app/agent/graph.py](app/agent/graph.py)):
 
@@ -116,7 +130,7 @@ State is checkpointed per conversation (`thread_id` = conversation UUID) via `As
 **Summarization** (`app/services/summarization_service.py`): after each turn, `ChatService` schedules `SummarizationService.trigger_if_needed`, which estimates tokens (`len(text) // 4`) over messages not yet summarized and, if over `SUMMARY_TOKEN_THRESHOLD` (or `MAX_UNSUMMARIZED_MESSAGES` is exceeded), generates a chunk summary via the LLM, merges it into the existing summary via a second LLM call, and advances the watermark — all through `SummaryRepository` (chunk insert + state update commit in one transaction). The updated summary is never written into LangGraph checkpoint state; it is read back from PostgreSQL by `SummaryContextBuilder` on the next turn.
 
 **Persistence** — two separate stores:
-- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `conversations`, `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
+- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `conversations`, `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log), `app_settings` (sparse key/value store of persisted runtime-setting overrides). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
 - LangGraph checkpoint state: managed separately by `AsyncPostgresSaver` (`app/agent/checkpointer.py`) for graph replay/resumption. It opens its own connection independent of the application pool.
 
 **Realtime** (`app/runtime/event_bus.py`, `app/runtime/conversation_lock.py`):
@@ -138,6 +152,8 @@ The selected conversation lives in the URL (`/c/:conversationId`), so a refresh,
 Assistant messages are rendered through `Markdown.tsx`; user messages are not, so a user typing literal `**` sees it unchanged. A ```` ```mermaid ```` fence is diverted to `MermaidDiagram.tsx` and drawn as SVG. Because content streams in token by token, a fence is frequently incomplete mid-answer — the diagram keeps its last successful render and shows a pending note rather than flickering, and unclosed Markdown resolves itself once the closing marker arrives.
 
 Recovery is deliberately simple. Deltas are not replayable, so the stream re-reads the transcript on every connect and reconnect, and a client that joins mid-generation renders partial text until the terminal event delivers the full content. That is the entire answer to a dropped connection — no `Last-Event-ID`, no server-side replay buffer.
+
+`App.tsx` also routes `/setting` to `SettingPage.tsx`, currently an empty placeholder reserved for a UI over the runtime settings described above.
 
 **LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona named by `SYSTEM_PROMPT` from `app/prompts/*.txt`, falling back to a built-in prompt if the file is missing or empty — so a bad value degrades to a usable assistant rather than failing startup. Every persona, including that fallback, is composed with a shared `RESPONSE_FORMAT` block describing what the frontend can render (Markdown, mermaid, no LaTeX or raw HTML). That contract belongs to the interface rather than to any one persona, so it lives in code instead of being duplicated across prompt files. The composed prompt is measured against `SYSTEM_PROMPT_TOKEN_BUDGET` and logs a warning when it exceeds it — a warning rather than an error, because a long prompt still works and this module's contract is to degrade rather than block startup.
 
@@ -174,7 +190,8 @@ llm-system/
 │   │   ├── graph.py                              # Defines and compiles the LangGraph (streams LLM tokens)
 │   │   └── state.py                              # Defines LangGraph state (AgentState)
 │   ├── config/
-│   │   └── settings.py                           # Load env values, other constant variables
+│   │   ├── settings.py                           # Load env values, other constant variables
+│   │   └── runtime_settings.py                   # RuntimeSettings (frozen dataclass) + RuntimeSettingsHolder
 │   ├── database/
 │   │   ├── connection.py                         # Sync connection (schema setup only) + the shared async pool
 │   │   ├── init_db.py                            # Create database/tables if missing, then run migrations
@@ -183,6 +200,7 @@ llm-system/
 │   │   ├── llm_factory.py                        # Provider registry; returns a LangChain BaseChatModel
 │   │   ├── ollama_llm.py                         # Builds ChatOllama (local models)
 │   │   ├── openai_llm.py                         # Builds ChatOpenAI; custom base_url covers OpenRouter/Groq/DeepSeek
+│   │   ├── sampling.py                           # Binds runtime sampling params onto the LLM client per provider
 │   │   └── system_prompt.py                      # Loads the persona named by SYSTEM_PROMPT, with fallback
 │   ├── logs/                                     # Daily log files (gitignored)
 │   ├── prompts/                                  # System prompts (persona files) + summarization prompts
@@ -193,6 +211,7 @@ llm-system/
 │   ├── repositories/                             # Functions for executing SQL against tables.
 │   │   ├── conversation_repository.py            # Conversations (One)->(Many) Messages
 │   │   ├── message_repository.py                 # Persistent transcript data. Source of truth for conversation history.
+│   │   ├── settings_repository.py                # Persisted overrides for runtime-adjustable settings (app_settings)
 │   │   └── summary_repository.py                 # Durable summary state + summary chunk history per conversation
 │   ├── runtime/
 │   │   ├── application.py                        # Initializes entire app. Composition root and lifecycle owner.
@@ -223,7 +242,7 @@ llm-system/
 │       │   └── useTheme.ts                       # Light/dark theme
 │       ├── layout/
 │       │   ├── ChatPage.tsx                      # Reads the route param and wires the four hooks together
-│       │   └── SettingPage.tsx
+│       │   └── SettingPage.tsx                   # Placeholder — reserved for a UI over runtime settings
 │       ├── components/
 │       │   ├── Chat.tsx                          # Renders persisted messages merged with live drafts
 │       │   ├── Markdown.tsx                      # Renders assistant text as Markdown; routes mermaid fences

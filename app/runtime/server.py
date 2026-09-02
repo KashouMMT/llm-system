@@ -1,5 +1,7 @@
 import json
 from collections.abc import AsyncIterator
+from dataclasses import fields
+from typing import Any
 from uuid import UUID
 
 import psycopg
@@ -8,6 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.config.runtime_settings import (
+    FIELD_PARSERS,
+    PERSISTED_FIELDS,
+    RuntimeSettings,
+)
 from app.config.settings import MAX_USER_INPUT_CHARS
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
@@ -39,6 +46,26 @@ def format_sse(event: Event) -> str:
     lines.append(f"data: {json.dumps(event.to_wire())}")
 
     return "\n".join(lines) + "\n\n"
+
+def _settings_payload(current: RuntimeSettings) -> dict[str, dict[str, Any]]:
+    """
+    Every runtime-adjustable field: its live value, whether it survives a
+    restart, and what the environment would fall back to.
+
+    Mirrors print_settings() in app/runtime/cli.py, so the CLI and this
+    endpoint describe the same state the same way.
+    """
+    defaults = RuntimeSettings.from_env()
+    
+    return {
+        field.name: {
+            "value": getattr(current, field.name),
+            "persisted": field.name in PERSISTED_FIELDS,
+            "default": getattr(defaults, field.name),
+        }
+        for field in fields(current)
+    }
+
 
 
 def create_api(application: Application) -> FastAPI:
@@ -243,6 +270,57 @@ def create_api(application: Application) -> FastAPI:
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
+        
+    @app.get("/settings")
+    async def get_settings():
+        return _settings_payload(application.runtime_settings.current)
+    
+    # TODO: gate behind auth once the login system exists. An
+    # unauthenticated PATCH here can rewrite system_prompt_name, which is
+    # a persistent, silent change to what the assistant does for every
+    # user — not bad data in a row, but a change in behavior. Left open
+    # only because this is a solo local-network dev environment.
+    @app.patch("/settings")
+    async def update_settings(changes: dict[str, Any]):
+        try:
+            updated = await application.apply_settings(changes)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except Exception as error:
+            # Validation already passed by this point, so this is a
+            # storage failure (e.g. the DB connection dropped mid-write)
+            # rather than a bad request — 500, not 422.
+            logger.exception("Failed to apply settings | changes=%s", changes)
+
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to apply settings.",
+            ) from error
+
+        return _settings_payload(updated)
+
+    # TODO: gate behind auth once the login system exists. Same reasoning
+    # as PATCH /settings above.
+    @app.delete("/settings/{key}")
+    async def delete_setting(key: str):
+        if key not in FIELD_PARSERS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Unknown or non-editable setting: {key}",
+            )
+        
+        default = getattr(RuntimeSettings.from_env(), key)
+        
+        try:
+            updated = await application.apply_settings({key: default})
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        
+        if key in PERSISTED_FIELDS:
+            await application.settings_repository.delete(key)
+        
+        return _settings_payload(updated)
+        
 
     return app
 

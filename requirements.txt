@@ -10,3 +10,4 @@ fastapi
 uvicorn
 psycopg[binary]
 psycopg-pool
+argon2-cffi
