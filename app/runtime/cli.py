@@ -1,12 +1,7 @@
 import asyncio
-from dataclasses import fields
 from uuid import UUID, uuid4
 
-from app.config.runtime_settings import (
-    FIELD_PARSERS,
-    PERSISTED_FIELDS,
-    RuntimeSettings,
-)
+from app.config.runtime_settings import PERSISTED_FIELDS
 from app.runtime.application import Application
 from app.runtime.event_bus import EVENT_MESSAGE_DELTA
 from app.services.chat_service import TERMINAL_EVENTS
@@ -115,21 +110,18 @@ def print_settings(application: Application) -> None:
     The scope column is the point of this view: a persisted setting
     survives a restart, a session one does not.
     """
-    settings = application.runtime_settings.current
-    defaults = RuntimeSettings.from_env()
+    view = application.describe_settings()
 
     print("\n=== Runtime Settings ===")
 
-    for field in fields(settings):
-        name = field.name
-        value = getattr(settings, name)
-        scope = "persisted" if name in PERSISTED_FIELDS else "session"
+    for name, info in view.items():
+        scope = "persisted" if info["persisted"] else "session"
 
         # Marked so it is obvious which values are no longer the ones the
         # environment supplied.
-        changed = " *" if value != getattr(defaults, name) else ""
+        changed = " *" if info["value"] != info["default"] else ""
 
-        print(f"  {name:<30} {value!r:<12} [{scope}]{changed}")
+        print(f"  {name:<30} {info['value']!r:<12} [{scope}]{changed}")
 
     print()
     print("  * differs from the environment default")
@@ -161,30 +153,15 @@ async def set_setting(application: Application, argument: str) -> None:
 
 
 async def reset_setting(application: Application, key: str) -> None:
-    """
-    Restore a setting to its environment default and drop any stored row.
-
-    Both halves matter: without the delete the old override would come
-    back on the next start, because the database layers over the
-    environment.
-    """
-    if key not in FIELD_PARSERS:
-        print(f"[rejected] Unknown or non-editable setting: {key}")
-        return
-
-    default = getattr(RuntimeSettings.from_env(), key)
-
+    """Restore a setting to its environment default and drop any stored row."""
     try:
-        await application.apply_settings({key: default})
+        updated = await application.reset_setting(key)
 
     except ValueError as error:
         print(f"[rejected] {error}")
         return
 
-    if key in PERSISTED_FIELDS:
-        await application.settings_repository.delete(key)
-
-    print(f"{key} = {default!r} (restored from environment)")
+    print(f"{key} = {getattr(updated, key)!r} (restored from environment)")
 
 
 async def run_cli(

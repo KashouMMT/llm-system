@@ -12,27 +12,31 @@ from app.utils.logger import logger
 @dataclass(frozen=True)
 class Message:
     """
-    A transcript message as the model context needs it.
+    A transcript message.
 
     Named fields rather than a tuple: adding a column to a SELECT used to
     break every caller that unpacked the row positionally.
+
+    `status` lets a display caller tell an unfinished answer from a complete
+    one; context and summarization callers select through HISTORY_FILTER and
+    can ignore it.
     """
 
     id: int
     role: str
     content: str
     created_at: datetime
+    status: str
 
 
 @dataclass(frozen=True)
-class MessageDetail:
-    """A transcript message as clients need it, including its status."""
+class Turn:
+    """The two rows created when a turn is opened, before generation runs."""
 
-    id: int
-    role: str
-    content: str
-    created_at: datetime
-    status: str
+    user_message_id: int
+    user_created_at: datetime
+    assistant_message_id: int
+    assistant_created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -53,10 +57,109 @@ class MessageRepository:
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
 
+    async def create_turn(
+        self,
+        conversation_id: UUID,
+        user_content: str,
+        client_message_id: UUID,
+    ) -> Turn:
+        """
+        Open one conversation turn atomically, before generation starts.
+
+        The user message is persisted immediately and unconditionally: it was
+        typed by a person, and losing it because a connection dropped is the
+        worst available outcome. The assistant row is created empty and
+        'streaming' so every client can see that an answer is on its way, and
+        so a crash leaves a visible row to sweep rather than silence.
+
+        The parent conversation's updated_at is bumped in the same
+        transaction — every statement shares one connection block, which the
+        pool commits on a clean exit and rolls back if it raises.
+
+        Raises psycopg.errors.UniqueViolation if client_message_id was already
+        used — that is the idempotency guard, enforced by the database because
+        retries race.
+        """
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                INSERT INTO messages (
+                    conversation_id,
+                    role,
+                    content,
+                    status,
+                    client_message_id
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (
+                    conversation_id,
+                    "user",
+                    user_content,
+                    "complete",
+                    client_message_id,
+                ),
+            )
+
+            user_message_id, user_created_at = await cur.fetchone()
+
+            await cur.execute(
+                """
+                INSERT INTO messages (
+                    conversation_id,
+                    role,
+                    content,
+                    status,
+                    reply_to_message_id
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id, created_at
+                """,
+                (
+                    conversation_id,
+                    "assistant",
+                    "",
+                    "streaming",
+                    user_message_id,
+                ),
+            )
+
+            assistant_message_id, assistant_created_at = await cur.fetchone()
+
+            await cur.execute(
+                """
+                UPDATE conversations
+                SET updated_at = NOW()
+                WHERE id = %s
+                """,
+                (conversation_id,),
+            )
+
+            if cur.rowcount != 1:
+                raise ValueError(f"Conversation not found: {conversation_id}")
+
+        logger.debug(
+            "Turn opened | conversation=%s user_message=%s assistant_message=%s",
+            conversation_id,
+            user_message_id,
+            assistant_message_id,
+        )
+
+        return Turn(
+            user_message_id=user_message_id,
+            user_created_at=user_created_at,
+            assistant_message_id=assistant_message_id,
+            assistant_created_at=assistant_created_at,
+        )
+
     async def get_messages(
         self,
         conversation_id: UUID,
-    ) -> Sequence[MessageDetail]:
+    ) -> Sequence[Message]:
         """
         Full transcript for display, including in-flight and failed rows.
 
@@ -65,7 +168,7 @@ class MessageRepository:
         """
         async with (
             self._pool.connection() as conn,
-            conn.cursor(row_factory=class_row(MessageDetail)) as cur,
+            conn.cursor(row_factory=class_row(Message)) as cur,
         ):
             await cur.execute(
                 """
@@ -115,7 +218,8 @@ class MessageRepository:
                     id,
                     role,
                     content,
-                    created_at
+                    created_at,
+                    status
                 FROM messages
                 WHERE conversation_id = %s
                   AND id > %s
@@ -178,7 +282,8 @@ class MessageRepository:
                     id,
                     role,
                     content,
-                    created_at
+                    created_at,
+                    status
                 FROM messages
                 WHERE conversation_id = %s
                   AND {HISTORY_FILTER}

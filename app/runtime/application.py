@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Coroutine
 from contextlib import AsyncExitStack
+from dataclasses import fields
 from types import TracebackType
 from typing import Any
 
@@ -18,6 +19,7 @@ from app.agent.tools import TOOLS
 from app.authentication.auth_service import AuthService
 from app.authentication.seed import seed_root
 from app.config.runtime_settings import (
+    FIELD_PARSERS,
     PERSISTED_FIELDS,
     RuntimeSettings,
     RuntimeSettingsHolder,
@@ -278,6 +280,7 @@ class Application:
                 summarization_service=self.summarization_service,
                 event_bus=self.event_bus,
                 conversation_lock=self.conversation_lock,
+                spawn=self.spawn,
             )
             logger.info("ChatService initialized")
 
@@ -346,6 +349,45 @@ class Application:
 
         return updated
 
+    async def reset_setting(self, key: str) -> RuntimeSettings:
+        """
+        Restore one setting to its environment default and drop any persisted
+        override.
+
+        Both halves matter: without the delete, the old override would come
+        back on the next start, because the database layers over the
+        environment. Raises ValueError for an unknown or non-editable key.
+        """
+        if key not in FIELD_PARSERS:
+            raise ValueError(f"Unknown or non-editable setting: {key}")
+
+        default = getattr(RuntimeSettings.from_env(), key)
+        updated = await self.apply_settings({key: default})
+
+        if key in PERSISTED_FIELDS:
+            await self.settings_repository.delete(key)
+
+        return updated
+
+    def describe_settings(self) -> dict[str, dict[str, Any]]:
+        """
+        Every runtime-adjustable field: its live value, whether it survives a
+        restart, and the environment default it would fall back to.
+
+        One description, used by both the CLI view and GET /settings.
+        """
+        current = self.runtime_settings.current
+        defaults = RuntimeSettings.from_env()
+
+        return {
+            field.name: {
+                "value": getattr(current, field.name),
+                "persisted": field.name in PERSISTED_FIELDS,
+                "default": getattr(defaults, field.name),
+            }
+            for field in fields(current)
+        }
+
     def spawn(self, coroutine: Coroutine[Any, Any, None]) -> asyncio.Task:
         """
         Run a coroutine detached from the request that started it.
@@ -370,18 +412,13 @@ class Application:
         Shut down shared resources in reverse order of acquisition.
         """
         logger.info("Application shutdown started")
-        # Before the pool closes. Detached work still needs a connection
-        # to persist what it produced, and AsyncExitStack.__aexit__ below
-        # is what closes it.
+        # Detached work still needs a connection to persist what it produced,
+        # and AsyncExitStack.__aexit__ below is what closes the pool. Two
+        # passes over the one registry: cancelling a generation runs its
+        # finally block, which spawns the finalization task into this same
+        # set, so a second drain is needed to catch it.
         await _drain_tasks(self._background_tasks, "generation")
-
-        # Second, and after the first on purpose: draining a generation
-        # is what *creates* its finalize task. See the note below.
-        if self.chat_service is not None:
-            await _drain_tasks(
-                self.chat_service.pending_tasks(),
-                "finalization",
-            )
+        await _drain_tasks(self._background_tasks, "finalization")
 
         resources = self._resources
         self._resources = None

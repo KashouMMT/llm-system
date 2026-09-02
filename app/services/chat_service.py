@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import time
 import uuid
+from collections.abc import Callable, Coroutine
+from typing import Any
 from uuid import UUID
 
 from langchain_core.messages import HumanMessage
@@ -80,6 +82,7 @@ class ChatService:
         summarization_service: SummarizationService,
         event_bus: EventBus,
         conversation_lock: ConversationLock,
+        spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task],
     ) -> None:
         self.agent_graph = agent_graph
         self.conversation_repository = conversation_repository
@@ -88,8 +91,13 @@ class ChatService:
         self.event_bus = event_bus
         self.conversation_lock = conversation_lock
 
+        # Detached work (finalization, summarization) is registered with the
+        # application-wide spawner, so shutdown has a single registry to drain.
+        self._spawn = spawn
+
+        # Dedup guard, not a task registry: skip a second summarization run
+        # for a conversation already being summarized.
         self._summarizing: set[UUID] = set()
-        self._background_tasks: set[asyncio.Task] = set()
 
         logger.info("ChatService initialized")
 
@@ -129,7 +137,7 @@ class ChatService:
         if status == "held" and not is_admin(user):
             raise ConversationHeldError(conversation_id)
 
-        turn = await self.conversation_repository.create_turn(
+        turn = await self.message_repository.create_turn(
             conversation_id=conversation_id,
             user_content=user_input,
             client_message_id=client_message_id,
@@ -292,7 +300,7 @@ class ChatService:
             # Shielded, and awaited only if we are not already being
             # cancelled: inside a finally during cancellation a bare await is
             # cancelled immediately, and the flush would silently never run.
-            finalize = asyncio.create_task(
+            finalize = self._spawn(
                 self._finalize(
                     conversation_id=conversation_id,
                     assistant_message_id=assistant_message_id,
@@ -300,9 +308,6 @@ class ChatService:
                     status=status,
                 )
             )
-
-            self._background_tasks.add(finalize)
-            finalize.add_done_callback(self._background_tasks.discard)
 
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.shield(finalize)
@@ -375,20 +380,6 @@ class ChatService:
         if status == "complete":
             self._schedule_summarization(conversation_id)
 
-    def pending_tasks(self) -> set[asyncio.Task]:
-        """
-        Detached work this service still has in flight: finalization
-        writes and summarization runs.
-
-        Exposed so shutdown can wait for them before the connection pool
-        closes. A finalize task that loses its pool leaves an assistant
-        message stuck in 'streaming' until the next startup sweeps it.
-
-        A copy, because the set is mutated by done callbacks while a
-        caller iterates it.
-        """
-        return set(self._background_tasks)
-
     def _schedule_summarization(self, conversation_id: UUID) -> None:
         """
         Kick off summarization in the background, if not already running
@@ -402,12 +393,7 @@ class ChatService:
 
         self._summarizing.add(conversation_id)
 
-        task = asyncio.create_task(
-            self._run_summarization(conversation_id),
-        )
-
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self._spawn(self._run_summarization(conversation_id))
 
     async def _run_summarization(self, conversation_id: UUID) -> None:
         try:

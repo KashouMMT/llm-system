@@ -1,6 +1,5 @@
 import json
 from collections.abc import AsyncIterator
-from dataclasses import fields
 from datetime import datetime, timezone
 from typing import Annotated, Any
 from uuid import UUID
@@ -14,11 +13,6 @@ from pydantic import BaseModel, Field
 from app.authentication.authorization import is_admin
 from app.authentication.dependencies import make_current_user, make_require_admin
 from app.authentication.models import User
-from app.config.runtime_settings import (
-    FIELD_PARSERS,
-    PERSISTED_FIELDS,
-    RuntimeSettings,
-)
 from app.config.settings import (
     COOKIE_SAMESITE,
     COOKIE_SECURE,
@@ -64,25 +58,6 @@ def format_sse(event: Event) -> str:
     lines.append(f"data: {json.dumps(event.to_wire())}")
 
     return "\n".join(lines) + "\n\n"
-
-
-def _settings_payload(current: RuntimeSettings) -> dict[str, dict[str, Any]]:
-    """
-    Every runtime-adjustable field: its live value, whether it survives a
-    restart, and what the environment would fall back to.
-
-    Mirrors print_settings() in app/runtime/cli.py.
-    """
-    defaults = RuntimeSettings.from_env()
-
-    return {
-        field.name: {
-            "value": getattr(current, field.name),
-            "persisted": field.name in PERSISTED_FIELDS,
-            "default": getattr(defaults, field.name),
-        }
-        for field in fields(current)
-    }
 
 
 def create_api(application: Application) -> FastAPI:
@@ -356,12 +331,12 @@ def create_api(application: Application) -> FastAPI:
 
     @app.get("/settings")
     async def get_settings(user: Annotated[User, Depends(current_user)]):
-        return _settings_payload(application.runtime_settings.current)
+        return application.describe_settings()
 
     @app.patch("/settings", dependencies=[Depends(require_admin)])
     async def update_settings(changes: dict[str, Any]):
         try:
-            updated = await application.apply_settings(changes)
+            await application.apply_settings(changes)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except Exception as error:
@@ -374,29 +349,16 @@ def create_api(application: Application) -> FastAPI:
                 detail="Failed to apply settings.",
             ) from error
 
-        return _settings_payload(updated)
+        return application.describe_settings()
 
     @app.delete("/settings/{key}", dependencies=[Depends(require_admin)])
     async def delete_setting(key: str):
-        if key not in FIELD_PARSERS:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Unknown or non-editable setting: {key}",
-            )
-
-        default = getattr(RuntimeSettings.from_env(), key)
-
         try:
-            updated = await application.apply_settings({key: default})
+            await application.reset_setting(key)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
-        if key in PERSISTED_FIELDS:
-            await application.settings_repository.delete(key)
-
-        return _settings_payload(updated)
-
-    return app
+        return application.describe_settings()
 
 
 def _existing_turn_response(
