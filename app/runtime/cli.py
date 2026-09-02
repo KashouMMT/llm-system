@@ -56,7 +56,9 @@ async def select_conversation(
 
         if choice == "n":
             conversation_id = (
-                await application.conversation_repository.create_conversation()
+                await application.conversation_repository.create_conversation(
+                    user_id=user_id,
+                )
             )
 
             print("\nNew conversation created.")

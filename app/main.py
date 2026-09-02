@@ -50,7 +50,7 @@ async def main():
                 force=True,
             )
             return
-        
+
         if args.api:
             api = create_api(application)
 
