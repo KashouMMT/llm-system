@@ -7,6 +7,8 @@ from uuid import UUID
 from langchain_core.messages import HumanMessage
 
 from app.agent.graph import AgentGraph
+from app.authentication.authorization import is_admin
+from app.authentication.models import User
 from app.config.settings import MAX_USER_INPUT_CHARS
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
@@ -30,6 +32,20 @@ TERMINAL_EVENTS = {
     "cancelled": EVENT_MESSAGE_CANCELLED,
     "failed": EVENT_MESSAGE_FAILED,
 }
+
+
+class ConversationHeldError(Exception):
+    """
+    A non-admin tried to send into a conversation an admin has put on hold.
+
+    Inert until something sets conversations.status = 'held'. The check lives
+    here so the future admin-override feature is a small addition rather than
+    a change to the send path.
+    """
+
+    def __init__(self, conversation_id: UUID) -> None:
+        super().__init__(f"Conversation is on hold: {conversation_id}")
+        self.conversation_id = conversation_id
 
 
 class TurnIds:
@@ -95,17 +111,23 @@ class ChatService:
     async def begin_turn(
         self,
         conversation_id: UUID,
+        user: User,
         user_input: str,
         client_message_id: UUID,
     ) -> TurnIds:
         """
         Persist both sides of a turn and announce them.
 
-        The caller must already hold the conversation lock. Returns as soon
-        as the rows exist, so the HTTP caller can answer with real ids and
-        every client can subscribe before the first token arrives.
+        The caller must already hold the conversation lock.
         """
         user_input = self.validate_user_input(user_input)
+
+        # Re-read, not cached from the route, so a hold applied mid-session
+        # takes effect on the very next send. Admins are never held.
+        status = await self.conversation_repository.get_status(conversation_id)
+
+        if status == "held" and not is_admin(user):
+            raise ConversationHeldError(conversation_id)
 
         turn = await self.conversation_repository.create_turn(
             conversation_id=conversation_id,

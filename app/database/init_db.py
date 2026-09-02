@@ -48,16 +48,94 @@ def create_tables() -> None:
     try:
         with conn.cursor() as cur:
             # ---------------------------------------------------------
+            # Users
+            # ---------------------------------------------------------
+            # username is stored already-lowercased by the repository, so a
+            # plain UNIQUE is enough for case-insensitive identity without
+            # needing the citext extension.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id UUID PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+                    CONSTRAINT users_role_check
+                        CHECK (role IN ('user', 'admin', 'root'))
+                )
+            """
+            )
+
+            # At most one root user, enforced by the database.
+            cur.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_users_single_root
+                ON users (role)
+                WHERE role = 'root'
+            """
+            )
+
+            # ---------------------------------------------------------
+            # Sessions
+            # ---------------------------------------------------------
+            # token_hash is sha256(opaque token). The raw token lives only
+            # in the client's cookie, so a database dump yields no usable
+            # sessions. The UNIQUE constraint is also the per-request
+            # lookup index.
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id BIGSERIAL PRIMARY KEY,
+                    token_hash BYTEA UNIQUE NOT NULL,
+                    user_id UUID NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ NOT NULL,
+
+                    CONSTRAINT fk_sessions_user
+                        FOREIGN KEY (user_id)
+                        REFERENCES users(id)
+                        ON DELETE CASCADE
+                )
+            """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+                ON sessions(user_id)
+            """
+            )
+
+            # ---------------------------------------------------------
             # Conversations
             # ---------------------------------------------------------
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
                     id UUID PRIMARY KEY,
+                    user_id UUID NOT NULL,
                     title TEXT NOT NULL DEFAULT 'New Conversation',
+                    status TEXT NOT NULL DEFAULT 'active',
                     created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW()
+                    updated_at TIMESTAMP DEFAULT NOW(),
+
+                    CONSTRAINT conversations_status_check
+                        CHECK (status IN ('active', 'held', 'closed')),
+                    CONSTRAINT fk_conversations_user
+                        FOREIGN KEY (user_id)
+                        REFERENCES users(id)
+                        ON DELETE CASCADE
                 )
+            """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_conversations_user_id
+                ON conversations(user_id)
             """
             )
 
@@ -72,7 +150,7 @@ def create_tables() -> None:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT NOW(),
-                    
+
                     CONSTRAINT fk_messages_conversation
                         FOREIGN KEY (conversation_id)
                         REFERENCES conversations(id)
@@ -98,7 +176,7 @@ def create_tables() -> None:
                     summary TEXT NOT NULL,
                     last_summarized_message_id BIGINT NOT NULL DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT NOW(),
-                    
+
                     CONSTRAINT fk_summary_state_conversation
                         FOREIGN KEY (conversation_id)
                         REFERENCES conversations(id)
@@ -134,7 +212,7 @@ def create_tables() -> None:
                 ON conversation_summaries(conversation_id)
             """
             )
-            
+
             # ---------------------------------------------------------
             # Runtime-adjustable settings
             # ---------------------------------------------------------

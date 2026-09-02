@@ -4,6 +4,8 @@ import selectors
 
 import uvicorn
 
+from app.authentication.seed import seed_root
+from app.config.settings import AUTH_BOOTSTRAP_PASSWORD, AUTH_BOOTSTRAP_USERNAME
 from app.runtime.application import Application
 from app.runtime.cli import run_cli
 from app.runtime.server import create_api
@@ -14,11 +16,7 @@ async def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument(
-        "--api", 
-        action="store_true", 
-        help="Run FastAPI server"
-    )
+    parser.add_argument("--api", action="store_true", help="Run FastAPI server")
 
     parser.add_argument(
         "--log-level",
@@ -30,6 +28,12 @@ async def main():
         ),
     )
 
+    parser.add_argument(
+        "--seed-admin",
+        action="store_true",
+        help="Reset the root user from AUTH_BOOTSTRAP_* and exit",
+    )
+
     args = parser.parse_args()
 
     # Highest precedence, and the only lever that works when startup
@@ -38,6 +42,15 @@ async def main():
         set_log_level(args.log_level)
 
     async with Application() as application:
+        if args.seed_admin:
+            await seed_root(
+                application.user_repository,
+                username=AUTH_BOOTSTRAP_USERNAME,
+                password=AUTH_BOOTSTRAP_PASSWORD,
+                force=True,
+            )
+            return
+        
         if args.api:
             api = create_api(application)
 
@@ -58,7 +71,7 @@ async def main():
             )
 
             await uvicorn.Server(config).serve()
-            
+
         else:
             await run_cli(application)
 
@@ -67,9 +80,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(
             main(),
-            loop_factory=lambda: asyncio.SelectorEventLoop(
-                selectors.SelectSelector()
-            ),
+            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
         )
 
     except KeyboardInterrupt:

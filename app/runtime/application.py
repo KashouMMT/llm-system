@@ -15,20 +15,29 @@ from app.agent.context.history_context_builder import HistoryContextBuilder
 from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.agent.graph import AgentGraph
 from app.agent.tools import TOOLS
+from app.authentication.auth_service import AuthService
+from app.authentication.seed import seed_root
 from app.config.runtime_settings import (
     PERSISTED_FIELDS,
     RuntimeSettings,
     RuntimeSettingsHolder,
 )
-from app.config.settings import LLM_PROVIDER
+from app.config.settings import (
+    AUTH_BOOTSTRAP_PASSWORD,
+    AUTH_BOOTSTRAP_USERNAME,
+    LLM_PROVIDER,
+    SESSION_TTL_HOURS,
+)
 from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
+from app.repositories.session_repository import SessionRepository
 from app.repositories.settings_repository import SettingsRepository
 from app.repositories.summary_repository import SummaryRepository
+from app.repositories.user_repository import UserRepository
 from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import EventBus
 from app.services.chat_service import ChatService
@@ -126,6 +135,13 @@ class Application:
         self.message_repository = MessageRepository(self.pool)
         self.summary_repository = SummaryRepository(self.pool)
         self.settings_repository = SettingsRepository(self.pool)
+        self.user_repository = UserRepository(self.pool)
+        self.session_repository = SessionRepository(self.pool)
+        self.auth_service = AuthService(
+            self.user_repository,
+            self.session_repository,
+            SESSION_TTL_HOURS,
+        )
 
         # Built from the environment before anything else, because
         # EventBus needs it now and the pool is not open yet. Persisted
@@ -169,6 +185,15 @@ class Application:
             logger.info("Loading persisted settings")
             await self._load_persisted_settings()
             logger.info("Persisted settings loaded")
+
+            logger.info("Ensuring root user exists")
+            await seed_root(
+                self.user_repository,
+                username=AUTH_BOOTSTRAP_USERNAME,
+                password=AUTH_BOOTSTRAP_PASSWORD,
+                force=False,
+            )
+            logger.info("Root user check complete")
 
             # A previous process may have died mid-generation, leaving rows
             # that no task will ever finish.
@@ -285,8 +310,7 @@ class Application:
 
         except ValueError:
             logger.exception(
-                "Persisted settings rejected, using environment defaults | "
-                "keys=%s",
+                "Persisted settings rejected, using environment defaults | keys=%s",
                 sorted(stored),
             )
             return

@@ -15,9 +15,12 @@ from app.utils.logger import logger
 
 async def select_conversation(
     application: Application,
+    user_id: UUID,
 ) -> UUID:
 
-    conversations = await application.conversation_repository.get_conversations()
+    conversations = await application.conversation_repository.get_conversations(
+        user_id,
+    )
 
     print("\n=== Conversations ===")
 
@@ -25,8 +28,8 @@ async def select_conversation(
         print("No existing conversations found.")
         print("Starting a new conversation...")
 
-        conversation_id = (
-            await application.conversation_repository.create_conversation()
+        conversation_id = await application.conversation_repository.create_conversation(
+            user_id=user_id,
         )
 
         print(f"Conversation: {conversation_id}")
@@ -53,8 +56,8 @@ async def select_conversation(
 
         if choice == "n":
             conversation_id = (
-            await application.conversation_repository.create_conversation()
-        )
+                await application.conversation_repository.create_conversation()
+            )
 
             print("\nNew conversation created.")
             print(f"Conversation: {conversation_id}")
@@ -97,8 +100,7 @@ async def print_history(
         marker = "" if message.status == "complete" else f" [{message.status}]"
 
         print(
-            f"[{message.created_at}] "
-            f"{message.role.upper()}{marker}: {message.content}"
+            f"[{message.created_at}] {message.role.upper()}{marker}: {message.content}"
         )
 
     print("====================\n")
@@ -187,7 +189,15 @@ async def run_cli(
     application: Application,
 ) -> None:
 
-    conversation_id = await select_conversation(application)
+    root = await application.user_repository.get_root()
+
+    if root is None:
+        raise RuntimeError(
+            "No root user exists. Set AUTH_BOOTSTRAP_USERNAME / "
+            "AUTH_BOOTSTRAP_PASSWORD and restart, or run with --seed-admin.",
+        )
+
+    conversation_id = await select_conversation(application, root.id)
 
     print()
     print("Chat started")
@@ -250,6 +260,7 @@ async def run_cli(
             ) as subscription:
                 turn = await application.chat_service.begin_turn(
                     conversation_id=conversation_id,
+                    user=root,
                     user_input=user_input,
                     client_message_id=uuid4(),
                 )

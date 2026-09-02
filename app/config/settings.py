@@ -7,6 +7,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def get_bool(
+    environment_name: str,
+    default: bool,
+) -> bool:
+    raw = os.getenv(environment_name)
+
+    if raw is None or not raw.strip():
+        return default
+
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_positive_int(
     environment_name: str,
     default: int,
@@ -67,7 +79,7 @@ def read_prompt(filename: str) -> str:
 
 
 # LLM CONFIGURATION
-LLM_PROVIDER = get_valid_string("LLM_PROVIDER", "ollama") # "ollama" | "openai"
+LLM_PROVIDER = get_valid_string("LLM_PROVIDER", "ollama")  # "ollama" | "openai"
 # Transient 429/5xx from shared free-tier pools are common; the OpenAI SDK
 # retries these internally with backoff.
 LLM_MAX_RETRIES = get_positive_int("LLM_MAX_RETRIES", 3)
@@ -134,12 +146,34 @@ DATABASE_URL = (
     f"{DB_NAME}"
 )
 
-# OTHER CONFIGURATION
-LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
-CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
-
 # REALTIME (SSE)
 SSE_HEARTBEAT_SECONDS = get_positive_float("SSE_HEARTBEAT_SECONDS", 15.0)
 # A subscriber that falls this far behind is dropped rather than buffered
 # without bound. The client reconnects and refetches.
 SSE_QUEUE_MAXSIZE = get_positive_int("SSE_QUEUE_MAXSIZE", 256)
+
+# AUTHENTICATION
+# The root user is seeded from these on startup if no root exists yet.
+# Leaving them empty means nobody can log in until a root is created.
+# Not stripped: leading/trailing spaces are legitimate in a password.
+AUTH_BOOTSTRAP_USERNAME = os.getenv("AUTH_BOOTSTRAP_USERNAME", "").strip()
+AUTH_BOOTSTRAP_PASSWORD = os.getenv("AUTH_BOOTSTRAP_PASSWORD", "")
+
+# Absolute session lifetime. No sliding expiry — that is a write on every
+# request. 720h = 30 days.
+SESSION_TTL_HOURS = get_positive_int("SESSION_TTL_HOURS", 720)
+
+SESSION_COOKIE_NAME = get_valid_string("SESSION_COOKIE_NAME", "session_id")
+
+# Secure cannot be set over plain-HTTP localhost, so it defaults off and is
+# turned on in any real deployment. SameSite=Lax already blocks the
+# cross-site POST cookie, which is most of the CSRF surface.
+COOKIE_SECURE = get_bool("COOKIE_SECURE", False)
+COOKIE_SAMESITE = get_valid_string("COOKIE_SAMESITE", "lax")  # lax | strict | none
+
+if COOKIE_SAMESITE not in ("lax", "strict", "none"):
+    raise ValueError("COOKIE_SAMESITE must be one of: lax, strict, none")
+
+# OTHER CONFIGURATION
+LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
+CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")

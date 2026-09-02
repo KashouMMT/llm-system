@@ -12,7 +12,9 @@ from app.utils.logger import logger
 @dataclass(frozen=True)
 class Conversation:
     id: UUID
+    user_id: UUID
     title: str
+    status: str
     created_at: datetime
     updated_at: datetime
 
@@ -33,6 +35,7 @@ class ConversationRepository:
 
     async def create_conversation(
         self,
+        user_id: UUID,
         title: str = "New Conversation",
     ) -> UUID:
         conversation_id = uuid4()
@@ -43,21 +46,16 @@ class ConversationRepository:
         ):
             await cur.execute(
                 """
-                INSERT INTO conversations (
-                    id,
-                    title
-                )
-                VALUES (%s, %s)
+                INSERT INTO conversations (id, user_id, title)
+                VALUES (%s, %s, %s)
                 """,
-                (
-                    conversation_id,
-                    title,
-                ),
+                (conversation_id, user_id, title),
             )
 
         logger.info(
-            "Conversation created | id=%s",
+            "Conversation created | id=%s user=%s",
             conversation_id,
+            user_id,
         )
 
         return conversation_id
@@ -74,7 +72,9 @@ class ConversationRepository:
                 """
                 SELECT
                     id,
+                    user_id,
                     title,
+                    status,
                     created_at,
                     updated_at
                 FROM conversations
@@ -85,7 +85,10 @@ class ConversationRepository:
 
             return await cur.fetchone()
 
-    async def get_conversations(self) -> Sequence[Conversation]:
+    async def get_conversations(
+        self,
+        user_id: UUID,
+    ) -> Sequence[Conversation]:
         async with (
             self._pool.connection() as conn,
             conn.cursor(row_factory=class_row(Conversation)) as cur,
@@ -94,22 +97,38 @@ class ConversationRepository:
                 """
                 SELECT
                     id,
+                    user_id,
                     title,
+                    status,
                     created_at,
                     updated_at
                 FROM conversations
+                WHERE user_id = %s
                 ORDER BY updated_at DESC
-                """
+                """,
+                (user_id,),
             )
 
             rows = await cur.fetchall()
 
-            logger.debug(
-                "Loaded %s conversations",
-                len(rows),
-            )
+            logger.debug("Loaded %s conversations | user=%s", len(rows), user_id)
 
             return rows
+
+    async def get_status(self, conversation_id: UUID) -> str | None:
+        """Current lifecycle status, or None if the conversation is gone."""
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                "SELECT status FROM conversations WHERE id = %s",
+                (conversation_id,),
+            )
+
+            row = await cur.fetchone()
+
+            return row[0] if row else None
 
     async def exists(
         self,

@@ -1,24 +1,35 @@
 import json
 from collections.abc import AsyncIterator
 from dataclasses import fields
-from typing import Any
+from datetime import datetime, timezone
+from typing import Annotated, Any
 from uuid import UUID
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.authentication.authorization import is_admin
+from app.authentication.dependencies import make_current_user, make_require_admin
+from app.authentication.models import User
 from app.config.runtime_settings import (
     FIELD_PARSERS,
     PERSISTED_FIELDS,
     RuntimeSettings,
 )
-from app.config.settings import MAX_USER_INPUT_CHARS
+from app.config.settings import (
+    COOKIE_SAMESITE,
+    COOKIE_SECURE,
+    MAX_USER_INPUT_CHARS,
+    SESSION_COOKIE_NAME,
+)
+from app.repositories.conversation_repository import Conversation
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
 from app.runtime.event_bus import Event
+from app.services.chat_service import ConversationHeldError
 from app.utils.logger import logger
 
 SSE_HEADERS = {
@@ -36,6 +47,13 @@ class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=MAX_USER_INPUT_CHARS)
 
 
+class LoginRequest(BaseModel):
+    # max_length caps bound the argon2 input; a password longer than this is
+    # not a real password.
+    username: str = Field(min_length=1, max_length=254)
+    password: str = Field(min_length=1, max_length=1024)
+
+
 def format_sse(event: Event) -> str:
     lines = []
 
@@ -47,16 +65,16 @@ def format_sse(event: Event) -> str:
 
     return "\n".join(lines) + "\n\n"
 
+
 def _settings_payload(current: RuntimeSettings) -> dict[str, dict[str, Any]]:
     """
     Every runtime-adjustable field: its live value, whether it survives a
     restart, and what the environment would fall back to.
 
-    Mirrors print_settings() in app/runtime/cli.py, so the CLI and this
-    endpoint describe the same state the same way.
+    Mirrors print_settings() in app/runtime/cli.py.
     """
     defaults = RuntimeSettings.from_env()
-    
+
     return {
         field.name: {
             "value": getattr(current, field.name),
@@ -65,7 +83,6 @@ def _settings_payload(current: RuntimeSettings) -> dict[str, dict[str, Any]]:
         }
         for field in fields(current)
     }
-
 
 
 def create_api(application: Application) -> FastAPI:
@@ -80,37 +97,104 @@ def create_api(application: Application) -> FastAPI:
         allow_headers=["*"],
     )
 
-    async def require_conversation(conversation_id: UUID) -> None:
-        exists = await application.conversation_repository.exists(
+    current_user = make_current_user(application)
+    require_admin = make_require_admin(current_user)
+
+    async def require_conversation(
+        conversation_id: UUID,
+        user: Annotated[User, Depends(current_user)],
+    ) -> Conversation:
+        conversation = await application.conversation_repository.get_conversation(
             conversation_id,
         )
 
-        if not exists:
+        # 404, not 403, for another user's conversation: do not confirm that
+        # an id they cannot see exists.
+        if conversation is None or (
+            conversation.user_id != user.id and not is_admin(user)
+        ):
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        return conversation
+
+    # ---- auth -----------------------------------------------------------
+
+    @app.post("/auth/login")
+    async def login(body: LoginRequest, response: Response):
+        result = await application.auth_service.login(body.username, body.password)
+
+        if result is None:
             raise HTTPException(
-                status_code=404,
-                detail="Conversation not found",
+                status_code=401,
+                detail="Invalid username or password",
             )
 
-    @app.post("/conversations")
-    async def create_conversation():
+        user, token, expires_at = result
 
-        conversation_id = (
-            await application.conversation_repository.create_conversation()
+        max_age = max(
+            0,
+            int((expires_at - datetime.now(timezone.utc)).total_seconds()),
+        )
+
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=token,
+            max_age=max_age,
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite=COOKIE_SAMESITE,
+            path="/",
         )
 
         return {
-            "id": str(conversation_id),
+            "id": str(user.id),
+            "username": user.username,
+            "role": user.role,
         }
 
-    @app.get("/conversations")
-    async def get_conversations():
+    @app.post("/auth/logout", status_code=204)
+    async def logout(request: Request, response: Response):
+        token = request.cookies.get(SESSION_COOKIE_NAME)
 
-        conversations = await application.conversation_repository.get_conversations()
+        await application.auth_service.logout(token)
+
+        response.delete_cookie(
+            key=SESSION_COOKIE_NAME,
+            path="/",
+            httponly=True,
+            secure=COOKIE_SECURE,
+            samesite=COOKIE_SAMESITE,
+        )
+
+    @app.get("/auth/me")
+    async def me(user: Annotated[User, Depends(current_user)]):
+        return {
+            "id": str(user.id),
+            "username": user.username,
+            "role": user.role,
+        }
+
+    # ---- conversations ------------------------------------------------------
+
+    @app.post("/conversations")
+    async def create_conversation(user: Annotated[User, Depends(current_user)]):
+        conversation_id = await application.conversation_repository.create_conversation(
+            user_id=user.id,
+        )
+
+        return {"id": str(conversation_id)}
+
+    @app.get("/conversations")
+    async def get_conversations(user: Annotated[User, Depends(current_user)]):
+        conversations = await application.conversation_repository.get_conversations(
+            user.id,
+        )
 
         return [
             {
                 "id": str(conversation.id),
                 "title": conversation.title,
+                "status": conversation.status,
                 "created_at": conversation.created_at,
                 "updated_at": conversation.updated_at,
             }
@@ -118,12 +202,11 @@ def create_api(application: Application) -> FastAPI:
         ]
 
     @app.get("/conversations/{conversation_id}/messages")
-    async def get_messages(conversation_id: UUID):
-
-        await require_conversation(conversation_id)
-
+    async def get_messages(
+        conversation: Annotated[Conversation, Depends(require_conversation)],
+    ):
         messages = await application.message_repository.get_messages(
-            conversation_id,
+            conversation.id,
         )
 
         return [
@@ -142,17 +225,14 @@ def create_api(application: Application) -> FastAPI:
         status_code=202,
     )
     async def send_message(
-        conversation_id: UUID,
         request: SendMessageRequest,
+        conversation: Annotated[Conversation, Depends(require_conversation)],
+        user: Annotated[User, Depends(current_user)],
     ):
         """
         Open a turn and start generating it in the background.
-
-        Returns as soon as the rows exist. Tokens are delivered over
-        GET /events, to every subscriber including this caller, so there is
-        one token path rather than one per client role.
         """
-        await require_conversation(conversation_id)
+        conversation_id = conversation.id
 
         existing = await application.message_repository.get_turn_by_client_message_id(
             request.client_message_id,
@@ -177,13 +257,12 @@ def create_api(application: Application) -> FastAPI:
         try:
             turn = await application.chat_service.begin_turn(
                 conversation_id=conversation_id,
+                user=user,
                 user_input=request.message,
                 client_message_id=request.client_message_id,
             )
 
         except psycopg.errors.UniqueViolation:
-            # Lost a race on the idempotency key. The other caller's turn is
-            # the real one; report it rather than generating a second answer.
             application.conversation_lock.release(conversation_id)
 
             existing = (
@@ -196,6 +275,14 @@ def create_api(application: Application) -> FastAPI:
                 raise
 
             return _existing_turn_response(existing, conversation_id)
+
+        except ConversationHeldError as error:
+            application.conversation_lock.release(conversation_id)
+
+            raise HTTPException(
+                status_code=423,
+                detail="This conversation is on hold pending administrator review.",
+            ) from error
 
         except ValueError as error:
             application.conversation_lock.release(conversation_id)
@@ -222,15 +309,14 @@ def create_api(application: Application) -> FastAPI:
         }
 
     @app.get("/events")
-    async def events(conversation_id: UUID, request: Request):
+    async def events(
+        request: Request,
+        conversation: Annotated[Conversation, Depends(require_conversation)],
+    ):
         """
         Server-sent events for one conversation.
-
-        Any number of clients may subscribe; every one receives the same
-        stream. This is what makes several tabs consistent — not a feature
-        layered on top, but the absence of a per-client token path.
         """
-        await require_conversation(conversation_id)
+        conversation_id = conversation.id
 
         async def generator() -> AsyncIterator[str]:
             async with application.event_bus.subscribe(
@@ -241,10 +327,7 @@ def create_api(application: Application) -> FastAPI:
 
                 while True:
                     event = await subscription.next_event(
-                        # Read each pass, so a change reaches streams that
-                        # are already open.
-                        timeout=application.runtime_settings.current
-                        .sse_heartbeat_seconds,
+                        timeout=application.runtime_settings.current.sse_heartbeat_seconds,
                     )
 
                     if subscription.overflowed:
@@ -258,8 +341,6 @@ def create_api(application: Application) -> FastAPI:
                         break
 
                     if event is None:
-                        # Idle proxies drop connections without traffic, and
-                        # this is also how the client notices a dead link.
                         yield ": keepalive\n\n"
                         continue
 
@@ -270,26 +351,22 @@ def create_api(application: Application) -> FastAPI:
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
-        
+
+    # ---- settings ------------------------------------------------------
+
     @app.get("/settings")
-    async def get_settings():
+    async def get_settings(user: Annotated[User, Depends(current_user)]):
         return _settings_payload(application.runtime_settings.current)
-    
-    # TODO: gate behind auth once the login system exists. An
-    # unauthenticated PATCH here can rewrite system_prompt_name, which is
-    # a persistent, silent change to what the assistant does for every
-    # user — not bad data in a row, but a change in behavior. Left open
-    # only because this is a solo local-network dev environment.
-    @app.patch("/settings")
+
+    @app.patch("/settings", dependencies=[Depends(require_admin)])
     async def update_settings(changes: dict[str, Any]):
         try:
             updated = await application.apply_settings(changes)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except Exception as error:
-            # Validation already passed by this point, so this is a
-            # storage failure (e.g. the DB connection dropped mid-write)
-            # rather than a bad request — 500, not 422.
+            # Validation already passed, so this is a storage failure, not a
+            # bad request — 500, not 422.
             logger.exception("Failed to apply settings | changes=%s", changes)
 
             raise HTTPException(
@@ -299,28 +376,25 @@ def create_api(application: Application) -> FastAPI:
 
         return _settings_payload(updated)
 
-    # TODO: gate behind auth once the login system exists. Same reasoning
-    # as PATCH /settings above.
-    @app.delete("/settings/{key}")
+    @app.delete("/settings/{key}", dependencies=[Depends(require_admin)])
     async def delete_setting(key: str):
         if key not in FIELD_PARSERS:
             raise HTTPException(
                 status_code=422,
                 detail=f"Unknown or non-editable setting: {key}",
             )
-        
+
         default = getattr(RuntimeSettings.from_env(), key)
-        
+
         try:
             updated = await application.apply_settings({key: default})
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        
+
         if key in PERSISTED_FIELDS:
             await application.settings_repository.delete(key)
-        
+
         return _settings_payload(updated)
-        
 
     return app
 
