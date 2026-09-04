@@ -7,9 +7,10 @@ import MermaidDiagram from "./MermaidDiagram";
 
 type MarkdownProps = {
 	children: string;
+	isStreaming?: boolean;
 };
 
-const Markdown = ({ children }: MarkdownProps) => {
+const Markdown = ({ children, isStreaming = false }: MarkdownProps) => {
 	return (
 		<ReactMarkdown
 			remarkPlugins={[remarkGfm]}
@@ -32,6 +33,7 @@ const Markdown = ({ children }: MarkdownProps) => {
 						return (
 							<MermaidDiagram
 								chart={String(codeChildren).replace(/\n$/, "")}
+								isStreaming={isStreaming}
 							/>
 						);
 					}

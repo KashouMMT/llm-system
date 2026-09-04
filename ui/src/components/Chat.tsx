@@ -206,6 +206,12 @@ const Chat = ({
 						const content =
 							stream.drafts[message.id] ?? message.content;
 
+						// A live draft exists only while tokens are arriving
+						// into this tab; the terminal event deletes it, at
+						// which point message.content holds the full text.
+						const isStreaming =
+							stream.drafts[message.id] !== undefined;
+
 						const note = OUTCOME_NOTE[message.status];
 
 						return (
