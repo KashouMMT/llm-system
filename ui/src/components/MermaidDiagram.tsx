@@ -28,7 +28,6 @@ const MermaidDiagram = ({ chart, isStreaming = false }: MermaidDiagramProps) => 
 
 	useEffect(() => {
 		if (isStreaming) {
-			setState("waiting");
 			return;
 		}
 
@@ -87,11 +86,16 @@ const MermaidDiagram = ({ chart, isStreaming = false }: MermaidDiagramProps) => 
 		};
 	}, [id]);
 
+	// Derived rather than pushed into state from the effect: while tokens are
+	// arriving there is nothing to show regardless of what the last completed
+	// render produced, and setting state from an effect only costs a render.
+	const displayed: RenderState = isStreaming ? "waiting" : state;
+
 	return (
 		<div className="mermaid-diagram">
 			<div ref={containerRef} />
 
-			{state === "waiting" && (
+			{displayed === "waiting" && (
 				<p className="text-secondary small mb-0">
 					{isStreaming
 						? "Diagram will render when the response finishes…"
@@ -99,7 +103,7 @@ const MermaidDiagram = ({ chart, isStreaming = false }: MermaidDiagramProps) => 
 				</p>
 			)}
 
-			{state === "invalid" && (
+			{displayed === "invalid" && (
 				<p className="text-secondary small mb-0">
 					Diagram could not be rendered.
 				</p>

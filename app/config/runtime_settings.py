@@ -7,6 +7,7 @@ from app.config.settings import (
     LOG_LEVEL,
     MAX_CHECKPOINT_MESSAGES,
     MAX_CONTEXT_HISTORY_MESSAGES,
+    MAX_SUMMARY_CHARS,
     MAX_TOKENS,
     MAX_UNSUMMARIZED_MESSAGES,
     SSE_HEARTBEAT_SECONDS,
@@ -26,6 +27,7 @@ LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 PERSISTED_FIELDS = frozenset(
     {
         "summary_token_threshold",
+        "max_summary_chars",
         "max_unsummarized_messages",
         "max_context_history_messages",
         "sse_heartbeat_seconds",
@@ -123,6 +125,7 @@ def _prompt_name(name: str, value: object) -> str:
 FIELD_PARSERS: dict[str, Callable[[str, object], object]] = {
     "log_level": _log_level,
     "summary_token_threshold": _positive_int,
+    "max_summary_chars": _positive_int,
     "max_unsummarized_messages": _positive_int,
     "max_context_history_messages": _positive_int,
     "sse_heartbeat_seconds": _positive_float,
@@ -149,6 +152,7 @@ class RuntimeSettings:
     
     log_level: str
     summary_token_threshold: int
+    max_summary_chars: int
     max_unsummarized_messages: int
     max_context_history_messages: int
     sse_heartbeat_seconds: float
@@ -182,6 +186,7 @@ class RuntimeSettings:
         return cls(
             log_level=LOG_LEVEL.upper(),
             summary_token_threshold=SUMMARY_TOKEN_THRESHOLD,
+            max_summary_chars=MAX_SUMMARY_CHARS,
             max_unsummarized_messages=MAX_UNSUMMARIZED_MESSAGES,
             max_context_history_messages=MAX_CONTEXT_HISTORY_MESSAGES,
             sse_heartbeat_seconds=SSE_HEARTBEAT_SECONDS,

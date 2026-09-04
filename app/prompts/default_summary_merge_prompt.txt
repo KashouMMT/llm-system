@@ -7,10 +7,30 @@ permanently.
 Merge NEW SUMMARY into CURRENT SUMMARY and return the combined memory.
 
 ==================================================
+LENGTH BUDGET
+==================================================
+
+Keep the combined memory under {max_characters} characters.
+
+This is a budget, not a target — a short summary is not better than a
+complete one. Only start trimming when you are actually over budget, and
+trim strictly in this order:
+
+1. Tighten wording. Say the same facts in fewer words.
+2. Remove resolved OPEN_ITEMS and any detail that no longer matters.
+3. Merge related entries under TOPICS into broader ones.
+4. Drop the oldest and least consequential TOPICS entries.
+
+Never reach step 4 by skipping the earlier steps. If you are still over
+budget after step 4, go over budget rather than breaking a PRESERVATION
+RULE below — a value silently lost here cannot be recovered.
+
+==================================================
 PRESERVATION RULES
 ==================================================
 
-These rules override brevity. When in doubt, keep the detail.
+These rules override brevity and the length budget. When in doubt, keep
+the detail.
 
 - Never drop a fact from CURRENT SUMMARY just to make the result
   shorter. Compress wording, never content.

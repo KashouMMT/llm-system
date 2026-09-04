@@ -226,7 +226,9 @@ const Chat = ({
 								<div className="message-content">
 									{content &&
 										(message.role === "assistant" ? (
-											<Markdown>{content}</Markdown>
+											<Markdown isStreaming={isStreaming}>
+													{content}
+												</Markdown>
 										) : (
 											content
 										))}

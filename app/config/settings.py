@@ -114,6 +114,10 @@ MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 20)
 # MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES.
 MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 12)
 MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 12)
+# Hard ceiling on the stored summary. The merge prompt is asked to stay well
+# under this; the cap only catches a model that ignored it, since a summary
+# that grows without limit costs more context than the transcript it replaced.
+MAX_SUMMARY_CHARS = get_positive_int("MAX_SUMMARY_CHARS", 6000)
 
 # USER INPUT
 MAX_USER_INPUT_CHARS = get_positive_int("MAX_USER_INPUT_CHARS", 4000)

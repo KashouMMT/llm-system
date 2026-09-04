@@ -45,34 +45,29 @@ class SummaryRepository:
 
             return await cur.fetchone()
 
-    async def get_current_summary(
+    async def save_summary_chunk_and_advance(
         self,
         conversation_id: UUID,
-    ) -> str:
-        state = await self.get_summary_state(conversation_id)
+        start_message_id: int,
+        end_message_id: int,
+        chunk_summary: str,
+        updated_summary: str,
+        expected_last_summarized_message_id: int,
+    ) -> bool:
+        """
+        Save one summary chunk and advance the summary state atomically.
 
-        if state is None:
-            return ""
+        Both writes commit together. If either fails, both roll back — so a
+        crash mid-write can never leave last_summarized_message_id advanced
+        without its corresponding chunk saved, or vice versa, which would
+        otherwise cause the next run to re-summarize and duplicate a chunk.
 
-        return state.summary
-
-    async def get_last_summarized_message_id(
-        self,
-        conversation_id: UUID,
-    ) -> int:
-        state = await self.get_summary_state(conversation_id)
-
-        if state is None:
-            return 0
-
-        return state.last_summarized_message_id
-
-    async def upsert_summary_state(
-        self,
-        conversation_id: UUID,
-        summary: str,
-        last_summarized_message_id: int,
-    ) -> None:
+        The advance is conditional on the watermark still being where the
+        caller read it. If another process summarized the same range while
+        this run was talking to the model, the whole transaction rolls back
+        and this returns False rather than writing a duplicate chunk. The
+        caller's work is simply discarded — the other run already did it.
+        """
         async with (
             self._pool.connection() as conn,
             conn.cursor() as cur,
@@ -91,68 +86,31 @@ class SummaryRepository:
                     last_summarized_message_id =
                         EXCLUDED.last_summarized_message_id,
                     updated_at = NOW()
+                WHERE conversation_summary_state.last_summarized_message_id
+                      = %s
                 """,
                 (
                     conversation_id,
-                    summary,
-                    last_summarized_message_id,
+                    updated_summary,
+                    end_message_id,
+                    expected_last_summarized_message_id,
                 ),
             )
 
-        logger.debug(
-            "Summary state updated | conversation=%s",
-            conversation_id,
-        )
+            if cur.rowcount != 1:
+                # Either the row already moved past our watermark, or the
+                # INSERT collided with a concurrent first summarization.
+                await conn.rollback()
 
-    async def save_summary_chunk(
-        self,
-        conversation_id: UUID,
-        start_message_id: int,
-        end_message_id: int,
-        summary: str,
-    ) -> None:
-        async with (
-            self._pool.connection() as conn,
-            conn.cursor() as cur,
-        ):
-            await cur.execute(
-                """
-                INSERT INTO conversation_summaries (
+                logger.info(
+                    "Summary advance skipped, watermark moved | "
+                    "conversation=%s expected=%s",
                     conversation_id,
-                    start_message_id,
-                    end_message_id,
-                    summary
+                    expected_last_summarized_message_id,
                 )
-                VALUES (%s, %s, %s, %s)
-                """,
-                (conversation_id, start_message_id, end_message_id, summary),
-            )
 
-        logger.debug(
-            "Summary chunk saved | conversation=%s",
-            conversation_id,
-        )
+                return False
 
-    async def save_summary_chunk_and_advance(
-        self,
-        conversation_id: UUID,
-        start_message_id: int,
-        end_message_id: int,
-        chunk_summary: str,
-        updated_summary: str,
-    ) -> None:
-        """
-        Save one summary chunk and advance the summary state atomically.
-
-        Both writes commit together. If either fails, both roll back — so a
-        crash mid-write can never leave last_summarized_message_id advanced
-        without its corresponding chunk saved, or vice versa, which would
-        otherwise cause the next run to re-summarize and duplicate a chunk.
-        """
-        async with (
-            self._pool.connection() as conn,
-            conn.cursor() as cur,
-        ):
             await cur.execute(
                 """
                 INSERT INTO conversation_summaries (
@@ -171,31 +129,11 @@ class SummaryRepository:
                 ),
             )
 
-            await cur.execute(
-                """
-                INSERT INTO conversation_summary_state (
-                    conversation_id,
-                    summary,
-                    last_summarized_message_id
-                )
-                VALUES (%s, %s, %s)
-                ON CONFLICT (conversation_id)
-                DO UPDATE SET
-                    summary = EXCLUDED.summary,
-                    last_summarized_message_id =
-                        EXCLUDED.last_summarized_message_id,
-                    updated_at = NOW()
-                """,
-                (
-                    conversation_id,
-                    updated_summary,
-                    end_message_id,
-                ),
-            )
-
         logger.debug(
             "Summary chunk saved and state advanced | "
             "conversation=%s through_message=%s",
             conversation_id,
             end_message_id,
         )
+
+        return True

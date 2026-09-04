@@ -10,7 +10,7 @@ from app.config.settings import (
     SUMMARY_MERGE_PROMPT,
 )
 from app.repositories.message_repository import Message, MessageRepository
-from app.repositories.summary_repository import SummaryRepository
+from app.repositories.summary_repository import SummaryRepository, SummaryState
 from app.utils.logger import logger
 
 
@@ -45,32 +45,23 @@ class SummarizationService:
     async def _get_unsummarized_messages(
         self,
         conversation_id: UUID,
+        last_summarized_message_id: int,
     ) -> list[Message]:
-        last_id = await self.summary_repository.get_last_summarized_message_id(
-            conversation_id,
-        )
-
         return list(
             await self.message_repository.get_messages_after_id(
                 conversation_id=conversation_id,
-                message_id=last_id,
+                message_id=last_summarized_message_id,
             )
         )
 
-    async def should_summarize(
+    def should_summarize(
         self,
         conversation_id: UUID,
-        unsummarized_rows: list[Message] | None = None,
+        rows: list[Message],
     ) -> bool:
-        rows = (
-            unsummarized_rows
-            if unsummarized_rows is not None
-            else await self._get_unsummarized_messages(conversation_id)
-        )
-
         if not rows:
             return False
-        
+
         # One snapshot for the whole check: a change landing between the
         # two comparisons must not decide half of this answer.
         settings = self.settings.current
@@ -117,9 +108,13 @@ class SummarizationService:
             # merge prompt on a conversation's first summarization.
             return chunk_summary
 
+        # Asked for less than the hard cap on purpose: the cap is a backstop
+        # for a model that ignored the budget, so it must not double as the
+        # target. Room between the two is what keeps _cap_summary quiet.
         prompt = SUMMARY_MERGE_PROMPT.format(
             current_summary=current_summary,
             chunk_summary=chunk_summary,
+            max_characters=int(self.settings.current.max_summary_chars * 0.75),
         )
 
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
@@ -129,55 +124,75 @@ class SummarizationService:
     async def summarize(
         self,
         conversation_id: UUID,
-        unsummarized_rows: list[Message] | None = None,
+        state: SummaryState | None,
+        rows: list[Message],
     ) -> None:
         """
-        Summarize all currently unsummarized messages for one conversation.
+        Fold `rows` into the durable summary.
 
-        A no-op if there is nothing unsummarized. Callers that already
-        fetched the rows should pass them to avoid a second identical query.
+        `state` and `rows` must come from the same read: the watermark in
+        `state` is what the conditional advance is checked against, so a
+        newer state paired with older rows would defeat that check.
         """
-        start = time.perf_counter()
-
-        rows = (
-            unsummarized_rows
-            if unsummarized_rows is not None
-            else await self._get_unsummarized_messages(conversation_id)
-        )
-
         if not rows:
             return
 
+        start = time.perf_counter()
+
+        current_summary = state.summary if state is not None else ""
+        watermark = state.last_summarized_message_id if state is not None else 0
+
         chunk_summary = await self._generate_chunk_summary(rows)
 
-        current_summary = await self.summary_repository.get_current_summary(
+        updated_summary = self._cap_summary(
+            await self._merge_summary(
+                current_summary=current_summary,
+                chunk_summary=chunk_summary,
+            ),
             conversation_id,
         )
 
-        updated_summary = await self._merge_summary(
-            current_summary=current_summary,
-            chunk_summary=chunk_summary,
-        )
-
-        start_message_id = rows[0].id
-        end_message_id = rows[-1].id
-
-        await self.summary_repository.save_summary_chunk_and_advance(
+        advanced = await self.summary_repository.save_summary_chunk_and_advance(
             conversation_id=conversation_id,
-            start_message_id=start_message_id,
-            end_message_id=end_message_id,
+            start_message_id=rows[0].id,
+            end_message_id=rows[-1].id,
             chunk_summary=chunk_summary,
             updated_summary=updated_summary,
+            expected_last_summarized_message_id=watermark,
         )
-
-        elapsed = time.perf_counter() - start
 
         logger.info(
-            "Conversation summarized | conversation=%s messages=%s elapsed=%.2fs",
+            "Conversation summarized | conversation=%s messages=%s "
+            "advanced=%s elapsed=%.2fs",
             conversation_id,
             len(rows),
-            elapsed,
+            advanced,
+            time.perf_counter() - start,
         )
+
+    def _cap_summary(self, summary: str, conversation_id: UUID) -> str:
+        """
+        Backstop for a merge prompt that ignored its length instruction.
+
+        The summary exists to be cheaper than the transcript it replaces, so
+        an unbounded one defeats its own purpose. Truncation is crude and
+        loses the tail, but a summary that silently grows without limit is
+        worse — and the warning is the signal to fix the prompt.
+        """
+        limit = self.settings.current.max_summary_chars
+
+        if len(summary) <= limit:
+            return summary
+
+        logger.warning(
+            "Summary exceeded cap and was truncated | "
+            "conversation=%s characters=%s limit=%s",
+            conversation_id,
+            len(summary),
+            limit,
+        )
+
+        return summary[:limit]
 
     async def trigger_if_needed(self, conversation_id: UUID) -> None:
         """
@@ -187,12 +202,14 @@ class SummarizationService:
         Any failure here must never propagate into the chat response path —
         callers are expected to isolate errors around this call.
         """
-        rows = await self._get_unsummarized_messages(conversation_id)
+        state = await self.summary_repository.get_summary_state(conversation_id)
 
-        if not await self.should_summarize(
+        rows = await self._get_unsummarized_messages(
             conversation_id,
-            unsummarized_rows=rows,
-        ):
+            state.last_summarized_message_id if state is not None else 0,
+        )
+
+        if not self.should_summarize(conversation_id, rows):
             return
 
-        await self.summarize(conversation_id, unsummarized_rows=rows)
+        await self.summarize(conversation_id, state, rows)
