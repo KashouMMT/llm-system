@@ -2,6 +2,7 @@ import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Annotated, Any
+from urllib.parse import quote
 from uuid import UUID
 
 import psycopg
@@ -184,6 +185,25 @@ def create_api(application: Application) -> FastAPI:
             conversation.id,
         )
 
+        # One query for the whole transcript rather than one per message.
+        files = await application.file_repository.get_by_message_ids(
+            [message.id for message in messages],
+        )
+
+        attachments: dict[int, list[dict[str, Any]]] = {}
+
+        for file in files:
+            attachments.setdefault(file.message_id, []).append(
+                {
+                    "id": str(file.id),
+                    "document_type": file.document_type,
+                    "filename": file.filename,
+                    "content_type": file.content_type,
+                    "size_bytes": file.size_bytes,
+                    "created_at": file.created_at,
+                }
+            )
+
         return [
             {
                 "id": message.id,
@@ -191,6 +211,10 @@ def create_api(application: Application) -> FastAPI:
                 "content": message.content,
                 "created_at": message.created_at,
                 "status": message.status,
+                # storage_key is deliberately absent: the client addresses a
+                # file by its id, and where the bytes actually live is not
+                # its business.
+                "attachments": attachments.get(message.id, []),
             }
             for message in messages
         ]
@@ -282,6 +306,44 @@ def create_api(application: Application) -> FastAPI:
             "user_message_id": turn.user_message_id,
             "assistant_message_id": turn.assistant_message_id,
         }
+
+    # ---- files -------------------------------------------------------
+
+    @app.get("/files/{file_id}")
+    async def download_file(
+        file_id: UUID,
+        user: Annotated[User, Depends(current_user)],
+    ):
+        record = await application.file_repository.get_by_id(file_id)
+
+        # 404 rather than 403 for someone else's file, matching
+        # require_conversation: do not confirm that an id they cannot see
+        # exists.
+        if record is None or (record.user_id != user.id and not is_admin(user)):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        try:
+            content = await application.file_storage.read(record.storage_key)
+
+        except FileNotFoundError as error:
+            # A row with no bytes is our inconsistency, not a bad request —
+            # so it is logged as an error even though the caller gets 404.
+            logger.error(
+                "Generated file row has no bytes | file=%s key=%s",
+                record.id,
+                record.storage_key,
+            )
+
+            raise HTTPException(
+                status_code=404,
+                detail="File not found",
+            ) from error
+
+        return Response(
+            content=content,
+            media_type=record.content_type,
+            headers={"Content-Disposition": _attachment_header(record.filename)},
+        )
 
     @app.get("/events")
     async def events(
@@ -379,4 +441,23 @@ def _existing_turn_response(
             "user_message_id": existing.user_message_id,
             "assistant_message_id": existing.assistant_message_id,
         },
+    )
+
+
+def _attachment_header(filename: str) -> str:
+    """
+    Content-Disposition for a download (RFC 6266).
+
+    Both forms on purpose: `filename=` for the plain ASCII case, and
+    `filename*=` carrying the UTF-8 original. Today's names are ASCII, but
+    職務経歴書 filenames will not be, and non-ASCII bytes in a bare
+    `filename=` are silently mangled rather than rejected.
+    """
+    ascii_fallback = (
+        filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
+    )
+
+    return (
+        f'attachment; filename="{ascii_fallback}"; '
+        f"filename*=UTF-8''{quote(filename, safe='')}"
     )

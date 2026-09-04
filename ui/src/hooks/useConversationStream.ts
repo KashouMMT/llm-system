@@ -128,6 +128,10 @@ export const useConversationStream = (
 				content: payload.content,
 				created_at: payload.created_at,
 				status: payload.status,
+				// A message announced by message.created cannot have files
+				// yet — nothing has run. The refetch on the terminal event
+				// is what brings them in.
+				attachments: [],
 			});
 		},
 		[upsertMessage],
@@ -162,7 +166,7 @@ export const useConversationStream = (
 				content: payload.content,
 				status: payload.status,
 			});
-			
+
 			// The terminal event is published only after the row is
 			// committed, so a refetch issued now cannot be beaten by one
 			// that was already in flight before the commit.

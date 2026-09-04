@@ -7,6 +7,7 @@ from app.config.settings import (
     LLM_TIMEOUT_SECONDS,
     MAX_TOKENS,
     MODEL_NAME,
+    REASONING_EFFORT,
     TEMPERATURE,
     TOP_P,
 )
@@ -29,6 +30,14 @@ def create() -> ChatOpenAI:
         LLM_BASE_URL or "https://api.openai.com/v1",
     )
 
+    # Sent only when set. Passing reasoning_effort to a model that has no
+    # reasoning mode is rejected by OpenAI and by some OpenAI-compatible
+    # hosts, so absence has to mean "do not send", not a default value.
+    optional: dict[str, str] = {}
+
+    if REASONING_EFFORT:
+        optional["reasoning_effort"] = REASONING_EFFORT
+
     return ChatOpenAI(
         model=MODEL_NAME,
         api_key=LLM_API_KEY,
@@ -37,5 +46,6 @@ def create() -> ChatOpenAI:
         max_tokens=MAX_TOKENS,
         top_p=TOP_P,
         max_retries=LLM_MAX_RETRIES,
-        timeout=LLM_TIMEOUT_SECONDS
+        timeout=LLM_TIMEOUT_SECONDS,
+        **optional,
     )

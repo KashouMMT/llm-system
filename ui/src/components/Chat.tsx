@@ -11,7 +11,7 @@ import type {
 	ConversationStream,
 	StreamStatus,
 } from "../hooks/useConversationStream";
-
+import { fileDownloadUrl } from "../api/client";
 import Markdown from "./Markdown";
 
 import "../assets/css/chat.css";
@@ -57,6 +57,18 @@ const errorText = (error: ChatError): string => {
 		default:
 			return error.message;
 	}
+};
+
+const formatBytes = (bytes: number): string => {
+	if (bytes < 1024) {
+		return `${bytes} B`;
+	}
+
+	if (bytes < 1024 * 1024) {
+		return `${Math.round(bytes / 1024)} KB`;
+	}
+
+	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
 const Chat = ({
@@ -246,6 +258,25 @@ const Chat = ({
 										<div className="mt-2 small text-secondary">
 											{note}
 										</div>
+									)}
+
+									{message.attachments.length > 0 && (
+										<ul className="message-attachments">
+											{message.attachments.map((attachment) => (
+												<li key={attachment.id}>
+													<a
+														className="message-attachment"
+														href={fileDownloadUrl(attachment.id)}
+													>
+														{attachment.filename}
+													</a>
+
+													<span className="message-attachment-size">
+														{formatBytes(attachment.size_bytes)}
+													</span>
+												</li>
+											))}
+										</ul>
 									)}
 								</div>
 							</div>

@@ -19,6 +19,7 @@ export type Message = {
 	content: string;
 	created_at: string;
 	status: MessageStatus;
+	attachments: Attachment[];
 };
 
 export type UserRole = "user" | "admin" | "root";
@@ -97,6 +98,24 @@ export type MessageTerminalPayload = {
 
 export type ConversationUpdatedPayload = {
 	conversation_id: string;
+};
+
+/** Mirrors the generated_files.document_type CHECK constraint. */
+export type DocumentType = "rirekisho" | "shokumu_keirekisho";
+
+/**
+ * A file produced by a tool call during a turn.
+ *
+ * The storage key is deliberately not exposed — a file is addressed by id
+ * through GET /files/{id}, which is where the ownership check lives.
+ */
+export type Attachment = {
+	id: string;
+	document_type: DocumentType;
+	filename: string;
+	content_type: string;
+	size_bytes: number;
+	created_at: string;
 };
 
 export const EVENT_MESSAGE_CREATED = "message.created";

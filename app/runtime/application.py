@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Coroutine
 from contextlib import AsyncExitStack
 from dataclasses import fields
+from pathlib import Path
 from types import TracebackType
 from typing import Any
 
@@ -16,6 +17,7 @@ from app.agent.context.history_context_builder import HistoryContextBuilder
 from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.agent.graph import AgentGraph
 from app.agent.tools import TOOLS
+from app.agent.tools.document_tool import make_document_tools
 from app.authentication.auth_service import AuthService
 from app.authentication.seed import seed_root
 from app.config.runtime_settings import (
@@ -27,6 +29,7 @@ from app.config.runtime_settings import (
 from app.config.settings import (
     AUTH_BOOTSTRAP_PASSWORD,
     AUTH_BOOTSTRAP_USERNAME,
+    FILE_STORAGE_DIR,
     LLM_PROVIDER,
     SESSION_TTL_HOURS,
 )
@@ -35,6 +38,7 @@ from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
 from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.settings_repository import SettingsRepository
@@ -44,6 +48,7 @@ from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import EventBus
 from app.services.chat_service import ChatService
 from app.services.summarization_service import SummarizationService
+from app.storage.local_storage import LocalFileStorage
 from app.utils.logger import logger, set_log_level
 
 # How long shutdown waits for detached work before cancelling it.
@@ -130,6 +135,8 @@ class Application:
         self.summary_context_builder: SummaryContextBuilder | None = None
         self.history_context_builder: HistoryContextBuilder | None = None
 
+        self.file_storage = LocalFileStorage(Path(FILE_STORAGE_DIR))
+
         # Unopened until initialize(); constructing it needs no event loop.
         self.pool = create_pool()
 
@@ -139,6 +146,7 @@ class Application:
         self.settings_repository = SettingsRepository(self.pool)
         self.user_repository = UserRepository(self.pool)
         self.session_repository = SessionRepository(self.pool)
+        self.file_repository = FileRepository(self.pool)
         self.auth_service = AuthService(
             self.user_repository,
             self.session_repository,
@@ -257,7 +265,14 @@ class Application:
                 llm=self.llm,
                 settings=self.runtime_settings,
                 provider=LLM_PROVIDER,
-                tools=TOOLS,
+                tools=[
+                    *TOOLS,
+                    *make_document_tools(
+                        storage=self.file_storage,
+                        file_repository=self.file_repository,
+                        conversation_repository=self.conversation_repository,
+                    ),
+                ],
                 checkpointer=self.checkpointer,
                 conversation_context_builder=(self.conversation_context_builder),
             )

@@ -176,3 +176,36 @@
 		display: inline-block;
 	}
 }
+
+.message-attachments {
+	list-style: none;
+	margin: 0.75rem 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+}
+
+.message-attachments li {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.message-attachment {
+	color: var(--text);
+	text-decoration: none;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 0.35rem 0.6rem;
+	font-size: 0.875rem;
+}
+
+.message-attachment:hover {
+	text-decoration: underline;
+}
+
+.message-attachment-size {
+	color: var(--text-muted);
+	font-size: 0.75rem;
+}

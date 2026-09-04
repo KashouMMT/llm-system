@@ -119,8 +119,8 @@ def create_tables() -> None:
                     user_id UUID NOT NULL,
                     title TEXT NOT NULL DEFAULT 'New Conversation',
                     status TEXT NOT NULL DEFAULT 'active',
-                    created_at TIMESTAMP DEFAULT NOW(),
-                    updated_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
                     CONSTRAINT conversations_status_check
                         CHECK (status IN ('active', 'held', 'closed')),
@@ -149,7 +149,7 @@ def create_tables() -> None:
                     conversation_id UUID NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
                     CONSTRAINT fk_messages_conversation
                         FOREIGN KEY (conversation_id)
@@ -165,6 +165,60 @@ def create_tables() -> None:
                 ON messages(conversation_id)
             """
             )
+            
+            # ---------------------------------------------------------
+            # Generated documents
+            # ---------------------------------------------------------
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS generated_files (
+                    id UUID PRIMARY KEY,
+                    conversation_id UUID NOT NULL,
+                    message_id BIGINT NOT NULL,
+                    user_id UUID NOT NULL,
+                    document_type TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    storage_key TEXT NOT NULL UNIQUE,
+                    content_type TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    
+                    CONSTRAINT generated_files_document_type_check
+                        CHECK (document_type IN (
+                            'rirekisho',
+                            'shokumu_keirekisho'
+                        )),
+                    CONSTRAINT generated_files_size_check
+                        CHECK (size_bytes >= 0),
+                    CONSTRAINT fk_generated_files_conversation
+                        FOREIGN KEY (conversation_id)
+                        REFERENCES conversations(id)
+                        ON DELETE CASCADE,
+                    CONSTRAINT fk_generated_files_message
+                        FOREIGN KEY (message_id)
+                        REFERENCES messages(id)
+                        ON DELETE CASCADE,
+                    CONSTRAINT fk_generated_files_user
+                        FOREIGN KEY (user_id)
+                        REFERENCES users(id)
+                        ON DELETE CASCADE
+                )
+            """    
+            )
+            
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_generated_files_message_id
+                ON generated_files(message_id)
+            """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_generated_files_conversation_id
+                ON generated_files(conversation_id)
+            """
+            )
 
             # ---------------------------------------------------------
             # Current conversation summary
@@ -175,7 +229,7 @@ def create_tables() -> None:
                     conversation_id UUID PRIMARY KEY,
                     summary TEXT NOT NULL,
                     last_summarized_message_id BIGINT NOT NULL DEFAULT 0,
-                    updated_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
                     CONSTRAINT fk_summary_state_conversation
                         FOREIGN KEY (conversation_id)
@@ -196,7 +250,7 @@ def create_tables() -> None:
                     start_message_id BIGINT NOT NULL,
                     end_message_id BIGINT NOT NULL,
                     summary TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
                     CONSTRAINT fk_summary_conversation
                         FOREIGN KEY (conversation_id)

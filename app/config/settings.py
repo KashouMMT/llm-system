@@ -178,6 +178,16 @@ COOKIE_SAMESITE = get_valid_string("COOKIE_SAMESITE", "lax")  # lax | strict | n
 if COOKIE_SAMESITE not in ("lax", "strict", "none"):
     raise ValueError("COOKIE_SAMESITE must be one of: lax, strict, none")
 
-# OTHER CONFIGURATION
+# LOG CONFIGURATION
 LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
 CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
+
+# FILE STORAGE
+# Relative to the working directory, like app/logs — the process must be
+# started from the repository root either way.
+FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
+
+# Reasoning models reject function tools on /v1/chat/completions unless
+# reasoning is explicitly off. Empty means the parameter is not sent at all,
+# which is what non-reasoning models and other OpenAI-compatible hosts want.
+REASONING_EFFORT = os.getenv("REASONING_EFFORT", "").strip()

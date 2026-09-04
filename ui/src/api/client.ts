@@ -135,3 +135,16 @@ export function sendMessage(
 export function eventsUrl(conversationId: string): string {
 	return `${API_BASE_URL}/events?conversation_id=${conversationId}`;
 }
+
+/**
+ * Absolute URL for a generated file.
+ *
+ * A plain link rather than a fetch: the response carries
+ * Content-Disposition: attachment, so the browser downloads it without
+ * navigating away, and a cross-origin GET navigation still sends the
+ * SameSite=Lax session cookie. Fetching it would mean holding the whole
+ * file in memory to hand back to the same browser.
+ */
+export function fileDownloadUrl(fileId: string): string {
+	return `${API_BASE_URL}/files/${fileId}`;
+}

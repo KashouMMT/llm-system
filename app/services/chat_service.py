@@ -237,6 +237,7 @@ class ChatService:
                 input_messages=[HumanMessage(content=user_input)],
                 thread_id=str(conversation_id),
                 current_user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
             ):
                 if metadata.get("langgraph_node") != "agent":
                     continue

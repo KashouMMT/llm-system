@@ -24,6 +24,32 @@ from app.config.runtime_settings import RuntimeSettingsHolder
 from app.utils.logger import logger
 
 
+def _report_tool_error(error: Exception) -> str:
+    """
+    Log a rejected tool call, then hand the reason back to the model.
+
+    ToolNode otherwise swallows the exception into a ToolMessage and nothing
+    reaches the log at all — an argument rejected by a tool's schema leaves
+    no trace, so "the assistant kept asking me for things" is impossible to
+    diagnose after the fact.
+
+    The return value is what the model reads, so it must stay specific:
+    Pydantic's message names the offending field and why, which is exactly
+    what lets the model ask the user the right question.
+    """
+    logger.warning(
+        "Tool call rejected | error=%s: %s",
+        type(error).__name__,
+        error,
+    )
+
+    return (
+        f"The tool rejected this call: {error}\n"
+        "Correct the arguments, or ask the user for what is missing. "
+        "Do not invent a value to satisfy the tool."
+    )
+
+
 class AgentGraph:
     """
     Builds and executes the LangGraph agent.
@@ -79,7 +105,7 @@ class AgentGraph:
             tools=self.tools,
         )
 
-        tool_node = ToolNode(self.tools)
+        tool_node = ToolNode(self.tools, handle_tool_errors=_report_tool_error)
 
         compact_checkpoint_state_node = create_compact_checkpoint_state_node(
             settings=self.settings,
@@ -137,6 +163,7 @@ class AgentGraph:
         input_messages: Sequence[BaseMessage],
         thread_id: str,
         current_user_message_id: int | None = None,
+        assistant_message_id: int | None = None,
     ) -> AsyncIterator[tuple[BaseMessage, dict]]:
         start = time.perf_counter()
 
@@ -153,6 +180,10 @@ class AgentGraph:
                 # starts. prepare_context uses this to exclude it from
                 # history, so the model does not see the question twice.
                 "current_user_message_id": current_user_message_id,
+                # The assistant row this run is writing into. A tool that
+                # produces a file attaches it here, so the identity comes
+                # from the server rather than from the model.
+                "assistant_message_id": assistant_message_id,
             }
         }
 

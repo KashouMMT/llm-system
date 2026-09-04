@@ -42,3 +42,6 @@ TODO
 TODO.md
 .claude/
 CLAUDE.local.md
+
+# Generated documents
+app/generated_files/
