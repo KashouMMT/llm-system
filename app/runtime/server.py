@@ -360,6 +360,8 @@ def create_api(application: Application) -> FastAPI:
 
         return application.describe_settings()
 
+    return app
+
 
 def _existing_turn_response(
     existing: TurnLookup,

@@ -9,26 +9,47 @@ mermaid.initialize({
 
 type MermaidDiagramProps = {
 	chart: string;
+	/**
+	 * True while the message this diagram belongs to is still streaming in.
+	 * A half-typed diagram never parses, and asking mermaid to render one on
+	 * every animation frame leaves orphaned error graphics in <body> that
+	 * only a full page reload clears — so we don't call mermaid at all until
+	 * the fence is complete.
+	 */
+	isStreaming?: boolean;
 };
 
-/**
- * Renders one mermaid code fence to SVG.
- *
- * Model output arrives token by token, so `chart` is frequently an
- * unterminated diagram mid-stream (a dangling arrow, an unclosed
- * subgraph). mermaid.render() rejects those — we keep the last
- * successful render on screen rather than clearing it on every failed
- * intermediate attempt, so the diagram doesn't flicker while it types.
- */
-const MermaidDiagram = ({ chart }: MermaidDiagramProps) => {
+type RenderState = "waiting" | "ok" | "invalid";
+
+const MermaidDiagram = ({ chart, isStreaming = false }: MermaidDiagramProps) => {
 	const id = useId().replace(/:/g, "-");
 	const containerRef = useRef<HTMLDivElement>(null);
-	const [pending, setPending] = useState(false);
+	const [state, setState] = useState<RenderState>("waiting");
 
 	useEffect(() => {
+		if (isStreaming) {
+			setState("waiting");
+			return;
+		}
+
 		let cancelled = false;
 
 		const render = async () => {
+			// parse() validates without touching the DOM; it is render() on
+			// invalid input that leaves error artifacts behind.
+			const parsed = await mermaid
+				.parse(chart, { suppressErrors: true })
+				.catch(() => false);
+
+			if (cancelled) {
+				return;
+			}
+
+			if (!parsed) {
+				setState("invalid");
+				return;
+			}
+
 			try {
 				const { svg, bindFunctions } = await mermaid.render(
 					`mermaid-${id}`,
@@ -41,10 +62,11 @@ const MermaidDiagram = ({ chart }: MermaidDiagramProps) => {
 
 				containerRef.current.innerHTML = svg;
 				bindFunctions?.(containerRef.current);
-				setPending(false);
+				setState("ok");
 			} catch {
+				// Keep the last good SVG on screen; just flag the failure.
 				if (!cancelled) {
-					setPending(true);
+					setState("invalid");
 				}
 			}
 		};
@@ -54,13 +76,33 @@ const MermaidDiagram = ({ chart }: MermaidDiagramProps) => {
 		return () => {
 			cancelled = true;
 		};
-	}, [chart, id]);
+	}, [chart, id, isStreaming]);
+
+	// Belt and braces: drop any measurement node mermaid may have left in
+	// <body> so nothing lingers past this component.
+	useEffect(() => {
+		return () => {
+			document.getElementById(`mermaid-${id}`)?.remove();
+			document.getElementById(`dmermaid-${id}`)?.remove();
+		};
+	}, [id]);
 
 	return (
 		<div className="mermaid-diagram">
 			<div ref={containerRef} />
-			{pending && (
-				<p className="text-secondary small mb-0">Diagram pending…</p>
+
+			{state === "waiting" && (
+				<p className="text-secondary small mb-0">
+					{isStreaming
+						? "Diagram will render when the response finishes…"
+						: "Diagram pending…"}
+				</p>
+			)}
+
+			{state === "invalid" && (
+				<p className="text-secondary small mb-0">
+					Diagram could not be rendered.
+				</p>
 			)}
 		</div>
 	);

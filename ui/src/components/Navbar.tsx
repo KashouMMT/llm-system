@@ -1,8 +1,10 @@
 import { Link, NavLink } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../hooks/useTheme";
 
 const Navbar = () => {
 	const { theme, toggleTheme } = useTheme();
+	const auth = useAuth();
 
 	return (
 		<nav className="navbar">
@@ -44,6 +46,24 @@ const Navbar = () => {
 					>
 						{theme === "light" ? "Dark mode" : "Light mode"}
 					</button>
+
+					{auth.status === "authenticated" && (
+						<>
+							<span className="navbar-user">
+								{auth.user.username}
+							</span>
+
+							<button
+								type="button"
+								className="theme-toggle"
+								onClick={() => {
+									void auth.logout();
+								}}
+							>
+								Sign out
+							</button>
+						</>
+					)}
 				</div>
 			</div>
 		</nav>

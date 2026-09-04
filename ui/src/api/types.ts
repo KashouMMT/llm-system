@@ -21,9 +21,20 @@ export type Message = {
 	status: MessageStatus;
 };
 
+export type UserRole = "user" | "admin" | "root";
+
+export type AuthUser = {
+	id: string;
+	username: string;
+	role: UserRole;
+};
+
+export type ConversationStatus = "active" | "held" | "closed";
+
 export type Conversation = {
 	id: string;
 	title: string;
+	status: ConversationStatus;
 	created_at: string;
 	updated_at: string;
 };

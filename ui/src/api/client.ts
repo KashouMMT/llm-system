@@ -1,4 +1,5 @@
 import type {
+	AuthUser,
 	Conversation,
 	CreateConversationResponse,
 	Message,
@@ -65,7 +66,30 @@ async function request<TResponse>(
 		throw new ApiError(response.status, await readDetail(response));
 	}
 
+	// 204 (logout) carries no body; calling .json() on it throws.
+	if (response.status === 204) {
+		return undefined as TResponse;
+	}
+
 	return (await response.json()) as TResponse;
+}
+
+export function getCurrentUser(signal?: AbortSignal): Promise<AuthUser> {
+	return request<AuthUser>("/auth/me", { signal });
+}
+
+export function login(credentials: {
+	username: string;
+	password: string;
+}): Promise<AuthUser> {
+	return request<AuthUser>("/auth/login", {
+		method: "POST",
+		body: JSON.stringify(credentials),
+	});
+}
+
+export function logout(): Promise<void> {
+	return request<void>("/auth/logout", { method: "POST" });
 }
 
 export function listConversations(
