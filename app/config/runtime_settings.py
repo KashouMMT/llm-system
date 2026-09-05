@@ -10,6 +10,7 @@ from app.config.settings import (
     MAX_SUMMARY_CHARS,
     MAX_TOKENS,
     MAX_UNSUMMARIZED_MESSAGES,
+    MIN_RETAINED_RAW_MESSAGES,
     SSE_HEARTBEAT_SECONDS,
     SSE_QUEUE_MAXSIZE,
     SUMMARY_TOKEN_THRESHOLD,
@@ -30,6 +31,7 @@ PERSISTED_FIELDS = frozenset(
         "max_summary_chars",
         "max_unsummarized_messages",
         "max_context_history_messages",
+        "min_retained_raw_messages",
         "sse_heartbeat_seconds",
         "sse_queue_maxsize",
         "temperature",
@@ -41,6 +43,7 @@ PERSISTED_FIELDS = frozenset(
         "system_prompt_name",
     }
 )
+
 
 def _positive_int(name: str, value: object) -> int:
     try:
@@ -74,6 +77,7 @@ def _log_level(name: str, value: object) -> str:
 
     return level
 
+
 def _bounded_float(minimum: float, maximum: float):
     """
     Range-checked float parser.
@@ -91,9 +95,7 @@ def _bounded_float(minimum: float, maximum: float):
             raise ValueError(f"{name} must be a number.") from error
 
         if not (minimum <= number <= maximum):
-            raise ValueError(
-                f"{name} must be between {minimum} and {maximum}."
-            )
+            raise ValueError(f"{name} must be between {minimum} and {maximum}.")
 
         return number
 
@@ -119,6 +121,7 @@ def _prompt_name(name: str, value: object) -> str:
 
     return text
 
+
 # Doubles as the allowlist. A key with no parser cannot be set, by any
 # caller, which is what keeps secrets and startup-only settings out of
 # reach without a second list to keep in sync.
@@ -128,6 +131,7 @@ FIELD_PARSERS: dict[str, Callable[[str, object], object]] = {
     "max_summary_chars": _positive_int,
     "max_unsummarized_messages": _positive_int,
     "max_context_history_messages": _positive_int,
+    "min_retained_raw_messages": _positive_int,
     "sse_heartbeat_seconds": _positive_float,
     "sse_queue_maxsize": _positive_int,
     # Sampling. Ceilings chosen to match what providers accept.
@@ -140,6 +144,7 @@ FIELD_PARSERS: dict[str, Callable[[str, object], object]] = {
     "system_prompt_name": _prompt_name,
 }
 
+
 @dataclass(frozen=True)
 class RuntimeSettings:
     """
@@ -149,12 +154,13 @@ class RuntimeSettings:
     unit of work, so a change landing mid-turn cannot produce behaviour
     that is half old and half new.
     """
-    
+
     log_level: str
     summary_token_threshold: int
     max_summary_chars: int
     max_unsummarized_messages: int
     max_context_history_messages: int
+    min_retained_raw_messages: int
     sse_heartbeat_seconds: float
     sse_queue_maxsize: int
     temperature: float
@@ -164,7 +170,7 @@ class RuntimeSettings:
     context_window: int
     max_checkpoint_messages: int
     system_prompt_name: str
-    
+
     def __post_init__(self) -> None:
         if self.max_tokens >= self.context_window:
             raise ValueError(
@@ -180,7 +186,16 @@ class RuntimeSettings:
                 "max_unsummarized_messages must be less than or equal to "
                 "max_context_history_messages."
             )
-        
+        # Retaining as much as the trigger allows means summarization fires
+        # and then has nothing left to fold, so the watermark never moves
+        # and the backlog grows until the history window starts dropping it.
+        if self.min_retained_raw_messages >= self.max_unsummarized_messages:
+            raise ValueError(
+                "min_retained_raw_messages must be less than "
+                "max_unsummarized_messages: summarization must always have "
+                "messages left to fold after the raw tail is held back."
+            )
+
     @classmethod
     def from_env(cls) -> "RuntimeSettings":
         return cls(
@@ -189,6 +204,7 @@ class RuntimeSettings:
             max_summary_chars=MAX_SUMMARY_CHARS,
             max_unsummarized_messages=MAX_UNSUMMARIZED_MESSAGES,
             max_context_history_messages=MAX_CONTEXT_HISTORY_MESSAGES,
+            min_retained_raw_messages=MIN_RETAINED_RAW_MESSAGES,
             sse_heartbeat_seconds=SSE_HEARTBEAT_SECONDS,
             sse_queue_maxsize=SSE_QUEUE_MAXSIZE,
             temperature=TEMPERATURE,
@@ -199,7 +215,7 @@ class RuntimeSettings:
             max_checkpoint_messages=MAX_CHECKPOINT_MESSAGES,
             system_prompt_name=SYSTEM_PROMPT,
         )
-        
+
     def persisted_values(self) -> dict[str, str]:
         """The persistable subset, as the strings the table stores."""
         return {
@@ -207,7 +223,8 @@ class RuntimeSettings:
             for field in fields(self)
             if field.name in PERSISTED_FIELDS
         }
-        
+
+
 class RuntimeSettingsHolder:
     """
     Holds the current RuntimeSettings and swaps it atomically.
@@ -218,9 +235,10 @@ class RuntimeSettingsHolder:
     No lock: everything runs on one event loop, and an attribute swap
     cannot be interleaved with a read.
     """
+
     def __init__(self, initial: RuntimeSettings) -> None:
         self._current = initial
-    
+
     @property
     def current(self) -> RuntimeSettings:
         return self._current

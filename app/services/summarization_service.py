@@ -54,6 +54,38 @@ class SummarizationService:
             )
         )
 
+    def _split_for_retention(
+        self,
+        rows: list[Message],
+        min_retained: int,
+    ) -> tuple[list[Message], list[Message]]:
+        """
+        Split the backlog into the part to summarize and the raw tail to keep.
+
+        Folding every message leaves the next turn with the summary and
+        nothing verbatim — the model loses the thread of what was just
+        agreed and re-asks settled questions. Holding a tail back costs a
+        little context and removes that cliff entirely.
+
+        The tail is extended backwards to the nearest user message so it
+        opens with a question rather than half of an answer.
+        """
+        if len(rows) <= min_retained:
+            return [], rows
+
+        boundary = len(rows) - min_retained
+
+        while boundary > 0 and rows[boundary].role != "user":
+            boundary -= 1
+
+        if boundary == 0:
+            # Aligning to a turn boundary consumed the whole backlog.
+            # Progress matters more than alignment here: a watermark that
+            # never advances is the failure this method exists to prevent.
+            boundary = len(rows) - min_retained
+
+        return rows[:boundary], rows[boundary:]
+
     def should_summarize(
         self,
         conversation_id: UUID,
@@ -212,4 +244,28 @@ class SummarizationService:
         if not self.should_summarize(conversation_id, rows):
             return
 
-        await self.summarize(conversation_id, state, rows)
+        to_summarize, retained = self._split_for_retention(
+            rows,
+            self.settings.current.min_retained_raw_messages,
+        )
+
+        if not to_summarize:
+            # RuntimeSettings forbids the configuration that causes this,
+            # so reaching it means the invariant was bypassed somehow.
+            logger.warning(
+                "Summarization triggered with nothing to fold | "
+                "conversation=%s backlog=%s retained=%s",
+                conversation_id,
+                len(rows),
+                len(retained),
+            )
+            return
+
+        logger.debug(
+            "Summarizing backlog | conversation=%s folding=%s retained_raw=%s",
+            conversation_id,
+            len(to_summarize),
+            len(retained),
+        )
+
+        await self.summarize(conversation_id, state, to_summarize)

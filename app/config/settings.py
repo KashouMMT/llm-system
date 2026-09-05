@@ -107,16 +107,26 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
 LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
 
 # SUMMARY CONFIGURATION
-SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 1200)
+# The normal trigger. Sized so it fires before MAX_UNSUMMARIZED_MESSAGES
+# does: the message cap is a floor against a flood of one-word turns, not
+# the primary policy. If the WARNING in should_summarize is what you keep
+# seeing in the logs, these two are inverted again.
+SUMMARY_TOKEN_THRESHOLD = get_positive_int("SUMMARY_TOKEN_THRESHOLD", 3000)
 # Checkpoint messages are never sent to the LLM (agent_node only reads the
-# current turn), so this only bounds Postgres checkpoint row size.
+# current turn), so this only bounds Postgres checkpoint row size. It is
+# NOT context retention — see MIN_RETAINED_RAW_MESSAGES for that.
 MAX_CHECKPOINT_MESSAGES = get_positive_int("MAX_CHECKPOINT_MESSAGES", 20)
-# MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES.
-MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 12)
-MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 12)
-# Hard ceiling on the stored summary. The merge prompt is asked to stay well
-# under this; the cap only catches a model that ignored it, since a summary
-# that grows without limit costs more context than the transcript it replaced.
+# MAX_UNSUMMARIZED_MESSAGES ≤ MAX_CONTEXT_HISTORY_MESSAGES, with room to
+# spare: at equality, a single late summarization silently drops the oldest
+# unsummarized messages out of context.
+MAX_CONTEXT_HISTORY_MESSAGES = get_positive_int("MAX_CONTEXT_HISTORY_MESSAGES", 40)
+MAX_UNSUMMARIZED_MESSAGES = get_positive_int("MAX_UNSUMMARIZED_MESSAGES", 30)
+# Messages held back from summarization so the model always sees recent
+# turns verbatim. Summarizing the entire backlog leaves the next turn with
+# a paraphrase and nothing literal, which is where the model loses track of
+# what was just agreed and starts re-asking settled questions.
+# Must be < MAX_UNSUMMARIZED_MESSAGES or summarization can never advance.
+MIN_RETAINED_RAW_MESSAGES = get_positive_int("MIN_RETAINED_RAW_MESSAGES", 8)
 MAX_SUMMARY_CHARS = get_positive_int("MAX_SUMMARY_CHARS", 6000)
 
 # USER INPUT

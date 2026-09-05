@@ -11,6 +11,21 @@ from app.documents.dates import today_in_japan
 # in a rendered document unless it is rejected here.
 _KANA_PATTERN = re.compile(r"^[\u3040-\u309F\u30A0-\u30FF\u30FC\s\u3000]+$")
 
+# Address furigana is kana plus the block numbers, which are carried across
+# as digits rather than transcribed phonetically: "shinjuku 3-12-8" written
+# in kana still ends in digits, and that is the normal form rather than
+# malformed input. Both ASCII and fullwidth digits and hyphens appear in
+# practice; rejecting them forces the user to drop real information from
+# the address to satisfy the validator. Kanji stays rejected, which is the
+# part of the kana rule that actually matters.
+#
+# Digits and hyphens lead the class so no \uXXXX escape is followed by a
+# hex digit that could read as part of it.
+_ADDRESS_KANA_PATTERN = re.compile(
+    r"^[0-9\uFF10-\uFF19\-\u2010\u2212\uFF0D"
+    r"\u3040-\u309F\u30A0-\u30FF\u30FC\s\u3000]+$"
+)
+
 _POSTAL_PATTERN = re.compile(r"^\d{3}-\d{4}$")
 
 
@@ -155,7 +170,10 @@ class Rirekisho(BaseModel):
         default="",
         max_length=200,
         description=(
-            "Furigana for the address, kana only. Leave empty whenever the "
+            "Furigana for the address: kana, plus the block numbers written "
+            "as digits and hyphens, e.g. 'とうきょうと しんじゅくく "
+            "しんじゅく3-12-8'. Keep the numbers — they are read as numbers, "
+            "not transcribed into kana. No kanji. Leave empty whenever the "
             "address itself is empty."
         ),
     )
@@ -226,14 +244,27 @@ class Rirekisho(BaseModel):
     # the user chose not to supply it, which is not an error — only a
     # value that is present and malformed is.
 
-    @field_validator("name_kana", "address_kana")
+    @field_validator("name_kana")
     @classmethod
-    def _kana_only(cls, value: str) -> str:
+    def _name_kana_only(cls, value: str) -> str:
         if not value:
             return value
 
         if not _KANA_PATTERN.match(value):
             raise ValueError(f"must be kana only (hiragana or katakana); got {value!r}")
+
+        return value
+
+    @field_validator("address_kana")
+    @classmethod
+    def _address_kana_only(cls, value: str) -> str:
+        if not value:
+            return value
+
+        if not _ADDRESS_KANA_PATTERN.match(value):
+            raise ValueError(
+                f"must be kana, digits, or hyphens — no kanji; got {value!r}"
+            )
 
         return value
 
