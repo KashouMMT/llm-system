@@ -12,3 +12,5 @@ psycopg[binary]
 psycopg-pool
 argon2-cffi
 jinja2
+openpyxl
+docxtpl

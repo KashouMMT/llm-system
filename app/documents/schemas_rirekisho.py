@@ -64,7 +64,7 @@ class HistoryEntry(BaseModel):
     )
     description: str = Field(
         min_length=1,
-        max_length=100,
+        max_length=200,
         description=(
             "The row text exactly as it should appear, e.g. "
             "'東京大学 工学部 情報工学科 入学' or '株式会社ABC 入社'. A "

@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.documents.dates import JST
 from app.documents.renderers.base import Renderer
 from app.documents.renderers.text_renderer import TextRenderer
+from app.documents.renderers.xlsx_renderer import XlsxRenderer
 from app.documents.schemas_rirekisho import Rirekisho
 from app.documents.schemas_shokumu import ShokumuKeirekisho
 from app.repositories.conversation_repository import ConversationRepository
@@ -182,7 +183,7 @@ def make_document_tools(
             name="generate_rirekisho",
             description=_RIREKISHO_DESCRIPTION,
             schema_cls=Rirekisho,
-            renderer=TextRenderer("rirekisho.txt"),
+            renderer=XlsxRenderer(),
             document_type="rirekisho",
             display_name="履歴書",
             filename_prefix="rirekisho",

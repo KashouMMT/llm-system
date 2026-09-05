@@ -2,7 +2,7 @@
 
 A conversational LLM system built on LangChain and LangGraph, with PostgreSQL-backed persistence and rolling summarization for long-running conversations. The model provider is selectable at startup (`LLM_PROVIDER`): a local Ollama instance, or any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, DeepSeek). Runs as a CLI or a FastAPI server, with a React + TypeScript frontend in `ui/` that receives tokens over Server-Sent Events.
 
-Its current application is Japanese job-application documents: the `anna` persona interviews the user for the facts a 履歴書 requires, and a tool renders the confirmed data to a downloadable file attached to the assistant's message.
+Its current application is Japanese job-application documents: the `anna` persona interviews the user for the facts a 履歴書 (rirekisho) and a 職務経歴書 (shokumu keirekisho) require, and one tool per document renders the confirmed data to a downloadable file attached to the assistant's message. Both are currently rendered as plain text, developed against real employer-supplied `.xlsx` and `.docx` references that the renderers will target next.
 
 ## Requirements
 
@@ -45,6 +45,7 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 | `FILE_STORAGE_DIR` | `app/generated_files` | Where `LocalFileStorage` writes generated documents. Relative to the working directory, like `app/logs` — the process must be started from the repository root either way |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `CONSOLE_LOG` | `false` | Also log to console |
+| `CONVERSATION_LOG` | `false` | Writes the root user's turns — the user's text, the assistant's reply, and each tool call's arguments — to `app/logs/conversation_log.log`. Deliberately separate from `LOG_LEVEL`: this decides whether conversation *content* reaches disk, which is a different question from how verbose logging is. Read at import time, so changing it needs a restart |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `localhost` / `5432` / `llm_system` / `postgres` | PostgreSQL connection |
 | `DB_PASSWORD` | *(required)* | PostgreSQL password |
 | `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | `2` / `10` | Async connection pool size (`psycopg_pool.AsyncConnectionPool`) |
@@ -130,7 +131,7 @@ START → prepare_context → agent ─┬─(tool call)→ tools → agent
 
 - `prepare_context` (`app/agent/nodes/prepare_context_node.py`) runs `ConversationContextBuilder` once per request to assemble background context.
 - `agent` (`app/agent/nodes/agent_node.py`) binds tools to the LLM and streams a response over `[system_prompt, prepared_context, current_turn_messages]`.
-- `tools` is a LangGraph `ToolNode` over `app/agent/tools/`: `get_current_time`, and `generate_rirekisho` from `document_tool.py`.
+- `tools` is a LangGraph `ToolNode` over `app/agent/tools/`: `get_current_time`, and `generate_rirekisho` / `generate_shokumu_keirekisho` from `document_tool.py`. `handle_tool_errors` routes a rejected call back to the model as a message naming the offending field, so a schema violation becomes a question to the user rather than a failed turn.
 - `compact_checkpoint_state` (`app/agent/nodes/compact_checkpoint_state_node.py`) trims the LangGraph checkpoint history to `MAX_CHECKPOINT_MESSAGES` after a final answer, keeping checkpoint rows from growing unbounded.
 
 State is checkpointed per conversation (`thread_id` = conversation UUID) via `AsyncPostgresSaver`.
@@ -149,11 +150,13 @@ The merged summary is bounded twice. The merge prompt is given a length budget o
 
 The write goes through `SummaryRepository.save_summary_chunk_and_advance`: the state upsert and the chunk insert commit in one transaction, and the upsert is **conditional** on the watermark still being where the caller read it (`WHERE last_summarized_message_id = %s`). A run whose watermark moved underneath it rolls back and returns `False` instead of writing a duplicate chunk. `ChatService._summarizing` is the cheap in-process guard that avoids the wasted LLM call in the common case; this check is the correctness backstop, and the only one that would survive more than one worker process. The updated summary is never written into LangGraph checkpoint state; it is read back from PostgreSQL by `SummaryContextBuilder` on the next turn.
 
-**Document generation** (`app/documents/`, `app/storage/`, `app/agent/tools/document_tool.py`, `app/repositories/file_repository.py`). Three layers, each ignorant of the ones above it. `app/documents/schemas.py` is the Pydantic contract — `Rirekisho` and its nested types — and it doubles as the tool's `args_schema`, so every field description is prompt text the model reads on each call. A `Renderer` (`app/documents/renderers/`) knows a schema and a template and nothing else: no database, no storage, no LLM, which is what makes the current `.txt` implementation swappable for `.docx` without touching anything above it. A `FileStorage` (`app/storage/`) holds bytes; `LocalFileStorage` is the development backend, writing to `FILE_STORAGE_DIR` under date-prefixed keys (`2026/09/04/<uuid>.txt`) that map directly onto S3 object keys later. The storage layer generates its own keys and a caller cannot supply one, so a model-supplied filename can never reach a filesystem path — path traversal is impossible by construction rather than by validation. Writes go to a temporary name and are renamed into place, so a crash mid-write leaves a stray `.part` file rather than a truncated document that looks complete.
+**Document generation** (`app/documents/`, `app/storage/`, `app/agent/tools/document_tool.py`, `app/repositories/file_repository.py`). Three layers, each ignorant of the ones above it. `app/documents/schemas_rirekisho.py` and `app/documents/schemas_shokumu.py` are the Pydantic contracts, one per document type — `Rirekisho` and `ShokumuKeirekisho` with their nested types — and each doubles as its tool's `args_schema`, so every field description is prompt text the model reads on each call. `schemas_shokumu` imports `YearMonth` and `KANA_PATTERN` from `schemas_rirekisho` rather than restating them: both documents carry the same person's name and the same 年月 pairs, and a rule that accepted a value on one document while rejecting it on the other would be a confusing bug to hit. A `Renderer` (`app/documents/renderers/`) knows a schema and a template and nothing else: no database, no storage, no LLM, which is what makes the current `.txt` implementation swappable for `.docx` without touching anything above it. A `FileStorage` (`app/storage/`) holds bytes; `LocalFileStorage` is the development backend, writing to `FILE_STORAGE_DIR` under date-prefixed keys (`2026/09/04/<uuid>.txt`) that map directly onto S3 object keys later. The storage layer generates its own keys and a caller cannot supply one, so a model-supplied filename can never reach a filesystem path — path traversal is impossible by construction rather than by validation. Writes go to a temporary name and are renamed into place, so a crash mid-write leaves a stray `.part` file rather than a truncated document that looks complete.
 
-`generate_rirekisho` is built by a closure factory with those dependencies bound in, for the same reason as `make_current_user`: reaching for module globals would make the graph impossible to construct twice. It re-validates its arguments through `Rirekisho(**fields)` even though LangChain already checked them against `args_schema` — that second pass is what turns a dict back into a typed object, and the only guarantee that what gets rendered is what passed validation. Identity comes from the run configuration (`thread_id`, `assistant_message_id`), never from the tool arguments, since a conversation id supplied by the model could name someone else's conversation. Bytes are written before the row, because the reverse order can produce a row pointing at a file that does not exist — which the user meets as a failed download — while this order can only leave an unreferenced blob. The string returned to the model is deliberately terse and carries no identifier: it may end up quoted in the reply, and the download link comes from the message attachment rather than from that text.
+`generate_rirekisho` and `generate_shokumu_keirekisho` are built by one closure factory with those dependencies bound in, for the same reason as `make_current_user`: reaching for module globals would make the graph impossible to construct twice. Every document type validates, renders, stores and records its file the same way — only the schema, template and `document_type` differ — so that body was factored into a single builder once a second document made the duplication real rather than hypothetical. Each tool re-validates its arguments through its schema even though LangChain already checked them against `args_schema` — that second pass is what turns a dict back into a typed object, and the only guarantee that what gets rendered is what passed validation. Identity comes from the run configuration (`thread_id`, `assistant_message_id`), never from the tool arguments, since a conversation id supplied by the model could name someone else's conversation. Bytes are written before the row, because the reverse order can produce a row pointing at a file that does not exist — which the user meets as a failed download — while this order can only leave an unreferenced blob. The string returned to the model is deliberately terse and carries no identifier: it may end up quoted in the reply, and the download link comes from the message attachment rather than from that text.
 
 Validators enforce *format*, never completeness: every one returns early on an empty value, because a blank field means the user chose not to supply it, and a 履歴書 printed with blanks is a normal way to use the form. Only a value that is present and malformed is an error. Furigana is the case where that distinction has teeth — `name_kana` is kana-only, but `address_kana` also accepts digits and hyphens, since Japanese address furigana carries block numbers as numerals (`しんじゅく3-12-8`) rather than transcribing them phonetically. Applying the name rule to the address rejected correct input and pushed users into dropping real information to satisfy the validator.
+
+Dates are stored as 西暦 and converted to 和暦 only when rendered (`app/documents/dates.py`). Chronological ordering and the birth-date check both need a monotonic year, and 平成/令和 are a presentation of that year rather than a different fact — so nothing upstream of the template knows about eras. Age is derived the same way, from `birth_date` and the document's own date, which is why it is not a schema field: it is a fact about the rendered document, not about the applicant, and a field would invite the model to invent one. The two documents deliberately disagree here — the reference 履歴書 prints 和暦 throughout while the reference 職務経歴書 prints 西暦, and each template matches its own reference rather than a house style. A `HistoryEntry` may also omit its `period` entirely, for the final ongoing row a 履歴書 writes as 現在に至る; the validator allows that only as the last row, since a dateless entry means "still true" and cannot precede one that ended.
 
 **Persistence** — two separate stores:
 - Application data (PostgreSQL, `app/database/`, `app/repositories/`): `users`, `sessions` (opaque session tokens, stored as SHA-256 hashes), `conversations` (each owned by a user, with a lifecycle `status`), `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log), `generated_files` (document metadata and its storage key, cascading from conversation, message and user; the bytes themselves live in `FileStorage`, not in the database), `app_settings` (sparse key/value store of persisted runtime-setting overrides). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
@@ -163,6 +166,12 @@ Validators enforce *format*, never completeness: every one returns early on an e
 - `EventBus` is in-process pub/sub, keyed by conversation. `publish()` is synchronous and never blocks, so a slow subscriber cannot stall generation; each subscriber holds a bounded `asyncio.Queue` (`SSE_QUEUE_MAXSIZE`) and is dropped rather than buffered without limit if it falls behind. Event types: `message.created`, `message.delta`, `message.completed`, `message.cancelled`, `message.failed`, `conversation.updated`.
 - `ConversationLock` is an in-process `dict`-backed lock serializing generation per conversation. Correct without a `Lock`/mutex only because acquisition never awaits between the membership check and the insert.
 - Both are process-local. A multi-worker deployment would need `LISTEN/NOTIFY` (event bus) and a PostgreSQL advisory lock (conversation lock) instead — the interfaces are kept narrow enough that this is a swap, not a rewrite.
+
+**Logging** (`app/utils/logger.py`, `app/utils/conversation_log.py`). One named logger (`llm_app`) writing a daily rotating file under `app/logs/`, optionally mirrored to the console. Third-party libraries log to their own loggers and never propagate into it, so `LOG_LEVEL=DEBUG` yields this project's own tracing rather than a firehose.
+
+`CONVERSATION_LOG=true` attaches a second handler writing `app/logs/conversation_log.log`: the turn-by-turn transcript, each tool call's arguments as indented JSON (`ensure_ascii=False`, so Japanese is readable rather than escaped), and the graph's node transitions — enough to see exactly what the model received and what it passed to a tool. Two filters keep the two files apart and both are necessary. `_RootConversationFilter` admits only the root user's turns, and only from the four modules that describe a turn, matched on `LogRecord.module` because every module shares the one logger. `ExcludeConversationContent` does the opposite job on the daily log and the console: without it, `LOG_LEVEL=DEBUG` would copy every name, address and phone number the user typed into a second file whose handling nobody reasoned about.
+
+The acting user reaches those filters through a `ContextVar` set in `ChatService.begin_turn`. asyncio copies the current context into every task it creates, and `begin_turn` is awaited rather than spawned, so the value lands in the caller's context and is inherited by the spawned generation task, the graph run inside it, and each tool call — without threading a parameter through any of them, in either the CLI or the API. The logger itself sits at `DEBUG` whenever conversation logging is on, purely so those records can reach that handler; every other handler carries `LOG_LEVEL` as its own level, which is also why `set_log_level` applies a runtime change per handler instead of to the logger — lifting the logger would silently switch the conversation log off.
 
 **Frontend** (`ui/src/`): React 19 + TypeScript on Vite, with TanStack Query used only as a cache for the two REST resources — it is deliberately absent from the streaming path.
 
@@ -221,7 +230,7 @@ llm-system/
 │   │   │   └── compact_checkpoint_state_node.py  # Bounds checkpoint history after a final answer
 │   │   ├── tools/                                # Tools the agent may choose to call
 │   │   │   ├── time_tool.py
-│   │   │   └── document_tool.py                  # generate_rirekisho: renders, stores, and attaches a document
+│   │   │   └── document_tool.py                  # generate_rirekisho / generate_shokumu_keirekisho: one shared builder
 │   │   ├── context/
 │   │   │   ├── conversation_context_builder.py   # Composes summary + history context for one request
 │   │   │   ├── summary_context_builder.py        # Reads the durable summary and its watermark (no LLM)
@@ -246,13 +255,15 @@ llm-system/
 │   │   ├── init_db.py                            # Create database/tables if missing, then run migrations
 │   │   └── migrations.py                         # Versioned schema changes to tables that already exist
 │   ├── documents/                                # Document data contracts and rendering (no DB, no storage, no LLM)
-│   │   ├── schemas.py                            # Pydantic Rirekisho schema; doubles as the tool's args_schema
-│   │   ├── dates.py                              # JST timezone + today_in_japan()
+│   │   ├── schemas_rirekisho.py                  # Pydantic Rirekisho schema; doubles as the tool's args_schema
+│   │   ├── schemas_shokumu.py                    # Pydantic ShokumuKeirekisho schema; shares YearMonth / KANA_PATTERN
+│   │   ├── dates.py                              # JST, today_in_japan(), 西暦→和暦 conversion, 満年齢
 │   │   ├── renderers/
 │   │   │   ├── base.py                           # Renderer protocol (extension, content_type, render)
 │   │   │   └── text_renderer.py                  # Fills a .txt template from a validated schema
 │   │   └── templates/
-│   │       └── rirekisho.txt                     # Plain-text 履歴書 layout
+│   │       ├── rirekisho.txt                     # Plain-text 履歴書 layout (和暦 dates, per its reference .xlsx)
+│   │       └── shokumu_keirekisho.txt            # Plain-text 職務経歴書 layout (西暦 dates, per its reference .docx)
 │   ├── storage/                                  # Where generated file bytes live
 │   │   ├── base.py                               # FileStorage protocol; storage generates its own keys
 │   │   └── local_storage.py                      # Local disk backend; date-prefixed keys, atomic rename
@@ -263,7 +274,7 @@ llm-system/
 │   │   ├── openai_llm.py                         # Builds ChatOpenAI; custom base_url covers OpenRouter/Groq/DeepSeek
 │   │   ├── sampling.py                           # Binds runtime sampling params onto the LLM client per provider
 │   │   └── system_prompt.py                      # Loads the persona named by SYSTEM_PROMPT, with fallback
-│   ├── logs/                                     # Daily log files (gitignored)
+│   ├── logs/                                     # Daily log files + conversation_log.log (gitignored)
 │   ├── prompts/                                  # System prompts (persona files) + summarization prompts
 │   │   ├── default.txt                           # Fallback persona, selected by SYSTEM_PROMPT
 │   │   ├── anna.txt                              # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
@@ -288,7 +299,8 @@ llm-system/
 │   │   ├── chat_service.py                       # Opens turns, runs background generation, schedules summarization
 │   │   └── summarization_service.py              # Generates and persists durable conversation summaries (LLM calls)
 │   └── utils/
-│       └── logger.py                             # Logging
+│       ├── logger.py                             # Logging setup; per-handler levels
+│       └── conversation_log.py                   # Root-only conversation transcript log + its two filters
 ├── ui/                                           # React + TypeScript frontend (Vite)
 │   ├── index.html
 │   ├── vite.config.ts                            # Dev server pinned to :5173 to match the API's CORS origin
