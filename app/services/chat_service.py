@@ -26,6 +26,7 @@ from app.runtime.event_bus import (
     EventBus,
 )
 from app.services.summarization_service import SummarizationService
+from app.utils import conversation_log
 from app.utils.logger import logger
 
 # Terminal status -> the event that announces it.
@@ -137,6 +138,11 @@ class ChatService:
         if status == "held" and not is_admin(user):
             raise ConversationHeldError(conversation_id)
 
+        # Set before the generation task is spawned, so that task — and the
+        # graph run and tool calls beneath it — inherit the actor when
+        # asyncio copies this context.
+        conversation_log.set_actor(user)
+
         turn = await self.message_repository.create_turn(
             conversation_id=conversation_id,
             user_content=user_input,
@@ -197,6 +203,15 @@ class ChatService:
             user_message_id,
             assistant_message_id,
         )
+
+        if conversation_log.is_enabled():
+            logger.debug(
+                "Conversation | user | conversation=%s message=%s\n%s",
+                conversation_id,
+                user_message_id,
+                user_input,
+                extra=conversation_log.CONVERSATION_ONLY,
+            )
 
         return TurnIds(
             user_message_id=user_message_id,
@@ -336,6 +351,15 @@ class ChatService:
         Runs even when generation was cancelled, which is the whole point:
         a partial answer is kept and labelled rather than discarded.
         """
+        if conversation_log.is_enabled():
+            logger.debug(
+                "Conversation | assistant | conversation=%s message=%s status=%s\n%s",
+                conversation_id,
+                assistant_message_id,
+                status,
+                content,
+                extra=conversation_log.CONVERSATION_ONLY,
+            )
         try:
             await self.message_repository.complete_message(
                 message_id=assistant_message_id,

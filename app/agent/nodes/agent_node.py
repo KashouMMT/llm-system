@@ -1,3 +1,4 @@
+import json
 import time
 from collections.abc import Callable, Sequence
 from uuid import UUID
@@ -8,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from app.agent.state import AgentState, get_current_turn_messages
+from app.utils import conversation_log
 from app.utils.logger import logger
 from app.config.runtime_settings import RuntimeSettingsHolder
 from app.llm.sampling import bind_sampling
@@ -113,6 +115,26 @@ def create_agent_node(
                 conversation_id,
                 [tool["name"] for tool in response.tool_calls],
             )
+
+            # The arguments, not just the names: a wrong date or a dropped
+            # 取得 suffix is a fact about what the model passed to the tool,
+            # and nothing else in the logs shows it.
+            if conversation_log.is_enabled():
+                for tool_call in response.tool_calls:
+                    logger.debug(
+                        "Tool call arguments | conversation=%s tool=%s\n%s",
+                        conversation_id,
+                        tool_call["name"],
+                        json.dumps(
+                            tool_call["args"],
+                            ensure_ascii=False,
+                            indent=2,
+                            # dates and UUIDs are not JSON types, and a
+                            # logging call must never be what breaks a turn.
+                            default=str,
+                        ),
+                        extra=conversation_log.CONVERSATION_ONLY,
+                    )
         else:
             logger.debug(
                 "LLM returned final response | conversation=%s",

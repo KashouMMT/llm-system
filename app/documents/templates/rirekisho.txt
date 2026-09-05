@@ -1,13 +1,13 @@
 ==================================================
 履 歴 書
 ==================================================
-                                    {{ generated_on.year }}年{{ generated_on.month }}月{{ generated_on.day }}日 現在
+                                    {{ to_japanese_era(generated_on) }}年{{ generated_on.month }}月{{ generated_on.day }}日 現在
 
 ふりがな   {{ name_kana or "_______________________________" }}
 氏　　名   {{ name }}
 
 {% if birth_date %}
-生年月日   {{ birth_date.year }}年{{ birth_date.month }}月{{ birth_date.day }}日生
+生年月日   {{ to_japanese_era(birth_date) }}年{{ birth_date.month }}月{{ birth_date.day }}日生　（満{{ age_on(birth_date, generated_on) }}歳）
 {% else %}
 生年月日   ______年____月____日生
 {% endif %}
@@ -34,7 +34,11 @@
             学歴
 {% if education %}
 {% for entry in education %}
-{{ "%4d"|format(entry.period.year) }}  {{ "%2d"|format(entry.period.month) }}   {{ entry.description }}
+{% if entry.period %}
+{{ to_japanese_era_year(entry.period.year, entry.period.month) }}    {{ "%2d"|format(entry.period.month) }}   {{ entry.description }}
+{% else %}
+                {{ entry.description }}
+{% endif %}
 {% endfor %}
 {% else %}
 ____  __   _______________________________
@@ -44,7 +48,11 @@ ____  __   _______________________________
             職歴
 {% if work %}
 {% for entry in work %}
-{{ "%4d"|format(entry.period.year) }}  {{ "%2d"|format(entry.period.month) }}   {{ entry.description }}
+{% if entry.period %}
+{{ to_japanese_era_year(entry.period.year, entry.period.month) }}    {{ "%2d"|format(entry.period.month) }}   {{ entry.description }}
+{% else %}
+                {{ entry.description }}
+{% endif %}
 {% endfor %}
 {% else %}
             なし
@@ -56,14 +64,22 @@ ____  __   _______________________________
 --------------------------------------------------
 {% if licenses %}
 {% for entry in licenses %}
-{{ "%4d"|format(entry.period.year) }}  {{ "%2d"|format(entry.period.month) }}   {{ entry.name }}
+{{ to_japanese_era_year(entry.period.year, entry.period.month) }}    {{ "%2d"|format(entry.period.month) }}   {{ entry.name }}
 {% endfor %}
 {% else %}
             特になし
 {% endif %}
 
 --------------------------------------------------
-志望の動機
+通勤時間・扶養家族
+--------------------------------------------------
+通勤時間             {{ "約%d時間%d分"|format(commute_time_minutes // 60, commute_time_minutes % 60) if commute_time_minutes is not none else "" }}
+扶養家族数（配偶者を除く）   {{ (dependents_excluding_spouse|string ~ "人") if dependents_excluding_spouse is not none else "" }}
+配偶者               {{ "有" if has_spouse else ("無" if has_spouse is not none else "") }}
+配偶者の扶養義務         {{ "有" if spouse_support_obligation else ("無" if spouse_support_obligation is not none else "") }}
+
+--------------------------------------------------
+志望の動機、特技、好きな学科、アピールポイントなど
 --------------------------------------------------
 {{ motivation or "" }}
 

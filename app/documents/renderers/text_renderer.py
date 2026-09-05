@@ -3,7 +3,12 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from pydantic import BaseModel
 
-from app.documents.dates import today_in_japan
+from app.documents.dates import (
+    age_on,
+    to_japanese_era,
+    to_japanese_era_year,
+    today_in_japan,
+)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -21,6 +26,13 @@ _environment = Environment(
     # corrupt characters that are legitimate here.
     autoescape=False,
 )
+
+# 和暦/age formatting lives in app.documents.dates, not here or in the
+# template — this just exposes it, the same way "%4d"|format already
+# reaches into the template for column alignment.
+_environment.globals["to_japanese_era"] = to_japanese_era
+_environment.globals["to_japanese_era_year"] = to_japanese_era_year
+_environment.globals["age_on"] = age_on
 
 
 class TextRenderer:

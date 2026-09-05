@@ -201,3 +201,9 @@ FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
 # reasoning is explicitly off. Empty means the parameter is not sent at all,
 # which is what non-reasoning models and other OpenAI-compatible hosts want.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "").strip()
+
+# Writes every root-user turn — the user's text, the assistant's reply, and
+# each tool call's arguments — to app/logs/conversation_log.log. Deliberately
+# separate from LOG_LEVEL: this decides whether conversation *content* is
+# written to disk, which is a different question from how verbose logging is.
+CONVERSATION_LOG = get_bool("CONVERSATION_LOG", False)

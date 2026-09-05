@@ -9,7 +9,11 @@ from app.documents.dates import today_in_japan
 # Kana only: hiragana, katakana, the long-vowel mark, and spaces. Furigana
 # containing kanji is the most common malformed input, and it is invisible
 # in a rendered document unless it is rejected here.
-_KANA_PATTERN = re.compile(r"^[\u3040-\u309F\u30A0-\u30FF\u30FC\s\u3000]+$")
+#
+# Public because \u8077\u52D9\u7D4C\u6B74\u66F8 carries the same reading of the same name and
+# must not validate it by a different rule \u2014 imported by schemas_shokumu,
+# as YearMonth already is.
+KANA_PATTERN = re.compile(r"^[\u3040-\u309F\u30A0-\u30FF\u30FC\s\u3000]+$")
 
 # Address furigana is kana plus the block numbers, which are carried across
 # as digits rather than transcribed phonetically: "shinjuku 3-12-8" written
@@ -50,14 +54,23 @@ class YearMonth(BaseModel):
 class HistoryEntry(BaseModel):
     """One 学歴 or 職歴 row."""
 
-    period: YearMonth
+    period: YearMonth | None = Field(
+        default=None,
+        description=(
+            "The row's 年月. Omit only for a final, still-ongoing row — "
+            "conventionally described as '現在に至る' — which by "
+            "definition has no end date. Every other row must have one."
+        ),
+    )
     description: str = Field(
         min_length=1,
         max_length=100,
         description=(
             "The row text exactly as it should appear, e.g. "
-            "'東京大学 工学部 情報工学科 入学' or '株式会社ABC 入社'. "
-            "Write it as the user stated it; do not translate or abbreviate."
+            "'東京大学 工学部 情報工学科 入学' or '株式会社ABC 入社'. A "
+            "final, still-ongoing row is conventionally '現在に至る', with "
+            "period left empty. Write it as the user stated it; do not "
+            "translate or abbreviate."
         ),
     )
 
@@ -71,7 +84,15 @@ class LicenseEntry(BaseModel):
         max_length=100,
         description=(
             "Official name of the licence or certification, copied exactly, "
-            "e.g. '普通自動車第一種運転免許' or '基本情報技術者試験 合格'."
+            "and ALWAYS ending in 合格 or 取得 — a 免許・資格 row without "
+            "one reads as unfinished to a Japanese reader. Which of the two "
+            "is decided by what the qualification is, not by preference: an "
+            "examination that was passed takes 合格 ('基本情報技術者試験 "
+            "合格', '日本語能力試験N2 合格'), and a licence or credential "
+            "that is held takes 取得 ('普通自動車第一種運転免許 取得'). A "
+            "name ending in 試験 is an examination. English-named "
+            "certifications follow the same rule: "
+            "'AWS Certified Developer – Associate 取得'."
         ),
     )
 
@@ -80,18 +101,34 @@ def _require_chronological(
     entries: list[HistoryEntry] | list[LicenseEntry], label: str
 ):
     """
-    Reject out-of-order rows rather than silently sorting them.
+    Reject out-of-order rows, and reject a dateless row anywhere but last.
 
-    Sorting would hide the usual cause, which is a wrong year rather than a
-    wrong order — and this error text is fed back to the model, so it is
-    more useful as a question than as an invisible correction.
+    Sorting dated rows would hide the usual cause, which is a wrong year
+    rather than a wrong order — and this error text is fed back to the
+    model, so it is more useful as a question than as an invisible
+    correction. A dateless row can only represent something still ongoing,
+    which by definition cannot come before a row with an end date.
     """
-    for previous, current in pairwise(entries):
+    dated = [entry for entry in entries if entry.period is not None]
+
+    for previous, current in pairwise(dated):
         if current.period.as_tuple() < previous.period.as_tuple():
             raise ValueError(
                 f"{label} must be in chronological order: "
                 f"{current.period} appears after {previous.period}."
             )
+
+    undated_positions = [
+        index for index, entry in enumerate(entries) if entry.period is None
+    ]
+
+    if len(undated_positions) > 1 or (
+        undated_positions and undated_positions[0] != len(entries) - 1
+    ):
+        raise ValueError(
+            f"{label}: a row with no year and month can only be the final "
+            "row, representing something still ongoing (e.g. '現在に至る')."
+        )
 
     return entries
 
@@ -141,7 +178,9 @@ class Rirekisho(BaseModel):
         max_length=10,
         description=(
             "Optional, and only if the user volunteered it. The 2020 JIS "
-            "revision made this field optional — never ask for it."
+            "revision made this field optional — never ask for it. Printed "
+            "exactly as given; this template's 男・女 checkbox is not "
+            "filled in automatically for a value outside those two words."
         ),
     )
 
@@ -191,6 +230,41 @@ class Rirekisho(BaseModel):
         description="Email address, if the user gave one.",
     )
 
+    # --- 通勤・家族 ---
+
+    commute_time_minutes: int | None = Field(
+        default=None,
+        ge=0,
+        le=999,
+        description=(
+            "通勤時間: approximate one-way commute time in minutes to the "
+            "workplace being applied to. Optional — leave empty if unknown "
+            "or not applicable."
+        ),
+    )
+    dependents_excluding_spouse: int | None = Field(
+        default=None,
+        ge=0,
+        le=99,
+        description=(
+            "扶養家族数（配偶者を除く）: number of dependents, not counting "
+            "a spouse. Optional — leave empty if the user does not want to "
+            "state it."
+        ),
+    )
+    has_spouse: bool | None = Field(
+        default=None,
+        description="配偶者の有無. Optional — leave empty if not stated.",
+    )
+    spouse_support_obligation: bool | None = Field(
+        default=None,
+        description=(
+            "配偶者の扶養義務: whether the user is legally obligated to "
+            "support their spouse. Only meaningful when has_spouse is "
+            "true. Optional — leave empty if not stated."
+        ),
+    )
+
     # --- 経歴 ---
 
     education: list[HistoryEntry] = Field(
@@ -207,10 +281,12 @@ class Rirekisho(BaseModel):
         default_factory=list,
         description=(
             "職歴, oldest first, following 学歴. Each employer appears as "
-            "入社 and, if the user has left, 退社. You MUST ask the user "
-            "about their work history before generating. If they have "
-            "never been employed, leave this empty — the renderer writes "
-            "なし."
+            "入社 and, if the user has left, 退社. If the user is still "
+            "employed there, the final row is '現在に至る' with no period "
+            "— never invent an end date for a job the user is still in. "
+            "You MUST ask the user about their work history before "
+            "generating. If they have never been employed, leave this "
+            "empty — the renderer writes なし."
         ),
     )
     licenses: list[LicenseEntry] = Field(
@@ -227,8 +303,11 @@ class Rirekisho(BaseModel):
         default=None,
         max_length=1000,
         description=(
-            "志望動機. Only include text the user has seen and approved — "
-            "never write this on their behalf without showing it first."
+            "志望の動機、特技、好きな学科、アピールポイントなど — one "
+            "combined box covering motivation for applying, special "
+            "skills, favourite subjects, and personal appeal points. Only "
+            "include text the user has seen and approved — never write "
+            "this on their behalf without showing it first."
         ),
     )
     requests: str | None = Field(
@@ -250,7 +329,7 @@ class Rirekisho(BaseModel):
         if not value:
             return value
 
-        if not _KANA_PATTERN.match(value):
+        if not KANA_PATTERN.match(value):
             raise ValueError(f"must be kana only (hiragana or katakana); got {value!r}")
 
         return value
@@ -309,7 +388,7 @@ class Rirekisho(BaseModel):
         birth = (self.birth_date.year, self.birth_date.month)
 
         for entry in [*self.education, *self.work]:
-            if entry.period.as_tuple() < birth:
+            if entry.period is not None and entry.period.as_tuple() < birth:
                 raise ValueError(
                     f"'{entry.description}' is dated {entry.period}, "
                     "which is before the date of birth."

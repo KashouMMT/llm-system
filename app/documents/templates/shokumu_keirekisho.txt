@@ -1,0 +1,72 @@
+==================================================
+職 務 経 歴 書
+==================================================
+                                    {{ generated_on.year }}年現在
+
+氏名　{{ name }}{% if name_kana %}（{{ name_kana }}）{% endif %}
+
+--------------------------------------------------
+■職務要約
+--------------------------------------------------
+{{ summary or "" }}
+
+{% for job in jobs %}
+■職務経歴{{ loop.index }}
+
+{{ job.start.year }}年{{ job.start.month }}月～{{ (job.end.year|string ~ "年" ~ job.end.month|string ~ "月") if job.end else "現在" }}　　{{ job.company }}{% if job.assignment %}　({{ job.assignment }}){% endif %}
+
+{% if job.employment_type %}
+【雇用形態】{{ job.employment_type }}
+{% endif %}
+{% if job.title %}
+{{ job.title }}
+{% endif %}
+{% if job.overview %}
+【業務概要】
+{{ job.overview }}
+{% endif %}
+{% if job.phase %}
+【担当フェーズ】
+{{ job.phase }}
+{% endif %}
+{% if job.responsibilities %}
+【業務内容】
+{% for item in job.responsibilities %}
+・{{ item }}
+{% endfor %}
+{% endif %}
+{% if job.achievements %}
+【実績・取り組み】
+{% for item in job.achievements %}
+・{{ item }}
+{% endfor %}
+{% endif %}
+{% if job.technologies %}
+【使用技術】{{ job.technologies|join("、") }}
+{% endif %}
+{% if job.team_size %}
+【規模】{{ job.team_size }}
+{% endif %}
+
+{% endfor %}
+--------------------------------------------------
+■活かせる経験・知識・技術
+--------------------------------------------------
+{% if applicable_skills %}
+{% for item in applicable_skills %}
+・{{ item }}
+{% endfor %}
+{% else %}
+特になし
+{% endif %}
+
+--------------------------------------------------
+■自己PR
+--------------------------------------------------
+{% if self_pr_heading %}
+{{ self_pr_heading }}
+
+{% endif %}
+{{ self_pr or "" }}
+
+以上
