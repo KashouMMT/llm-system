@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from app.documents.dates import JST
 from app.documents.renderers.base import Renderer
-from app.documents.renderers.text_renderer import TextRenderer
+from app.documents.renderers.docx_renderer import DocxRenderer
 from app.documents.renderers.xlsx_renderer import XlsxRenderer
 from app.documents.schemas_rirekisho import Rirekisho
 from app.documents.schemas_shokumu import ShokumuKeirekisho
@@ -161,14 +161,21 @@ def make_document_tools(
                 time.perf_counter() - start,
             )
 
-            # Deliberately terse, and carries no identifier. Everything
-            # here is read by the model and may end up quoted in its
-            # reply; the download link comes from the message attachment,
-            # not from this text.
+            # Everything here is read by the model and may end up quoted in
+            # its reply. The link ban is not decoration: told only that a
+            # file "is attached", the model will build a plausible download
+            # path around the filename — a first test run produced
+            # "sandbox:/mnt/data/...", a convention from its training data
+            # that points nowhere in this application. The real download
+            # comes from the message attachment, so any link it writes is
+            # broken by construction.
             return (
                 f"{display_name} generated successfully as {filename}. "
-                "It is attached to this message for the user to download. "
-                "Tell the user it is ready — do not repeat its contents."
+                "The download is attached to this message automatically and "
+                "the user can already see it. Tell them it is ready, in one "
+                "or two sentences. Never write a link, URL, file path, or "
+                "download button of your own — any link you write will be "
+                "broken. Do not repeat the document's contents."
             )
 
         return StructuredTool.from_function(
@@ -192,7 +199,7 @@ def make_document_tools(
             name="generate_shokumu_keirekisho",
             description=_SHOKUMU_KEIREKISHO_DESCRIPTION,
             schema_cls=ShokumuKeirekisho,
-            renderer=TextRenderer("shokumu_keirekisho.txt"),
+            renderer=DocxRenderer(),
             document_type="shokumu_keirekisho",
             display_name="職務経歴書",
             filename_prefix="shokumu_keirekisho",

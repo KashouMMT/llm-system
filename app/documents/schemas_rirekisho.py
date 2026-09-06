@@ -212,8 +212,12 @@ class Rirekisho(BaseModel):
             "Furigana for the address: kana, plus the block numbers written "
             "as digits and hyphens, e.g. 'とうきょうと しんじゅくく "
             "しんじゅく3-12-8'. Keep the numbers — they are read as numbers, "
-            "not transcribed into kana. No kanji. Leave empty whenever the "
-            "address itself is empty."
+            "not transcribed into kana. No kanji. Ask for this whenever "
+            "the address is filled in at all: the form prints a ふりがな "
+            "line directly above the address, and leaving it blank under a "
+            "written address reads as an unfinished document. Leave empty "
+            "only when the address itself is empty, or when the user "
+            "declines."
         ),
     )
     phone: str = Field(
@@ -273,7 +277,12 @@ class Rirekisho(BaseModel):
             "学歴, oldest first. Conventionally each school appears twice, "
             "as 入学 and 卒業. You MUST ask the user about their education "
             "history before generating — a 履歴書 is not normally "
-            "submittable without it. Leave empty only if the user "
+            "submittable without it. Ask how far back their schooling "
+            "goes, not just for their most recent school: a Japanese "
+            "reader expects the list to start at 高校入学, or at 中学校卒業 "
+            "for someone who did not attend 高校, and a list that begins at "
+            "university reads as a gap in the applicant's history rather "
+            "than as a shorter answer. Leave empty only if the user "
             "explicitly asks you to."
         ),
     )

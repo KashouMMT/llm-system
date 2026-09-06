@@ -2,7 +2,81 @@ from itertools import pairwise
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.documents.schemas_rirekisho import KANA_PATTERN, YearMonth
+from app.documents.schemas_rirekisho import KANA_PATTERN, LicenseEntry, YearMonth
+
+
+class TechGroup(BaseModel):
+    """
+    One labelled group of technologies, e.g. 【言語】Java.
+
+    Grouped rather than a flat list because the reference 職務経歴書 prints
+    them under headings — 言語, OS, DB, ツール — and a single undifferentiated
+    run of names reads as a keyword dump to a Japanese reviewer.
+    """
+
+    category: str = Field(
+        min_length=1,
+        max_length=30,
+        description=(
+            "The group heading without brackets, e.g. '言語', 'OS', 'DB', "
+            "'フレームワーク', '開発環境'. The renderer adds the 【】."
+        ),
+    )
+    items: list[str] = Field(
+        min_length=1,
+        description="Names in this group, e.g. ['Java', 'Kotlin'].",
+    )
+
+
+class PcSkill(BaseModel):
+    """One row of ■PCスキル."""
+
+    tool: str = Field(
+        min_length=1,
+        max_length=50,
+        description="Software name, e.g. 'Word', 'Excel', 'PowerPoint'.",
+    )
+    level: str = Field(
+        min_length=1,
+        max_length=200,
+        description=(
+            "What the user can actually do with it, in their own words, e.g. "
+            "'入力、四則演算、SUM、vlookup関数などの使用が可能なレベル'. Never "
+            "invent a level — ask what they can do rather than guessing from "
+            "the job title."
+        ),
+    )
+
+
+class SelfPrBlock(BaseModel):
+    """
+    One ＜見出し＞ plus its paragraphs in ■自己PR.
+
+    A list rather than a single block because two of the four reference
+    documents make two separate points under 自己PR, each with its own
+    heading. Collapsing them into one field forced the earlier version to
+    either drop a heading or bury it inside the body text.
+    """
+
+    heading: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Short headline for this point, conventionally in ＜＞, e.g. "
+            "'＜相手の気持ちを汲み取り臨機応変に対応する力＞'. Leave empty if "
+            "the user does not want one."
+        ),
+    )
+    body: str = Field(
+        min_length=1,
+        max_length=1500,
+        description=(
+            "The paragraphs supporting this point. Use newlines between "
+            "paragraphs. Only include wording the user has seen and "
+            "approved — never write this on their behalf without showing it "
+            "first."
+        ),
+    )
 
 
 class JobEntry(BaseModel):
@@ -10,12 +84,11 @@ class JobEntry(BaseModel):
     One employer's entry in 職務経歴.
 
     Deliberately one flexible shape rather than several rigid ones: the
-    reference 職務経歴書 this was built against has two job entries with
-    different internal structure — one uses a side table of technologies
-    and team size next to a single project description, the other is plain
-    paragraphs with no side table at all. Every content field here is
-    optional so either shape (and everything in between) fits without
-    forcing a project sub-table onto a job that never had one.
+    four reference 職務経歴書 this was built against differ in which fields
+    they use — one carries a side table of technologies and team size, one
+    leads with 事業内容 and 資本金, one is plain paragraphs. Every content
+    field here is optional so any of those shapes fits without forcing a
+    section onto a job that never had one.
     """
 
     company: str = Field(
@@ -39,10 +112,35 @@ class JobEntry(BaseModel):
             "dispatch/secondment work — leave empty otherwise."
         ),
     )
+    business_description: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "事業内容: what the employer does, e.g. '医療クリニック（美容外科・"
+            "形成外科）'. Worth asking for — a reviewer who does not know the "
+            "company reads this first. Leave empty if the user does not know."
+        ),
+    )
+    capital: str | None = Field(
+        default=None,
+        max_length=50,
+        description=(
+            "資本金 as written, including the unit, e.g. '500万円'. Leave "
+            "empty unless the user states it — never look it up or estimate."
+        ),
+    )
+    employee_count: str | None = Field(
+        default=None,
+        max_length=50,
+        description=(
+            "従業員数 as written, e.g. '約50名', '470人（2024年12月現在）'. "
+            "Leave empty unless the user states it."
+        ),
+    )
     employment_type: str | None = Field(
         default=None,
         max_length=50,
-        description="雇用形態, e.g. '正社員', '契約社員'.",
+        description="雇用形態, e.g. '正社員', '契約社員', '派遣社員'.",
     )
     title: str | None = Field(
         default=None,
@@ -56,7 +154,10 @@ class JobEntry(BaseModel):
     overview: str | None = Field(
         default=None,
         max_length=1000,
-        description="業務概要・プロジェクト概要, in the user's own words.",
+        description=(
+            "業務概要・プロジェクト概要, in the user's own words. Use "
+            "newlines between paragraphs."
+        ),
     )
     phase: str | None = Field(
         default=None,
@@ -78,9 +179,14 @@ class JobEntry(BaseModel):
             "number or result they never gave."
         ),
     )
-    technologies: list[str] = Field(
+    technologies: list[TechGroup] = Field(
         default_factory=list,
-        description="使用技術・開発環境, e.g. ['Java', 'Android', 'iOS'].",
+        description=(
+            "使用技術・開発環境, grouped by kind, e.g. "
+            "[{category: '言語', items: ['Java']}, "
+            "{category: 'OS', items: ['Android', 'iOS']}]. Leave empty for "
+            "a job with no technical stack to list."
+        ),
     )
     team_size: str | None = Field(
         default=None,
@@ -99,6 +205,12 @@ class ShokumuKeirekisho(BaseModel):
     Jobs are newest first — the opposite convention from 履歴書's 学歴・
     職歴, which is oldest first. Worth stating explicitly rather than
     assuming the model transfers the other document's convention here.
+
+    Unlike 履歴書, this document has no fixed form: it flows onto as many
+    pages as it needs, so nothing here is constrained by how much room a
+    printed box has. Every section is optional and simply does not render
+    when empty — a user with no certifications gets no ■資格 heading at
+    all, rather than a heading over an empty table.
     """
 
     name: str = Field(
@@ -123,7 +235,8 @@ class ShokumuKeirekisho(BaseModel):
         max_length=1000,
         description=(
             "職務要約: a short paragraph summarizing the whole career to "
-            "date. Only include wording the user has seen and approved."
+            "date. Use newlines between paragraphs. Only include wording "
+            "the user has seen and approved."
         ),
     )
     jobs: list[JobEntry] = Field(
@@ -134,26 +247,35 @@ class ShokumuKeirekisho(BaseModel):
             "no work history at all."
         ),
     )
+    pc_skills: list[PcSkill] = Field(
+        default_factory=list,
+        description=(
+            "■PCスキル: which software the user can operate and to what "
+            "level. Worth asking about for office and administrative roles, "
+            "where it is conventional. Leave empty if the user has nothing "
+            "to state — the section is then omitted entirely."
+        ),
+    )
+    licenses: list[LicenseEntry] = Field(
+        default_factory=list,
+        description=(
+            "■資格, oldest first. Same rules as the 履歴書's 免許・資格, "
+            "including the 合格 / 取得 suffix. Unlike the 履歴書 form there "
+            "is no row limit here, so list everything relevant. Leave empty "
+            "if the user holds none."
+        ),
+    )
     applicable_skills: list[str] = Field(
         default_factory=list,
         description="活かせる経験・知識・技術: one bullet per item.",
     )
-    self_pr_heading: str | None = Field(
-        default=None,
-        max_length=200,
+    self_pr_blocks: list[SelfPrBlock] = Field(
+        default_factory=list,
         description=(
-            "自己PR's short bold headline, e.g. '＜変化の多い現場でも、仕様"
-            "を正しく理解し開発を前に進める力＞'. Leave empty if the user "
-            "does not want one."
-        ),
-    )
-    self_pr: str | None = Field(
-        default=None,
-        max_length=1500,
-        description=(
-            "自己PR body. Only include wording the user has seen and "
-            "approved — never write this on their behalf without showing "
-            "it first."
+            "■自己PR, one entry per distinct strength being argued. Most "
+            "documents have one or two. Only include wording the user has "
+            "seen and approved — never write this on their behalf without "
+            "showing it first."
         ),
     )
 
