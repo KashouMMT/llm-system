@@ -17,11 +17,16 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.documents.dates import age_on, today_in_japan
-from app.documents.layouts import rirekisho_jis as layout
-from app.documents.layouts.rirekisho_jis import LayoutOverflow, Region
-from app.documents.renderers.ooxml import restore_drawings
-from app.documents.schemas_rirekisho import HistoryEntry, LicenseEntry, Rirekisho
+from app.plugins.documents.dates import age_on
+from app.plugins.documents.layouts import rirekisho_jis as layout
+from app.plugins.documents.layouts.rirekisho_jis import LayoutOverflow, Region
+from app.plugins.documents.renderers.ooxml import restore_drawings
+from app.plugins.documents.schemas_rirekisho import (
+    HistoryEntry,
+    LicenseEntry,
+    Rirekisho,
+)
+from app.utils.jst import today_in_japan
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -39,8 +44,15 @@ class XlsxRenderer:
     extension = "xlsx"
     content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
-    def __init__(self, template_name: str = "rirekisho.xlsx") -> None:
+    def __init__(
+        self, template_name: str = "rirekisho.xlsx", *, dated: bool = True
+    ) -> None:
         self._template_path = TEMPLATES_DIR / template_name
+        # A filled 履歴書 is stamped with the year it was produced. A blank
+        # form printed to fill in by hand must not be — that year would be
+        # wrong by the time anyone uses it, and the applicant writes the
+        # real date themselves.
+        self._dated = dated
 
     def render(self, data: Rirekisho) -> bytes:
         workbook = load_workbook(self._template_path)
@@ -48,7 +60,12 @@ class XlsxRenderer:
 
         generated_on = today_in_japan()
 
-        _write(sheet, layout.GENERATED_ON_CELL, f"{generated_on.year}年　現在")
+        if self._dated:
+            _write(
+                sheet,
+                layout.GENERATED_ON_CELL,
+                f"{generated_on.year}年　現在",
+            )
 
         _write_basic_information(sheet, data, generated_on)
         _write_history(sheet, data)

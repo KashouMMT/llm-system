@@ -15,8 +15,8 @@ from pathlib import Path
 
 from docxtpl import DocxTemplate
 
-from app.documents.dates import today_in_japan
-from app.documents.schemas_shokumu import JobEntry, ShokumuKeirekisho
+from app.plugins.documents.schemas_shokumu import JobEntry, ShokumuKeirekisho
+from app.utils.jst import today_in_japan
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
@@ -35,12 +35,16 @@ class DocxRenderer:
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 
-    def __init__(self, template_name: str = "shokumu_keirekisho.docx") -> None:
+    def __init__(
+        self, template_name: str = "shokumu_keirekisho.docx", *, dated: bool = True
+    ) -> None:
         self._template_path = TEMPLATES_DIR / template_name
+        # See XlsxRenderer._dated: a blank form carries no generation date.
+        self._dated = dated
 
     def render(self, data: ShokumuKeirekisho) -> bytes:
         template = DocxTemplate(self._template_path)
-        template.render(_context(data))
+        template.render(_context(data, dated=self._dated))
 
         buffer = BytesIO()
         template.save(buffer)
@@ -62,14 +66,17 @@ def _paragraphs(text: str | None) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-def _context(data: ShokumuKeirekisho) -> dict:
+def _context(data: ShokumuKeirekisho, *, dated: bool = True) -> dict:
     name_line = data.name
 
     if data.name_kana:
         name_line = f"{data.name}（{data.name_kana}）"
 
     return {
-        "generated_year": today_in_japan().year,
+        # The whole right-aligned date line, not just the year: the
+        # template run is "{{ generated_on_line }}" so a blank form renders
+        # an empty line rather than a stray "年現在".
+        "generated_on_line": f"{today_in_japan().year}年現在" if dated else "",
         "name_line": name_line,
         "summary_lines": _paragraphs(data.summary),
         "jobs": [

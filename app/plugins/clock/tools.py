@@ -3,7 +3,7 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-from app.documents.dates import JST
+from app.utils.jst import JST
 from app.utils.logger import logger
 
 
@@ -29,5 +29,5 @@ def get_current_time() -> str:
         "Tool completed | tool=get_current_time elapsed=%.4fs",
         elapsed,
     )
-    
+
     return result

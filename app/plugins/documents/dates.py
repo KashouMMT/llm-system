@@ -1,10 +1,12 @@
-from datetime import date, datetime, timedelta, timezone
+"""
+How a Japanese date is printed on these documents.
 
-# Japan has observed no daylight saving since 1951, so a fixed +09:00 is
-# exact rather than an approximation. Preferred over ZoneInfo("Asia/Tokyo")
-# because zoneinfo has no tz database on Windows and would need the tzdata
-# package installed just to avoid a runtime error in development.
-JST = timezone(timedelta(hours=9), name="JST")
+The timezone and "what day is it" live in app/utils/jst.py — those are
+application facts, not document facts, and a plugin that owned them
+would have to be imported by every other plugin that needs a clock.
+"""
+
+from datetime import date
 
 # Newest first: era lookups walk this list checking "on or after start".
 _ERAS = [
@@ -13,17 +15,6 @@ _ERAS = [
     ("大正", date(1912, 7, 30)),
     ("明治", date(1868, 1, 25)),
 ]
-
-
-def today_in_japan() -> date:
-    """
-    The current date in Japan.
-
-    These documents are dated for a Japanese reader, so UTC would print the
-    wrong day for nine hours out of every twenty-four — a difference nobody
-    would notice until a submission deadline.
-    """
-    return datetime.now(tz=JST).date()
 
 
 def to_japanese_era(value: date) -> str:

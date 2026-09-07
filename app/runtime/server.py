@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from app.config.settings import (
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
 )
+from app.plugins.documents.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
@@ -387,6 +389,40 @@ def create_api(application: Application) -> FastAPI:
             generator(),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
+        )
+
+    # ---- documents --------------------------------------------------
+
+    @app.get(
+        "/documents/blank/{doc_type}",
+        dependencies=[Depends(current_user)],
+    )
+    async def download_blank_document(doc_type: str):
+        """
+        Stream an empty form for the user to fill in by hand.
+
+        Rendered on demand from the same template and renderer the agent's
+        generate_* tools use. There is no stored file and no database row,
+        because a blank form carries nothing worth keeping — so this does
+        not touch file_storage or file_repository the way /files does.
+
+        Registered whether or not the documents tool plugin is enabled:
+        downloading a blank form and having the agent fill one in are
+        separate features that happen to share a renderer.
+        """
+        document = BLANK_DOCUMENTS.get(doc_type)
+
+        if document is None:
+            raise HTTPException(status_code=404, detail="Unknown document type")
+
+        # openpyxl and docxtpl are synchronous and not instant; keep them
+        # off the event loop, as document_tool's generate does.
+        content = await asyncio.to_thread(document.render)
+
+        return Response(
+            content=content,
+            media_type=document.renderer.content_type,
+            headers={"Content-Disposition": _attachment_header(document.filename)},
         )
 
     # ---- settings ------------------------------------------------------

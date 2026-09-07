@@ -148,3 +148,16 @@ export function eventsUrl(conversationId: string): string {
 export function fileDownloadUrl(fileId: string): string {
 	return `${API_BASE_URL}/files/${fileId}`;
 }
+
+/**
+ * Absolute URL for a blank, fill-by-hand form.
+ *
+ * A plain link, for the same reasons as fileDownloadUrl: the response
+ * carries Content-Disposition: attachment, and the SameSite=Lax session
+ * cookie rides along on the GET navigation.
+ *
+ * docType is "rirekisho" or "shokumu_keirekisho".
+ */
+export function blankDocumentUrl(docType: string): string {
+	return `${API_BASE_URL}/documents/blank/${docType}`;
+}

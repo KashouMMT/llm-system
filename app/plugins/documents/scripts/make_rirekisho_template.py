@@ -5,9 +5,9 @@ Everything the applicant wrote is cleared; everything pre-printed on the
 form — labels, ruling, the photo box, print setup — is kept. Run it from
 the project root and check the result in Excel before committing it:
 
-    python scripts/make_rirekisho_template.py \
+    python -m app.plugins.documents.scripts.make_rirekisho_template \
         "documentation/other/【履歴書】K.xlsx" \
-        app/documents/templates/rirekisho.xlsx
+        app/plugins/documents/templates/rirekisho.xlsx
 """
 
 import sys
@@ -16,8 +16,8 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from app.documents.layouts import rirekisho_jis as layout
-from app.documents.renderers.ooxml import restore_drawings
+from app.plugins.documents.layouts import rirekisho_jis as layout
+from app.plugins.documents.renderers.ooxml import restore_drawings
 
 # Cells the applicant filled in on the sample. Everything else on the sheet
 # is pre-printed and must survive.

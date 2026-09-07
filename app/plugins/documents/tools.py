@@ -7,15 +7,15 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from app.documents.dates import JST
-from app.documents.renderers.base import Renderer
-from app.documents.renderers.docx_renderer import DocxRenderer
-from app.documents.renderers.xlsx_renderer import XlsxRenderer
-from app.documents.schemas_rirekisho import Rirekisho
-from app.documents.schemas_shokumu import ShokumuKeirekisho
+from app.plugins.documents.renderers.base import Renderer
+from app.plugins.documents.renderers.docx_renderer import DocxRenderer
+from app.plugins.documents.renderers.xlsx_renderer import XlsxRenderer
+from app.plugins.documents.schemas_rirekisho import Rirekisho
+from app.plugins.documents.schemas_shokumu import ShokumuKeirekisho
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
+from app.utils.jst import JST
 from app.utils.logger import logger
 
 # These strings are sent to the model on every single call as part of the

@@ -16,8 +16,6 @@ from app.agent.context.conversation_context_builder import (
 from app.agent.context.history_context_builder import HistoryContextBuilder
 from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.agent.graph import AgentGraph
-from app.agent.tools import TOOLS
-from app.agent.tools.document_tool import make_document_tools
 from app.authentication.auth_service import AuthService
 from app.authentication.seed import seed_root
 from app.config.runtime_settings import (
@@ -29,14 +27,17 @@ from app.config.runtime_settings import (
 from app.config.settings import (
     AUTH_BOOTSTRAP_PASSWORD,
     AUTH_BOOTSTRAP_USERNAME,
+    ENABLED_TOOL_PLUGINS,
     FILE_STORAGE_DIR,
     LLM_PROVIDER,
     SESSION_TTL_HOURS,
+    TOOL_PLUGINS_STRICT,
 )
 from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
+from app.plugins import ToolContext, load_tools
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
@@ -260,19 +261,23 @@ class Application:
             )
             logger.info("Conversation context builder initialized")
 
+            logger.info("Loading tool plugins")
+            tools = load_tools(
+                ToolContext(
+                    file_storage=self.file_storage,
+                    file_repository=self.file_repository,
+                    conversation_repository=self.conversation_repository,
+                ),
+                enabled=ENABLED_TOOL_PLUGINS,
+                strict=TOOL_PLUGINS_STRICT,
+            )
+
             logger.info("Creating AgentGraph")
             self.agent_graph = AgentGraph(
                 llm=self.llm,
                 settings=self.runtime_settings,
                 provider=LLM_PROVIDER,
-                tools=[
-                    *TOOLS,
-                    *make_document_tools(
-                        storage=self.file_storage,
-                        file_repository=self.file_repository,
-                        conversation_repository=self.conversation_repository,
-                    ),
-                ],
+                tools=tools,
                 checkpointer=self.checkpointer,
                 conversation_context_builder=(self.conversation_context_builder),
             )

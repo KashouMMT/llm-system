@@ -4,7 +4,7 @@ from itertools import pairwise
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.documents.dates import today_in_japan
+from app.utils.jst import today_in_japan
 
 # Kana only: hiragana, katakana, the long-vowel mark, and spaces. Furigana
 # containing kanji is the most common malformed input, and it is invisible
@@ -404,3 +404,21 @@ class Rirekisho(BaseModel):
                 )
 
         return self
+
+    @classmethod
+    def blank(cls) -> "Rirekisho":
+        """
+        An all-empty instance, for rendering a printable form to fill in
+        by hand.
+
+        Built with `model_construct` because it deliberately does not pass
+        validation: `name` is the one required field, and a blank form has
+        none. Every other field already defaults to empty, and the renderer
+        writes nothing for an empty field, so what comes out is the form's
+        ruling and labels with all the value cells left clear.
+
+        If a future revision adds another required field, this call keeps
+        working — `model_construct` fills it from its default — but a field
+        with no default would need adding here.
+        """
+        return cls.model_construct(name="")

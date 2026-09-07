@@ -2,7 +2,11 @@ from itertools import pairwise
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.documents.schemas_rirekisho import KANA_PATTERN, LicenseEntry, YearMonth
+from app.plugins.documents.schemas_rirekisho import (
+    KANA_PATTERN,
+    LicenseEntry,
+    YearMonth,
+)
 
 
 class TechGroup(BaseModel):
@@ -305,3 +309,13 @@ class ShokumuKeirekisho(BaseModel):
                 )
 
         return self
+
+    @classmethod
+    def blank(cls) -> "ShokumuKeirekisho":
+        """
+        An all-empty instance, for rendering a printable form to fill in
+        by hand. See Rirekisho.blank — same reasoning: `model_construct`
+        because a blank form has no name, and every other field already
+        defaults to empty and is skipped by the renderer when so.
+        """
+        return cls.model_construct(name="")

@@ -9,11 +9,11 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from app.agent.state import AgentState, get_current_turn_messages
-from app.utils import conversation_log
-from app.utils.logger import logger
 from app.config.runtime_settings import RuntimeSettingsHolder
 from app.llm.sampling import bind_sampling
 from app.llm.system_prompt import load_system_prompt
+from app.utils import conversation_log
+from app.utils.logger import logger
 
 AgentNode = Callable[[AgentState, RunnableConfig], dict]
 
@@ -64,7 +64,7 @@ def create_agent_node(
             len(prepared_context),
             len(current_turn_messages),
         )
-        
+
         # One snapshot for this whole turn. A change landing mid-stream
         # must not apply to half an answer.
         current_settings = settings.current

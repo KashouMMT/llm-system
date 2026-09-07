@@ -197,6 +197,24 @@ CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
 # started from the repository root either way.
 FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
 
+# TOOL PLUGINS
+# Allowlist of plugin folder names under app/plugins/. Empty (the default)
+# means load every plugin folder that is present, which is the point:
+# adding a tool is dropping a folder in and restarting. Set this only to
+# run a subset — a future video-analysis subsystem that has no business
+# seeing the document tools, say.
+ENABLED_TOOL_PLUGINS = frozenset(
+    name.strip()
+    for name in os.getenv("ENABLED_TOOL_PLUGINS", "").split(",")
+    if name.strip()
+)
+# A plugin that fails to load is skipped with an ERROR by default, so one
+# broken folder does not stop the process from serving. Turn this on
+# where a missing tool is worse than a failed startup: a silently absent
+# document plugin surfaces as the assistant apologising that it cannot
+# generate a 履歴書, which looks like a model fault, not a load fault.
+TOOL_PLUGINS_STRICT = get_bool("TOOL_PLUGINS_STRICT", False)
+
 # Reasoning models reject function tools on /v1/chat/completions unless
 # reasoning is explicitly off. Empty means the parameter is not sent at all,
 # which is what non-reasoning models and other OpenAI-compatible hosts want.

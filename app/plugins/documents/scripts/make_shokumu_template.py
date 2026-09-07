@@ -7,9 +7,9 @@ keeps all of that and replaces the sample's text with docxtpl tags.
 
 Run it from the project root and open the result in Word before committing:
 
-    python -m scripts.make_shokumu_template \
+    python -m app.plugins.documents.scripts.make_shokumu_template \
         "documentation/other/T【職務経歴書】.docx" \
-        app/documents/templates/shokumu_keirekisho.docx
+        app/plugins/documents/templates/shokumu_keirekisho.docx
 
 Almost all branching lives in the renderer, not here: it flattens each
 section into a list of lines and the template just loops over them. A
@@ -241,7 +241,8 @@ def main(source: str, destination: str) -> None:
 if __name__ == "__main__":
     if len(sys.argv) != 3:
         raise SystemExit(
-            "usage: python -m scripts.make_shokumu_template <source.docx> "
+            "usage: python -m app.plugins.documents.scripts.make_shokumu_template "
+            "<source.docx> "
             "<destination.docx>"
         )
 
