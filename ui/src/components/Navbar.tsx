@@ -6,6 +6,10 @@ const Navbar = () => {
 	const { theme, toggleTheme } = useTheme();
 	const auth = useAuth();
 
+	const canSeeSettings =
+		auth.status === "authenticated" &&
+		(auth.user.role === "admin" || auth.user.role === "root");
+
 	return (
 		<nav className="navbar">
 			<div className="container-fluid">
@@ -26,16 +30,18 @@ const Navbar = () => {
 							</NavLink>
 						</li>
 
-						<li className="nav-item">
-							<NavLink
-								to="/setting"
-								className={({ isActive }) =>
-									isActive ? "nav-link active" : "nav-link"
-								}
-							>
-								Setting
-							</NavLink>
-						</li>
+						{canSeeSettings && (
+							<li className="nav-item">
+								<NavLink
+									to="/setting"
+									className={({ isActive }) =>
+										isActive ? "nav-link active" : "nav-link"
+									}
+								>
+									Setting
+								</NavLink>
+							</li>
+						)}
 					</ul>
 
 					<button
@@ -46,24 +52,6 @@ const Navbar = () => {
 					>
 						{theme === "light" ? "Dark mode" : "Light mode"}
 					</button>
-
-					{auth.status === "authenticated" && (
-						<>
-							<span className="navbar-user">
-								{auth.user.username}
-							</span>
-
-							<button
-								type="button"
-								className="theme-toggle"
-								onClick={() => {
-									void auth.logout();
-								}}
-							>
-								Sign out
-							</button>
-						</>
-					)}
 				</div>
 			</div>
 		</nav>

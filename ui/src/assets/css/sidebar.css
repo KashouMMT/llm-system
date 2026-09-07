@@ -91,6 +91,25 @@
 	display: none;
 }
 
+/* Pinned below the blank forms; separated by a rule, like .sidebar-forms. */
+.sidebar-account {
+	flex-shrink: 0;
+	padding: 0.75rem;
+	border-top: 1px solid var(--border);
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.sidebar-account-name {
+	padding: 0 0.3rem;
+	font-size: 0.875rem;
+	color: var(--text-muted);
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
 @media (max-width: 767.98px) {
 	.sidebar {
 		position: fixed;

@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 
 import "../assets/css/sidebar.css";
 import { blankDocumentUrl } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 import {
 	useConversations,
 	useCreateConversation,
@@ -26,6 +27,7 @@ const BLANK_FORMS = [
 
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 	const navigate = useNavigate();
+	const auth = useAuth();
 
 	const conversationsQuery = useConversations();
 	const createConversation = useCreateConversation();
@@ -120,6 +122,24 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 						</a>
 					))}
 				</div>
+
+				{auth.status === "authenticated" && (
+					<div className="sidebar-account">
+						<span className="sidebar-account-name">
+							{auth.user.username}
+						</span>
+
+						<button
+							type="button"
+							className="theme-toggle w-100"
+							onClick={() => {
+								void auth.logout();
+							}}
+						>
+							Sign out
+						</button>
+					</div>
+				)}
 			</aside>
 		</>
 	);
