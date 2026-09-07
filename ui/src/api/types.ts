@@ -44,6 +44,10 @@ export type CreateConversationResponse = {
 	id: string;
 };
 
+export type RenameConversationRequest = {
+	title: string;
+};
+
 export type SendMessageRequest = {
 	client_message_id: string;
 	message: string;

@@ -20,13 +20,14 @@ from app.config.settings import (
     COOKIE_SECURE,
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
+    TITLE_MAX_CHARS,
 )
 from app.llm.system_prompt import load_first_message
 from app.plugins.documents.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
-from app.runtime.event_bus import Event
+from app.runtime.event_bus import EVENT_CONVERSATION_UPDATED, Event
 from app.services.chat_service import ConversationHeldError
 from app.utils.logger import logger
 
@@ -50,6 +51,12 @@ class LoginRequest(BaseModel):
     # not a real password.
     username: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=1024)
+
+
+class RenameConversationRequest(BaseModel):
+    # min_length=1 rejects an empty string; the handler also strips and
+    # re-checks, since "   " passes this but is not a title.
+    title: str = Field(min_length=1, max_length=TITLE_MAX_CHARS)
 
 
 def format_sse(event: Event) -> str:
@@ -194,6 +201,56 @@ def create_api(application: Application) -> FastAPI:
             }
             for conversation in conversations
         ]
+
+    @app.patch("/conversations/{conversation_id}")
+    async def rename_conversation(
+        body: RenameConversationRequest,
+        conversation: Annotated[Conversation, Depends(require_conversation)],
+    ):
+        """
+        Set a conversation's title by hand.
+
+        The auto-title only runs while the title is the placeholder, so a
+        rename here also settles the title for good — nothing overwrites it
+        afterward.
+        """
+        title = body.title.strip()
+
+        if not title:
+            raise HTTPException(
+                status_code=422,
+                detail="Title must not be empty.",
+            )
+
+        await application.conversation_repository.update_title(
+            conversation.id,
+            title,
+        )
+
+        # Re-read so the response carries the fresh updated_at that
+        # update_title set, rather than the value from the dependency.
+        updated = await application.conversation_repository.get_conversation(
+            conversation.id,
+        )
+
+        if updated is None:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        application.event_bus.publish(
+            Event(
+                type=EVENT_CONVERSATION_UPDATED,
+                conversation_id=conversation.id,
+                payload={"conversation_id": str(conversation.id)},
+            )
+        )
+
+        return {
+            "id": str(updated.id),
+            "title": updated.title,
+            "status": updated.status,
+            "created_at": updated.created_at,
+            "updated_at": updated.updated_at,
+        }
 
     @app.get("/conversations/{conversation_id}/messages")
     async def get_messages(

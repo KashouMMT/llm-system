@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 import "../assets/css/sidebar.css";
@@ -6,12 +7,18 @@ import { useAuth } from "../auth/AuthContext";
 import {
 	useConversations,
 	useCreateConversation,
+	useRenameConversation,
 } from "../hooks/useConversations";
 
 type SidebarProps = {
 	isOpen: boolean;
 	onClose: () => void;
 };
+
+// Matches Field(max_length=TITLE_MAX_CHARS) on PATCH /conversations; the
+// server rejects anything longer with 422, this just stops the user
+// getting there.
+const TITLE_MAX_CHARS = 80;
 
 // The empty forms a user can take without talking to the assistant first.
 // Kept here rather than fetched: the two document types are fixed, and a
@@ -31,6 +38,12 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 
 	const conversationsQuery = useConversations();
 	const createConversation = useCreateConversation();
+	const renameConversation = useRenameConversation();
+
+	// Which conversation is being renamed inline, and its working text.
+	// null means none — the list renders normally.
+	const [editingId, setEditingId] = useState<string | null>(null);
+	const [draft, setDraft] = useState("");
 
 	const handleCreate = () => {
 		createConversation.mutate(undefined, {
@@ -39,6 +52,28 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 				onClose();
 			},
 		});
+	};
+
+	const startEditing = (id: string, currentTitle: string) => {
+		setEditingId(id);
+		setDraft(currentTitle);
+	};
+
+	const cancelEditing = () => {
+		setEditingId(null);
+		setDraft("");
+	};
+
+	const commitEditing = (id: string, currentTitle: string) => {
+		const next = draft.trim();
+
+		// Skip the request when nothing changed or the field was cleared —
+		// an empty title is rejected by the server anyway.
+		if (next && next !== currentTitle) {
+			renameConversation.mutate({ id, title: next });
+		}
+
+		cancelEditing();
 	};
 
 	return (
@@ -82,21 +117,57 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 					{/* NavLink rather than a button: a real href means
 					    middle-click opens the same conversation in a second
 					    tab, which is the fastest way to see the shared
-					    stream working. */}
-					{conversationsQuery.data?.map((conversation) => (
-						<NavLink
-							key={conversation.id}
-							to={`/c/${conversation.id}`}
-							className={({ isActive }) =>
-								`sidebar-conversation${isActive ? " active" : ""}`
-							}
-							onClick={onClose}
-						>
-							<span className="conversation-title">
-								{conversation.title}
-							</span>
-						</NavLink>
-					))}
+					    stream working. Double-click swaps the row for an
+					    input to rename it in place. */}
+					{conversationsQuery.data?.map((conversation) =>
+						editingId === conversation.id ? (
+							<input
+								key={conversation.id}
+								className="sidebar-conversation-edit"
+								value={draft}
+								autoFocus
+								maxLength={TITLE_MAX_CHARS}
+								onChange={(event) =>
+									setDraft(event.target.value)
+								}
+								onBlur={() =>
+									commitEditing(
+										conversation.id,
+										conversation.title,
+									)
+								}
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										// Triggers onBlur, which commits.
+										event.currentTarget.blur();
+									} else if (event.key === "Escape") {
+										cancelEditing();
+									}
+								}}
+							/>
+						) : (
+							<NavLink
+								key={conversation.id}
+								to={`/c/${conversation.id}`}
+								className={({ isActive }) =>
+									`sidebar-conversation${isActive ? " active" : ""}`
+								}
+								onClick={onClose}
+								onDoubleClick={(event) => {
+									event.preventDefault();
+									startEditing(
+										conversation.id,
+										conversation.title,
+									);
+								}}
+								title="Double-click to rename"
+							>
+								<span className="conversation-title">
+									{conversation.title}
+								</span>
+							</NavLink>
+						),
+					)}
 				</div>
 
 				{/* Plain anchors, like the message attachments in Chat: the

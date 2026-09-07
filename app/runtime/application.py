@@ -48,6 +48,7 @@ from app.repositories.user_repository import UserRepository
 from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import EventBus
 from app.services.chat_service import ChatService
+from app.services.conversation_title_service import ConversationTitleService
 from app.services.summarization_service import SummarizationService
 from app.storage.local_storage import LocalFileStorage
 from app.utils.logger import logger, set_log_level
@@ -167,6 +168,7 @@ class Application:
         self._background_tasks: set[asyncio.Task] = set()
 
         self.summarization_service: SummarizationService | None = None
+        self.title_service: ConversationTitleService | None = None
         self.chat_service: ChatService | None = None
 
     async def initialize(self) -> None:
@@ -292,12 +294,22 @@ class Application:
             )
             logger.info("Summarization service initialized")
 
+            logger.info("Creating conversation title service")
+            self.title_service = ConversationTitleService(
+                llm=self.llm,
+                conversation_repository=self.conversation_repository,
+                event_bus=self.event_bus,
+                settings=self.runtime_settings,
+            )
+            logger.info("Conversation title service initialized")
+
             logger.info("Creating ChatService")
             self.chat_service = ChatService(
                 agent_graph=self.agent_graph,
                 conversation_repository=self.conversation_repository,
                 message_repository=self.message_repository,
                 summarization_service=self.summarization_service,
+                title_service=self.title_service,
                 event_bus=self.event_bus,
                 conversation_lock=self.conversation_lock,
                 spawn=self.spawn,
@@ -458,6 +470,7 @@ class Application:
             self.summary_context_builder = None
             self.history_context_builder = None
             self.summarization_service = None
+            self.title_service = None
             self.chat_service = None
             self.llm = None
 

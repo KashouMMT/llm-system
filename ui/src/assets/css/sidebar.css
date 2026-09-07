@@ -52,6 +52,24 @@
 	text-overflow: ellipsis;
 }
 
+/* The inline rename field. Same box as .sidebar-conversation so the row
+   does not jump when it swaps in. */
+.sidebar-conversation-edit {
+	width: 100%;
+	display: block;
+	padding: 0.7rem 0.8rem;
+	margin-bottom: 0.2rem;
+	border: 1px solid var(--accent);
+	border-radius: 0.5rem;
+	background-color: var(--bg);
+	color: var(--text);
+	font: inherit;
+}
+
+.sidebar-conversation-edit:focus {
+	outline: none;
+}
+
 /* Pinned below the conversation list, which takes the remaining height. */
 .sidebar-forms {
 	flex-shrink: 0;

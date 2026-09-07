@@ -25,6 +25,7 @@ from app.runtime.event_bus import (
     Event,
     EventBus,
 )
+from app.services.conversation_title_service import ConversationTitleService
 from app.services.summarization_service import SummarizationService
 from app.utils import conversation_log
 from app.utils.logger import logger
@@ -81,6 +82,7 @@ class ChatService:
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository,
         summarization_service: SummarizationService,
+        title_service: ConversationTitleService,
         event_bus: EventBus,
         conversation_lock: ConversationLock,
         spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task],
@@ -89,6 +91,7 @@ class ChatService:
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
         self.summarization_service = summarization_service
+        self.title_service = title_service
         self.event_bus = event_bus
         self.conversation_lock = conversation_lock
 
@@ -213,10 +216,33 @@ class ChatService:
                 extra=conversation_log.CONVERSATION_ONLY,
             )
 
+        # Name the conversation from this message, in the background, so it
+        # never adds latency to the turn. The service no-ops unless the
+        # title is still the placeholder, so spawning it every turn is
+        # cheap and the first turn is not a special case here.
+        self._spawn(self._run_title_generation(conversation_id, user_input))
+
         return TurnIds(
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
         )
+
+    async def _run_title_generation(
+        self,
+        conversation_id: UUID,
+        first_user_message: str,
+    ) -> None:
+        try:
+            await self.title_service.generate_and_store(
+                conversation_id,
+                first_user_message,
+            )
+
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Background title generation failed | conversation=%s",
+                conversation_id,
+            )
 
     async def generate(
         self,

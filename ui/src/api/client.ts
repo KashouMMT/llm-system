@@ -3,6 +3,7 @@ import type {
 	Conversation,
 	CreateConversationResponse,
 	Message,
+	RenameConversationRequest,
 	SendMessageRequest,
 	SendMessageResponse,
 } from "./types";
@@ -101,6 +102,18 @@ export function listConversations(
 export function createConversation(): Promise<CreateConversationResponse> {
 	return request<CreateConversationResponse>("/conversations", {
 		method: "POST",
+	});
+}
+
+export function renameConversation(
+	conversationId: string,
+	title: string,
+): Promise<Conversation> {
+	const body: RenameConversationRequest = { title };
+
+	return request<Conversation>(`/conversations/${conversationId}`, {
+		method: "PATCH",
+		body: JSON.stringify(body),
 	});
 }
 

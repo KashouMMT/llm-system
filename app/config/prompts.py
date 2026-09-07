@@ -49,6 +49,12 @@ REQUIRED_FILES = (
 # so adding it must not turn every existing set incomplete.
 FIRST_MESSAGE_FILE = "first_message.txt"
 
+# Optional per-set file: the instruction used to name a conversation from
+# its first user message (see system_prompt.load_title_prompt). Also not in
+# REQUIRED_FILES — a set without one falls back to the built-in
+# DEFAULT_TITLE_PROMPT, so titling keeps working for every existing set.
+TITLE_PROMPT_FILE = "title_prompt.txt"
+
 
 def _missing_files(set_dir: Path) -> list[str]:
     """Names of the required files that are absent or empty in ``set_dir``."""

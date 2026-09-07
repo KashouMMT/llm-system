@@ -1,11 +1,12 @@
 from app.config.prompts import (
     FIRST_MESSAGE_FILE,
     SYSTEM_PROMPT_FILE,
+    TITLE_PROMPT_FILE,
     read_optional_prompt_file,
     read_prompt_file,
     resolve_prompt_set,
 )
-from app.config.settings import DEFAULT_PROMPT, SYSTEM_PROMPT
+from app.config.settings import DEFAULT_PROMPT, DEFAULT_TITLE_PROMPT, SYSTEM_PROMPT
 from app.utils.logger import logger
 
 # Appended to every persona, including the fallback.
@@ -155,5 +156,47 @@ def load_first_message(name: str = SYSTEM_PROMPT) -> str | None:
             set_dir.name,
             len(content),
         )
+
+    return content
+
+
+def load_title_prompt(name: str = SYSTEM_PROMPT) -> str:
+    """
+    Load the conversation-title instruction for prompt set `name` from
+    app/prompts/<name>/title_prompt.txt, or return the built-in
+    DEFAULT_TITLE_PROMPT if the set has none.
+
+    Follows the same all-or-nothing set resolution as the persona: an
+    incomplete `name` folder falls back to the `default` set, and the
+    optional file is read from whichever set won. Unlike the persona there
+    is no RESPONSE_FORMAT contract — the text is an internal instruction to
+    a model, and its output is stored as the title, not shown to the model
+    again.
+
+    Never raises: a set without the file, or an unreadable one, both mean
+    "use the default", because a conversation that could not be titled is a
+    worse outcome than one titled by the generic prompt.
+    """
+    try:
+        set_dir = resolve_prompt_set(name)
+        content = read_optional_prompt_file(set_dir, TITLE_PROMPT_FILE)
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "Title prompt unreadable, using built-in default | "
+            "name=%s error=%s",
+            name,
+            error,
+        )
+        return DEFAULT_TITLE_PROMPT
+
+    if content is None:
+        return DEFAULT_TITLE_PROMPT
+
+    logger.debug(
+        "Title prompt loaded | name=%s dir=%s characters=%s",
+        name,
+        set_dir.name,
+        len(content),
+    )
 
     return content

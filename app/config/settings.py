@@ -127,6 +127,25 @@ DEFAULT_PROMPT = """
 You are a helpful, intelligent, and reliable AI assistant.
 Provide clear, accurate, and thoughtful responses.
 """.strip()
+
+# Used to name a conversation from its first user message when a prompt set
+# has no title_prompt.txt of its own. `{message}` is substituted with that
+# message verbatim (by str.replace, not str.format, so braces in the user's
+# text are harmless). Kept terse on purpose: a small model follows a short
+# instruction more reliably, and the output is only a few words.
+DEFAULT_TITLE_PROMPT = """
+Write a short, specific title for a conversation that opens with the
+message below. Reply with the title alone — in the message's own
+language, five words or fewer, no quotation marks, no trailing
+punctuation, no leading label such as "Title:".
+
+MESSAGE:
+{message}
+""".strip()
+
+# Upper bound on a conversation title, for both the auto-generated one and
+# the manual rename endpoint.
+TITLE_MAX_CHARS = get_positive_int("TITLE_MAX_CHARS", 80)
 # Persona and summarization prompts form one set under
 # app/prompts/<SYSTEM_PROMPT>/. If that folder is missing any of its three
 # files the whole set falls back to app/prompts/default/ (see
