@@ -27,7 +27,18 @@ class ConversationRepository:
         self,
         user_id: UUID,
         title: str = "New Conversation",
+        first_message: str | None = None,
     ) -> UUID:
+        """
+        Create a conversation, optionally seeding the assistant's opening
+        message.
+
+        When `first_message` is given it is inserted as a complete
+        `assistant` row in the same transaction as the conversation, so a
+        client never observes the conversation without its greeting. The
+        row has no `reply_to_message_id` — it answers no user message —
+        which the schema allows.
+        """
         conversation_id = uuid4()
 
         async with (
@@ -42,10 +53,20 @@ class ConversationRepository:
                 (conversation_id, user_id, title),
             )
 
+            if first_message:
+                await cur.execute(
+                    """
+                    INSERT INTO messages (conversation_id, role, content, status)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (conversation_id, "assistant", first_message, "complete"),
+                )
+
         logger.info(
-            "Conversation created | id=%s user=%s",
+            "Conversation created | id=%s user=%s seeded_greeting=%s",
             conversation_id,
             user_id,
+            first_message is not None,
         )
 
         return conversation_id

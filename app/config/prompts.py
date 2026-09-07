@@ -43,6 +43,12 @@ REQUIRED_FILES = (
     SUMMARY_MERGE_PROMPT_FILE,
 )
 
+# Optional per-set file: the assistant's opening message, seeded into a
+# conversation when it is created (see system_prompt.load_first_message).
+# Not in REQUIRED_FILES — a set without one simply opens with no greeting,
+# so adding it must not turn every existing set incomplete.
+FIRST_MESSAGE_FILE = "first_message.txt"
+
 
 def _missing_files(set_dir: Path) -> list[str]:
     """Names of the required files that are absent or empty in ``set_dir``."""
@@ -102,7 +108,7 @@ def resolve_prompt_set(name: str) -> Path:
 
 def read_prompt_file(set_dir: Path, filename: str) -> str:
     """
-    Read one prompt file from an already-resolved set directory.
+    Read one required prompt file from an already-resolved set directory.
 
     ``resolve_prompt_set`` has verified the file exists and is non-empty;
     the checks here guard against a race or a bad caller, not the normal
@@ -119,3 +125,22 @@ def read_prompt_file(set_dir: Path, filename: str) -> str:
         raise ValueError(f"Prompt file must not be empty: {path}")
 
     return content
+
+
+def read_optional_prompt_file(set_dir: Path, filename: str) -> str | None:
+    """
+    Read one optional prompt file, or return ``None`` if it is absent or
+    empty.
+
+    Unlike ``read_prompt_file`` this never raises for a missing or blank
+    file: an optional file that is not there is a normal state, not a
+    misconfiguration.
+    """
+    path = set_dir / filename
+
+    if not path.is_file():
+        return None
+
+    content = path.read_text(encoding="utf-8").strip()
+
+    return content or None

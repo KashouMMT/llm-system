@@ -1,5 +1,7 @@
 from app.config.prompts import (
+    FIRST_MESSAGE_FILE,
     SYSTEM_PROMPT_FILE,
+    read_optional_prompt_file,
     read_prompt_file,
     resolve_prompt_set,
 )
@@ -114,3 +116,44 @@ def load_system_prompt(name: str = SYSTEM_PROMPT) -> str:
     )
 
     return _compose(content)
+
+
+def load_first_message(name: str = SYSTEM_PROMPT) -> str | None:
+    """
+    Load the assistant's opening message for prompt set `name` from
+    app/prompts/<name>/first_message.txt, or return None if the set has
+    none.
+
+    This is the greeting seeded as the first assistant turn when a
+    conversation is created, so the persona has a stated direction before
+    the user's first message. It follows the same all-or-nothing set
+    resolution as the persona: an incomplete `name` folder falls back to
+    the `default` set, and this reads `first_message.txt` from whichever
+    set won. Unlike the persona there is no RESPONSE_FORMAT contract to
+    attach — the text is shown to the user and read back to the model
+    verbatim.
+
+    Returns None, never raises: a set without a first message is a normal
+    state, and a conversation that opens with no greeting is fine.
+    """
+    try:
+        set_dir = resolve_prompt_set(name)
+        content = read_optional_prompt_file(set_dir, FIRST_MESSAGE_FILE)
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "First message unreadable, opening with no greeting | "
+            "name=%s error=%s",
+            name,
+            error,
+        )
+        return None
+
+    if content is not None:
+        logger.debug(
+            "First message loaded | name=%s dir=%s characters=%s",
+            name,
+            set_dir.name,
+            len(content),
+        )
+
+    return content

@@ -2,10 +2,23 @@ import asyncio
 from uuid import UUID, uuid4
 
 from app.config.runtime_settings import PERSISTED_FIELDS
+from app.llm.system_prompt import load_first_message
 from app.runtime.application import Application
 from app.runtime.event_bus import EVENT_MESSAGE_DELTA
 from app.services.chat_service import TERMINAL_EVENTS
 from app.utils.logger import logger
+
+
+async def _new_conversation(application: Application, user_id: UUID) -> UUID:
+    """Create a conversation, seeding the current persona's opening message."""
+    first_message = load_first_message(
+        application.runtime_settings.current.system_prompt_name,
+    )
+
+    return await application.conversation_repository.create_conversation(
+        user_id=user_id,
+        first_message=first_message,
+    )
 
 
 async def select_conversation(
@@ -23,9 +36,7 @@ async def select_conversation(
         print("No existing conversations found.")
         print("Starting a new conversation...")
 
-        conversation_id = await application.conversation_repository.create_conversation(
-            user_id=user_id,
-        )
+        conversation_id = await _new_conversation(application, user_id)
 
         print(f"Conversation: {conversation_id}")
 
@@ -50,11 +61,7 @@ async def select_conversation(
             raise SystemExit
 
         if choice == "n":
-            conversation_id = (
-                await application.conversation_repository.create_conversation(
-                    user_id=user_id,
-                )
-            )
+            conversation_id = await _new_conversation(application, user_id)
 
             print("\nNew conversation created.")
             print(f"Conversation: {conversation_id}")

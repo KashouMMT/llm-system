@@ -21,6 +21,7 @@ from app.config.settings import (
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
 )
+from app.llm.system_prompt import load_first_message
 from app.plugins.documents.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.message_repository import TurnLookup
@@ -156,8 +157,16 @@ def create_api(application: Application) -> FastAPI:
 
     @app.post("/conversations")
     async def create_conversation(user: Annotated[User, Depends(current_user)]):
+        # Resolved from the runtime persona, not the env one, so switching
+        # system_prompt_name at runtime changes the greeting new
+        # conversations open with.
+        first_message = load_first_message(
+            application.runtime_settings.current.system_prompt_name,
+        )
+
         conversation_id = await application.conversation_repository.create_conversation(
             user_id=user.id,
+            first_message=first_message,
         )
 
         return {"id": str(conversation_id)}

@@ -61,6 +61,8 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 
 The summarization prompts are part of the prompt set selected by `SYSTEM_PROMPT`: `app/prompts/<SYSTEM_PROMPT>/summary_chunk_prompt.txt` and `summary_merge_prompt.txt` are read at import time. A set is all-or-nothing — if that folder is missing or has an empty copy of `system_prompt.txt`, `summary_chunk_prompt.txt`, or `summary_merge_prompt.txt`, the loader logs a warning and falls back to `app/prompts/default/` for the entire set. The `default/` set itself must always be complete; an incomplete one raises at startup.
 
+A set may also contain an optional `first_message.txt`. When present, its text is seeded as a complete `assistant` message when a conversation is created (resolved from the runtime persona, in the same transaction as the conversation), so the persona opens with a stated direction and the model sees that greeting as its own first turn. A set without the file simply opens with no greeting.
+
 ### Runtime settings
 
 Most of the table above is a *default*, not a fixed value — 14 of those variables can be changed while the process is running, without a restart, and the change persists across restarts too. `DB_*`, `LLM_API_KEY`, `LLM_BASE_URL`, `LLM_PROVIDER`, `FILE_STORAGE_DIR` and the other connection/provider settings cannot: they are bound into objects (a connection pool, an LLM client, a storage root) that are only built once, at startup.
@@ -309,6 +311,7 @@ llm-system/
 │   │   │   └── summary_merge_prompt.txt          # Prompt for merging a chunk summary into the durable summary
 │   │   ├── anna/                                 # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
 │   │   │   ├── system_prompt.txt
+│   │   │   ├── first_message.txt                 # Optional: assistant's opening message, seeded at conversation creation
 │   │   │   ├── summary_chunk_prompt.txt
 │   │   │   └── summary_merge_prompt.txt
 │   │   └── debug/                                # Diagnostic persona: reports what context actually reached the model
