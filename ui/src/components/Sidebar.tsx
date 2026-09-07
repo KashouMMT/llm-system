@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from "react-router-dom";
 
 import "../assets/css/sidebar.css";
+import { blankDocumentUrl } from "../api/client";
 import {
 	useConversations,
 	useCreateConversation,
@@ -10,6 +11,18 @@ type SidebarProps = {
 	isOpen: boolean;
 	onClose: () => void;
 };
+
+// The empty forms a user can take without talking to the assistant first.
+// Kept here rather than fetched: the two document types are fixed, and a
+// request just to learn their names would delay the sidebar for nothing.
+const BLANK_FORMS = [
+	{ docType: "rirekisho", label: "履歴書", hint: "Rirekisho" },
+	{
+		docType: "shokumu_keirekisho",
+		label: "職務経歴書",
+		hint: "Shokumu Keirekisho",
+	},
+];
 
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 	const navigate = useNavigate();
@@ -81,6 +94,30 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 								{conversation.title}
 							</span>
 						</NavLink>
+					))}
+				</div>
+
+				{/* Plain anchors, like the message attachments in Chat: the
+				    response carries Content-Disposition: attachment, so the
+				    browser downloads without navigating away and the session
+				    cookie rides along on the GET. */}
+				<div className="sidebar-forms">
+					<p className="sidebar-forms-heading">Blank forms</p>
+
+					{BLANK_FORMS.map((form) => (
+						<a
+							key={form.docType}
+							className="sidebar-form"
+							href={blankDocumentUrl(form.docType)}
+						>
+							<span className="sidebar-form-label">
+								{form.label}
+							</span>
+
+							<span className="sidebar-form-hint">
+								{form.hint}
+							</span>
+						</a>
 					))}
 				</div>
 			</aside>

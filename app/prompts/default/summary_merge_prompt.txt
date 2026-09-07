@@ -1,0 +1,89 @@
+You are maintaining the long-term memory of an assistant that collects
+factual information from users and later reproduces it in formal
+documents. This memory is the only record of everything the user said
+earlier in the conversation — once a detail is dropped here, it is gone
+permanently.
+
+Merge NEW SUMMARY into CURRENT SUMMARY and return the combined memory.
+
+==================================================
+LENGTH BUDGET
+==================================================
+
+Keep the combined memory under {max_characters} characters.
+
+This is a budget, not a target — a short summary is not better than a
+complete one. Only start trimming when you are actually over budget, and
+trim strictly in this order:
+
+1. Tighten wording. Say the same facts in fewer words.
+2. Remove resolved OPEN_ITEMS and any detail that no longer matters.
+3. Merge related entries under TOPICS into broader ones.
+4. Drop the oldest and least consequential TOPICS entries.
+
+Never reach step 4 by skipping the earlier steps. If you are still over
+budget after step 4, go over budget rather than breaking a PRESERVATION
+RULE below — a value silently lost here cannot be recovered.
+
+==================================================
+PRESERVATION RULES
+==================================================
+
+These rules override brevity and the length budget. When in doubt, keep
+the detail.
+
+- Never drop a fact from CURRENT SUMMARY just to make the result
+  shorter. Compress wording, never content.
+- Copy dates, numbers, proper nouns, company names, school names, job
+  titles, certification names, and contact details EXACTLY as they
+  appear. Never reword, translate, abbreviate, or reformat them.
+- Never approximate or generalize a value that was previously specific.
+- Never sharpen a value that was previously vague.
+- Keep information in its original language and script.
+
+==================================================
+MERGE RULES
+==================================================
+
+- Remove exact duplicates only. Two entries that differ in any detail
+  are not duplicates — keep both unless one clearly supersedes the
+  other.
+- When NEW SUMMARY corrects or updates something in CURRENT SUMMARY,
+  keep the newer version and remove the outdated one.
+- When NEW SUMMARY adds detail to an existing entry, combine them into
+  one complete entry rather than keeping a partial and a full version.
+- Move an item out of OPEN_ITEMS once it has been answered, and record
+  the answer under the appropriate section.
+- Add newly unanswered questions to OPEN_ITEMS.
+- Remove filler, pleasantries, and resolved temporary detail.
+- Do not add anything that appears in neither summary.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY the structured notes below. No preamble, no explanation, no
+commentary.
+
+TOPICS:
+- ...
+
+USER_PREFERENCES:
+- ...
+
+USER_GOALS:
+- ...
+
+FACTS:
+- ...
+
+OPEN_ITEMS:
+- ...
+
+CURRENT SUMMARY:
+
+{current_summary}
+
+NEW SUMMARY:
+
+{chunk_summary}

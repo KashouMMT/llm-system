@@ -1,8 +1,14 @@
 import os
-from pathlib import Path
 from urllib.parse import quote
 
 from dotenv import load_dotenv
+
+from app.config.prompts import (
+    SUMMARY_CHUNK_PROMPT_FILE,
+    SUMMARY_MERGE_PROMPT_FILE,
+    read_prompt_file,
+    resolve_prompt_set,
+)
 
 load_dotenv()
 
@@ -60,22 +66,6 @@ def get_valid_string(
         raise ValueError(f"{environment_name} must not be empty.")
 
     return value
-
-
-def read_prompt(filename: str) -> str:
-    base_path = Path(__file__).resolve().parent.parent
-    prompts_dir = base_path / "prompts"
-    prompt_path = prompts_dir / filename
-
-    if not prompt_path.is_file():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-
-    content = prompt_path.read_text(encoding="utf-8").strip()
-
-    if not content:
-        raise ValueError(f"Prompt file must not be empty: {prompt_path}")
-
-    return content
 
 
 # LLM CONFIGURATION
@@ -137,8 +127,15 @@ DEFAULT_PROMPT = """
 You are a helpful, intelligent, and reliable AI assistant.
 Provide clear, accurate, and thoughtful responses.
 """.strip()
-SUMMARY_CHUNK_PROMPT = read_prompt("default_summary_chunk_prompt.txt")
-SUMMARY_MERGE_PROMPT = read_prompt("default_summary_merge_prompt.txt")
+# Persona and summarization prompts form one set under
+# app/prompts/<SYSTEM_PROMPT>/. If that folder is missing any of its three
+# files the whole set falls back to app/prompts/default/ (see
+# app.config.prompts). The summarization prompts are resolved once here at
+# import; the persona is reloaded per turn by system_prompt.py so a
+# runtime system_prompt_name change takes effect without a restart.
+_PROMPT_SET_DIR = resolve_prompt_set(SYSTEM_PROMPT)
+SUMMARY_CHUNK_PROMPT = read_prompt_file(_PROMPT_SET_DIR, SUMMARY_CHUNK_PROMPT_FILE)
+SUMMARY_MERGE_PROMPT = read_prompt_file(_PROMPT_SET_DIR, SUMMARY_MERGE_PROMPT_FILE)
 
 # POSTGRESQL CONFIGURATION
 DB_HOST = get_valid_string("DB_HOST", "localhost")

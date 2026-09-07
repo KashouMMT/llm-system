@@ -104,10 +104,11 @@ def _bounded_float(minimum: float, maximum: float):
 
 def _prompt_name(name: str, value: object) -> str:
     """
-    A persona filename, without directory separators.
+    A prompt-set name, without directory separators.
 
-    Path traversal matters here: this value eventually becomes a filename
-    under app/prompts/, and it will one day arrive from an HTTP request.
+    Path traversal matters here: this value eventually becomes a
+    directory name under app/prompts/, and it will one day arrive from an
+    HTTP request.
     """
     text = str(value).strip()
 

@@ -1,9 +1,10 @@
-from pathlib import Path
-
+from app.config.prompts import (
+    SYSTEM_PROMPT_FILE,
+    read_prompt_file,
+    resolve_prompt_set,
+)
 from app.config.settings import DEFAULT_PROMPT, SYSTEM_PROMPT
 from app.utils.logger import logger
-
-PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 # Appended to every persona, including the fallback.
 #
@@ -81,37 +82,35 @@ def _compose(persona: str) -> str:
 
 def load_system_prompt(name: str = SYSTEM_PROMPT) -> str:
     """
-    Load a system prompt by name from app/prompts/<name>.txt.
+    Load the persona for prompt set `name` from
+    app/prompts/<name>/system_prompt.txt.
 
-    Falls back to DEFAULT_PROMPT if the file is missing or empty, so a
-    bad SYSTEM_PROMPT value degrades to a usable assistant rather than
-    failing startup.
+    Set resolution is all-or-nothing (see app.config.prompts): if that
+    folder is missing any of its three files, the whole set — persona
+    included — falls back to app/prompts/default/. If even that cannot be
+    read, this degrades to the built-in DEFAULT_PROMPT rather than
+    failing, so a bad SYSTEM_PROMPT value never takes the assistant down.
 
     Every path returns the persona with RESPONSE_FORMAT appended — the
     formatting contract belongs to the interface, so it must not depend
     on which persona happened to load, or on whether one loaded at all.
     """
-    prompt_path = PROMPTS_DIR / f"{name}.txt"
-
-    if not prompt_path.is_file():
+    try:
+        set_dir = resolve_prompt_set(name)
+        content = read_prompt_file(set_dir, SYSTEM_PROMPT_FILE)
+    except (OSError, ValueError) as error:
         logger.warning(
-            "System prompt not found, using default | name=%s path=%s",
+            "Persona unreadable, using built-in default | name=%s error=%s",
             name,
-            prompt_path,
-        )
-        return _compose(DEFAULT_PROMPT)
-
-    content = prompt_path.read_text(encoding="utf-8").strip()
-
-    if not content:
-        logger.warning(
-            "System prompt file is empty, using default | name=%s",
-            name,
+            error,
         )
         return _compose(DEFAULT_PROMPT)
 
     logger.debug(
-        "System prompt loaded | name=%s characters=%s", name, len(content)
+        "System prompt loaded | name=%s dir=%s characters=%s",
+        name,
+        set_dir.name,
+        len(content),
     )
 
     return _compose(content)

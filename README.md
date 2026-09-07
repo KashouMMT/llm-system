@@ -23,7 +23,7 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 |---|---|---|
 | `LLM_PROVIDER` | `ollama` | `ollama` or `openai`. Selects which factory in `app/llm/` builds the client |
 | `MODEL_NAME` | `qwen3.5:4b` | Model identifier for the selected provider (e.g. an Ollama tag, or `deepseek/deepseek-chat-v3.1:free` on OpenRouter) |
-| `SYSTEM_PROMPT` | `default` | Filename (without `.txt`) under `app/prompts/`; falls back to a built-in prompt if the file is missing or empty |
+| `SYSTEM_PROMPT` | `default` | Name of a folder under `app/prompts/` holding the prompt set (`system_prompt.txt` + the two summary prompts); the whole set falls back to `app/prompts/default/` if any of the three files is missing or empty |
 | `TEMPERATURE` | `0.3` | Sampling temperature. Deliberately low — this assistant must not invent facts it was not given |
 | `MAX_TOKENS` | `2048` | Max tokens generated per response (`num_predict` on Ollama, `max_tokens` on OpenAI) |
 | `TOP_P` | `0.9` | Nucleus sampling |
@@ -59,7 +59,7 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 | `COOKIE_SECURE` | `false` | `Secure` flag on the session cookie. Off by default because it cannot be set over plain-HTTP localhost; turn on in any real deployment |
 | `COOKIE_SAMESITE` | `lax` | `SameSite` flag: `lax`, `strict`, or `none` |
 
-The summarization prompts are not environment-configurable: `app/prompts/default_summary_chunk_prompt.txt` and `app/prompts/default_summary_merge_prompt.txt` are read at import time and must exist and be non-empty.
+The summarization prompts are part of the prompt set selected by `SYSTEM_PROMPT`: `app/prompts/<SYSTEM_PROMPT>/summary_chunk_prompt.txt` and `summary_merge_prompt.txt` are read at import time. A set is all-or-nothing — if that folder is missing or has an empty copy of `system_prompt.txt`, `summary_chunk_prompt.txt`, or `summary_merge_prompt.txt`, the loader logs a warning and falls back to `app/prompts/default/` for the entire set. The `default/` set itself must always be complete; an incomplete one raises at startup.
 
 ### Runtime settings
 
@@ -208,7 +208,7 @@ Authentication is a gate around the whole app rather than a route. `AuthProvider
 
 The context is split across two files on purpose — `AuthContext.ts` exports the hook and context, `AuthProvider.tsx` exports only the component — because a module exporting both a component and non-components defeats React Fast Refresh, which ESLint's `react-refresh/only-export-components` rule enforces.
 
-**LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona named by `SYSTEM_PROMPT` from `app/prompts/*.txt`, falling back to a built-in prompt if the file is missing or empty — so a bad value degrades to a usable assistant rather than failing startup. Every persona, including that fallback, is composed with a shared `RESPONSE_FORMAT` block describing what the frontend can render (Markdown, mermaid, no LaTeX or raw HTML). That contract belongs to the interface rather than to any one persona, so it lives in code instead of being duplicated across prompt files. The composed prompt is measured against `SYSTEM_PROMPT_TOKEN_BUDGET` and logs a warning when it exceeds it — a warning rather than an error, because a long prompt still works and this module's contract is to degrade rather than block startup.
+**LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona from the prompt set named by `SYSTEM_PROMPT` (`app/prompts/<name>/system_prompt.txt`); set resolution lives in `config/prompts.py` and is all-or-nothing, so an incomplete folder falls back — persona included — to the `default/` set, and an unreadable `default/` degrades to a built-in prompt rather than failing startup. Every persona, including that fallback, is composed with a shared `RESPONSE_FORMAT` block describing what the frontend can render (Markdown, mermaid, no LaTeX or raw HTML). That contract belongs to the interface rather than to any one persona, so it lives in code instead of being duplicated across prompt files. The composed prompt is measured against `SYSTEM_PROMPT_TOKEN_BUDGET` and logs a warning when it exceeds it — a warning rather than an error, because a long prompt still works and this module's contract is to degrade rather than block startup.
 
 ## API (`--api` mode)
 
@@ -260,6 +260,7 @@ llm-system/
 │   │   └── tokens.py                             # Opaque session token generation and SHA-256 hashing
 │   ├── config/
 │   │   ├── settings.py                           # Load env values, other constant variables
+│   │   ├── prompts.py                            # Resolve the prompt set folder for SYSTEM_PROMPT, all-or-nothing fallback to default/
 │   │   └── runtime_settings.py                   # RuntimeSettings (frozen dataclass) + RuntimeSettingsHolder
 │   ├── database/
 │   │   ├── connection.py                         # Sync connection (schema setup only) + the shared async pool
@@ -299,14 +300,21 @@ llm-system/
 │   │   ├── ollama_llm.py                         # Builds ChatOllama (local models)
 │   │   ├── openai_llm.py                         # Builds ChatOpenAI; custom base_url covers OpenRouter/Groq/DeepSeek
 │   │   ├── sampling.py                           # Binds runtime sampling params onto the LLM client per provider
-│   │   └── system_prompt.py                      # Loads the persona named by SYSTEM_PROMPT, with fallback
+│   │   └── system_prompt.py                      # Loads the persona from the SYSTEM_PROMPT set, with fallback
 │   ├── logs/                                     # Daily log files + conversation_log.log (gitignored)
-│   ├── prompts/                                  # System prompts (persona files) + summarization prompts
-│   │   ├── default.txt                           # Fallback persona, selected by SYSTEM_PROMPT
-│   │   ├── anna.txt                              # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
-│   │   ├── debug.txt                             # Diagnostic persona: reports what context actually reached the model
-│   │   ├── default_summary_chunk_prompt.txt      # Prompt for summarizing one batch of new messages
-│   │   └── default_summary_merge_prompt.txt      # Prompt for merging a chunk summary into the durable summary
+│   ├── prompts/                                  # One folder per prompt set; SYSTEM_PROMPT picks one
+│   │   ├── default/                              # Fallback set — must always be complete
+│   │   │   ├── system_prompt.txt                 # Generic fallback persona
+│   │   │   ├── summary_chunk_prompt.txt          # Prompt for summarizing one batch of new messages
+│   │   │   └── summary_merge_prompt.txt          # Prompt for merging a chunk summary into the durable summary
+│   │   ├── anna/                                 # Japanese career-support persona (履歴書 / 職務経歴書 interviewing)
+│   │   │   ├── system_prompt.txt
+│   │   │   ├── summary_chunk_prompt.txt
+│   │   │   └── summary_merge_prompt.txt
+│   │   └── debug/                                # Diagnostic persona: reports what context actually reached the model
+│   │       ├── system_prompt.txt
+│   │       ├── summary_chunk_prompt.txt
+│   │       └── summary_merge_prompt.txt
 │   ├── repositories/                             # Functions for executing SQL against tables.
 │   │   ├── conversation_repository.py            # Conversation CRUD + lifecycle status; owned by a user
 │   │   ├── file_repository.py                    # generated_files rows: document metadata + storage key

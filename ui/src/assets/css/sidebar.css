@@ -52,6 +52,41 @@
 	text-overflow: ellipsis;
 }
 
+/* Pinned below the conversation list, which takes the remaining height. */
+.sidebar-forms {
+	flex-shrink: 0;
+	padding: 0.5rem;
+	border-top: 1px solid var(--border);
+}
+
+.sidebar-forms-heading {
+	margin: 0 0 0.2rem;
+	padding: 0 0.8rem;
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.sidebar-form {
+	display: flex;
+	align-items: baseline;
+	gap: 0.5rem;
+	padding: 0.5rem 0.8rem;
+	border-radius: 0.5rem;
+	color: var(--text);
+	text-decoration: none;
+}
+
+.sidebar-form:hover {
+	background-color: var(--border);
+}
+
+.sidebar-form-hint {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+
 .sidebar-backdrop {
 	display: none;
 }
