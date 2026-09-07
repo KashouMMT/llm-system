@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.102.8",
     "bootstrap": "^5.3.8",
+    "bootstrap-icons": "^1.13.1",
     "mermaid": "^11.17.2",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",

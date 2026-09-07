@@ -22,15 +22,27 @@
 	padding: 0.5rem;
 }
 
+/* Row wrapper: the conversation link plus its rename button. Position
+   context for the button, and the hover target for the whole row. */
+.sidebar-conversation-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+	margin-bottom: 0.2rem;
+}
+
 .sidebar-conversation {
-	width: 100%;
+	flex: 1;
+	/* Let .conversation-title's ellipsis work inside the flex row. */
+	min-width: 0;
 	display: block;
 	border: none;
 	background: transparent;
 	color: var(--text);
 	text-align: left;
 	padding: 0.7rem 0.8rem;
-	margin-bottom: 0.2rem;
+	/* Room for the rename button so a long title never slides under it. */
+	padding-right: 2.4rem;
 	border-radius: 0.5rem;
 	cursor: pointer;
 	text-decoration: none;
@@ -41,7 +53,7 @@
 	font-weight: 600;
 }
 
-.sidebar-conversation:hover {
+.sidebar-conversation-row:hover .sidebar-conversation {
 	background-color: var(--border);
 }
 
@@ -50,6 +62,36 @@
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
+}
+
+/* Hidden until the row is hovered or the button itself is focused, so the
+   list stays quiet but the control is reachable by keyboard. */
+.sidebar-conversation-rename {
+	position: absolute;
+	right: 0.4rem;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 1.8rem;
+	height: 1.8rem;
+	padding: 0;
+	border: none;
+	border-radius: 0.375rem;
+	background: transparent;
+	color: var(--text-muted);
+	cursor: pointer;
+	opacity: 0;
+	transition: opacity 0.12s ease;
+}
+
+.sidebar-conversation-row:hover .sidebar-conversation-rename,
+.sidebar-conversation-rename:focus-visible {
+	opacity: 1;
+}
+
+.sidebar-conversation-rename:hover {
+	background-color: var(--bg);
+	color: var(--text);
 }
 
 /* The inline rename field. Same box as .sidebar-conversation so the row

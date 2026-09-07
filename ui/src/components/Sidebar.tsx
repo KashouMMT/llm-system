@@ -117,8 +117,8 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 					{/* NavLink rather than a button: a real href means
 					    middle-click opens the same conversation in a second
 					    tab, which is the fastest way to see the shared
-					    stream working. Double-click swaps the row for an
-					    input to rename it in place. */}
+					    stream working. The pen button beside it swaps the
+					    row for an input to rename it in place. */}
 					{conversationsQuery.data?.map((conversation) =>
 						editingId === conversation.id ? (
 							<input
@@ -146,26 +146,40 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 								}}
 							/>
 						) : (
-							<NavLink
+							<div
 								key={conversation.id}
-								to={`/c/${conversation.id}`}
-								className={({ isActive }) =>
-									`sidebar-conversation${isActive ? " active" : ""}`
-								}
-								onClick={onClose}
-								onDoubleClick={(event) => {
-									event.preventDefault();
-									startEditing(
-										conversation.id,
-										conversation.title,
-									);
-								}}
-								title="Double-click to rename"
+								className="sidebar-conversation-row"
 							>
-								<span className="conversation-title">
-									{conversation.title}
-								</span>
-							</NavLink>
+								<NavLink
+									to={`/c/${conversation.id}`}
+									className={({ isActive }) =>
+										`sidebar-conversation${isActive ? " active" : ""}`
+									}
+									onClick={onClose}
+								>
+									<span className="conversation-title">
+										{conversation.title}
+									</span>
+								</NavLink>
+
+								<button
+									type="button"
+									className="sidebar-conversation-rename"
+									aria-label="Rename conversation"
+									title="Rename"
+									onClick={() =>
+										startEditing(
+											conversation.id,
+											conversation.title,
+										)
+									}
+								>
+									<i
+										className="bi bi-pen"
+										aria-hidden="true"
+									/>
+								</button>
+							</div>
 						),
 					)}
 				</div>

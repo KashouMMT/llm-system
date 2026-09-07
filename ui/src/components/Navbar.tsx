@@ -50,9 +50,22 @@ const Navbar = () => {
 						type="button"
 						className="theme-toggle"
 						onClick={toggleTheme}
-						aria-label="Toggle dark mode"
+						aria-label={
+							theme === "light"
+								? "Switch to dark mode"
+								: "Switch to light mode"
+						}
 					>
-						{theme === "light" ? "Dark mode" : "Light mode"}
+						{/* Show the theme you would switch to: moon while
+						    light, sun while dark. */}
+						<i
+							className={
+								theme === "light"
+									? "bi bi-moon-fill"
+									: "bi bi-sun-fill"
+							}
+							aria-hidden="true"
+						/>
 					</button>
 				</div>
 			</div>
