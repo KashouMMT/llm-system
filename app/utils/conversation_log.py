@@ -1,6 +1,7 @@
 import logging
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -29,7 +30,11 @@ _INCLUDED_MODULES = frozenset(
     }
 )
 
-LOG_PATH = Path("app/logs/conversation_log.log")
+# The daily log (app/utils/logger.py) names its file "{date}.log"; this
+# sits beside it as "{date}_conversation.log". Resolved at import time,
+# like the daily log, so a process running past midnight keeps the file
+# it started with.
+LOG_DIR = Path("app/logs")
 
 # Named so set_log_level can leave this handler alone: it must stay at
 # DEBUG even when the ordinary handlers are lifted to INFO.
@@ -130,10 +135,13 @@ def setup_conversation_log(logger: logging.Logger) -> None:
     if not CONVERSATION_LOG:
         return
 
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    log_path = LOG_DIR / f"{date_str}_conversation.log"
 
     handler = RotatingFileHandler(
-        LOG_PATH,
+        log_path,
         maxBytes=5 * 1024 * 1024,
         backupCount=5,
         # Explicit because this file holds Japanese by definition, and the

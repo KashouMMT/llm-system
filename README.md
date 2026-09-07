@@ -47,7 +47,7 @@ Configure via a `.env` file. `DB_PASSWORD` is **required** — it has no usable 
 | `TOOL_PLUGINS_STRICT` | `false` | Fail startup if any tool plugin fails to load, instead of logging and skipping it |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 | `CONSOLE_LOG` | `false` | Also log to console |
-| `CONVERSATION_LOG` | `false` | Writes the root user's turns — the user's text, the assistant's reply, and each tool call's arguments — to `app/logs/conversation_log.log`. Deliberately separate from `LOG_LEVEL`: this decides whether conversation *content* reaches disk, which is a different question from how verbose logging is. Read at import time, so changing it needs a restart |
+| `CONVERSATION_LOG` | `false` | Writes the root user's turns — the user's text, the assistant's reply, and each tool call's arguments — to `app/logs/{date}_conversation.log`. Deliberately separate from `LOG_LEVEL`: this decides whether conversation *content* reaches disk, which is a different question from how verbose logging is. Read at import time, so changing it needs a restart |
 | `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` | `localhost` / `5432` / `llm_system` / `postgres` | PostgreSQL connection |
 | `DB_PASSWORD` | *(required)* | PostgreSQL password |
 | `DB_POOL_MIN_SIZE` / `DB_POOL_MAX_SIZE` | `2` / `10` | Async connection pool size (`psycopg_pool.AsyncConnectionPool`) |
@@ -185,7 +185,7 @@ Dates are stored as 西暦 and converted only when rendered. The application-wid
 
 **Logging** (`app/utils/logger.py`, `app/utils/conversation_log.py`). One named logger (`llm_app`) writing a daily rotating file under `app/logs/`, optionally mirrored to the console. Third-party libraries log to their own loggers and never propagate into it, so `LOG_LEVEL=DEBUG` yields this project's own tracing rather than a firehose.
 
-`CONVERSATION_LOG=true` attaches a second handler writing `app/logs/conversation_log.log`: the turn-by-turn transcript, each tool call's arguments as indented JSON (`ensure_ascii=False`, so Japanese is readable rather than escaped), and the graph's node transitions — enough to see exactly what the model received and what it passed to a tool. Two filters keep the two files apart and both are necessary. `_RootConversationFilter` admits only the root user's turns, and only from the four modules that describe a turn, matched on `LogRecord.module` because every module shares the one logger. `ExcludeConversationContent` does the opposite job on the daily log and the console: without it, `LOG_LEVEL=DEBUG` would copy every name, address and phone number the user typed into a second file whose handling nobody reasoned about.
+`CONVERSATION_LOG=true` attaches a second handler writing `app/logs/{date}_conversation.log`: the turn-by-turn transcript, each tool call's arguments as indented JSON (`ensure_ascii=False`, so Japanese is readable rather than escaped), and the graph's node transitions — enough to see exactly what the model received and what it passed to a tool. Two filters keep the two files apart and both are necessary. `_RootConversationFilter` admits only the root user's turns, and only from the four modules that describe a turn, matched on `LogRecord.module` because every module shares the one logger. `ExcludeConversationContent` does the opposite job on the daily log and the console: without it, `LOG_LEVEL=DEBUG` would copy every name, address and phone number the user typed into a second file whose handling nobody reasoned about.
 
 The acting user reaches those filters through a `ContextVar` set in `ChatService.begin_turn`. asyncio copies the current context into every task it creates, and `begin_turn` is awaited rather than spawned, so the value lands in the caller's context and is inherited by the spawned generation task, the graph run inside it, and each tool call — without threading a parameter through any of them, in either the CLI or the API. The logger itself sits at `DEBUG` whenever conversation logging is on, purely so those records can reach that handler; every other handler carries `LOG_LEVEL` as its own level, which is also why `set_log_level` applies a runtime change per handler instead of to the logger — lifting the logger would silently switch the conversation log off.
 
@@ -303,7 +303,7 @@ llm-system/
 │   │   ├── openai_llm.py                         # Builds ChatOpenAI; custom base_url covers OpenRouter/Groq/DeepSeek
 │   │   ├── sampling.py                           # Binds runtime sampling params onto the LLM client per provider
 │   │   └── system_prompt.py                      # Loads the persona (+ optional first message) from the SYSTEM_PROMPT set, with fallback
-│   ├── logs/                                     # Daily log files + conversation_log.log (gitignored)
+│   ├── logs/                                     # Daily log files + {date}_conversation.log (gitignored)
 │   ├── prompts/                                  # One folder per prompt set; SYSTEM_PROMPT picks one
 │   │   ├── default/                              # Fallback set — must always be complete
 │   │   │   ├── system_prompt.txt                 # Generic fallback persona

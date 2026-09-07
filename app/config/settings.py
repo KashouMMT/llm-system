@@ -218,7 +218,7 @@ TOOL_PLUGINS_STRICT = get_bool("TOOL_PLUGINS_STRICT", False)
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "").strip()
 
 # Writes every root-user turn — the user's text, the assistant's reply, and
-# each tool call's arguments — to app/logs/conversation_log.log. Deliberately
+# each tool call's arguments — to app/logs/{date}_conversation.log. Deliberately
 # separate from LOG_LEVEL: this decides whether conversation *content* is
 # written to disk, which is a different question from how verbose logging is.
 CONVERSATION_LOG = get_bool("CONVERSATION_LOG", False)
