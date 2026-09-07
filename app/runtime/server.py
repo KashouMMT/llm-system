@@ -157,6 +157,11 @@ def create_api(application: Application) -> FastAPI:
 
     @app.post("/conversations")
     async def create_conversation(user: Annotated[User, Depends(current_user)]):
+        # Get-or-create, not create: repeated "New chat" clicks return the
+        # conversation the user has not written to yet rather than stacking
+        # up empty ones. Still POST /conversations, because "give me a
+        # conversation to type into" is what the client is asking for.
+        #
         # Resolved from the runtime persona, not the env one, so switching
         # system_prompt_name at runtime changes the greeting new
         # conversations open with.
@@ -164,9 +169,11 @@ def create_api(application: Application) -> FastAPI:
             application.runtime_settings.current.system_prompt_name,
         )
 
-        conversation_id = await application.conversation_repository.create_conversation(
-            user_id=user.id,
-            first_message=first_message,
+        conversation_id = (
+            await application.conversation_repository.get_or_create_active_draft(
+                user_id=user.id,
+                first_message=first_message,
+            )
         )
 
         return {"id": str(conversation_id)}

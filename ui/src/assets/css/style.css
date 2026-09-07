@@ -31,33 +31,11 @@ body {
 	display: flex;
 }
 
-/* Navbar */
+/* Navbar rules live in navbar.css, imported by Navbar.tsx. */
 
-.navbar {
-	background-color: var(--bg);
-	border-bottom: 1px solid var(--border);
-}
-
-.navbar-brand,
-.nav-link {
-	color: var(--text) !important;
-}
-
-.nav-link.active {
-	font-weight: 600;
-}
-
-.navbar-toggler {
-	border-color: var(--border);
-}
-
-.navbar-toggler-icon {
-	filter: var(--theme-toggler-icon-filter, none);
-}
-
-[data-theme="dark"] .navbar-toggler-icon {
-	filter: invert(1);
-}
+/* Shared bordered button: the navbar's theme toggle and the sidebar's
+   Sign out button. Global rather than owned by either component, because
+   both use it. */
 
 .theme-toggle {
 	background: transparent;

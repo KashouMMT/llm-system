@@ -1,0 +1,38 @@
+/*
+ * Navbar-scoped rules, imported by Navbar.tsx — the same
+ * component-owns-its-stylesheet split chat.css and sidebar.css already use.
+ *
+ * .theme-toggle deliberately stayed in style.css: the sidebar's Sign out
+ * button uses it too, so it is a shared button style rather than a navbar
+ * one, and moving it here would make the sidebar depend on the navbar
+ * being mounted.
+ */
+
+.navbar {
+	background-color: var(--bg);
+	border-bottom: 1px solid var(--border);
+}
+
+.navbar-brand,
+.nav-link {
+	color: var(--text) !important;
+}
+
+.nav-link.active {
+	font-weight: 600;
+}
+
+/* Bootstrap's collapse toggler. Nothing renders it today — the navbar has
+   no collapse — but the theming is kept so adding one does not surface an
+   unstyled control. */
+.navbar-toggler {
+	border-color: var(--border);
+}
+
+.navbar-toggler-icon {
+	filter: var(--theme-toggler-icon-filter, none);
+}
+
+[data-theme="dark"] .navbar-toggler-icon {
+	filter: invert(1);
+}

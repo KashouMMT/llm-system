@@ -371,7 +371,7 @@ llm-system/
 │       │   ├── Navbar.tsx
 │       │   └── Footer.tsx
 │       └── assets/
-│           ├── css/                              # style.css, chat.css, sidebar.css
+│           ├── css/                              # style.css (global) + one per component: navbar.css, chat.css, sidebar.css
 │           └── images/
 ├── documentation/                                # Reference material, including the client-approved samples
 │   └── other/                                    # Real 履歴書 (.xlsx) and 職務経歴書 (.docx) the layouts were built from
