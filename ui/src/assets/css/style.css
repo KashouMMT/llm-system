@@ -133,3 +133,31 @@ body {
 	place-items: center;
 	color: var(--text-muted);
 }
+
+.login-notice {
+	margin: 0 0 1rem;
+	font-size: 0.875rem;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.login-alt {
+	margin: 1.25rem 0 0;
+	font-size: 0.875rem;
+	text-align: center;
+	color: var(--text-muted);
+}
+
+.login-link {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.login-link:hover {
+	color: var(--text-muted);
+}

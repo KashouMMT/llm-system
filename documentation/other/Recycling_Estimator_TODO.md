@@ -1,103 +1,115 @@
 # Recycling Estimator — Project Context & TODO
 
-> **Purpose of this file.** This is a self-contained context restore document.
-> If the chat session is cleared, reading this file alone should be enough to
-> resume work with the same understanding and direction. It does not depend on
-> conversation history, memory, or compaction.
+> **Purpose of this file.** A self-contained context restore document. If the
+> chat session is cleared, reading this alone should be enough to resume with
+> the same understanding and direction. It depends on no conversation history.
 >
-> **Status:** design settled, nothing built yet.
-> **Relationship to this repository:** none, structurally. This is a *separate*
-> codebase and product. It is recorded here only because the design discussion
-> happened in this repo's session. Long term it may become a tool call invoked
-> by the existing agent system (e.g. user uploads a video, the agent calls it).
+> **Status:** image pipeline built and running. Catalog stage written, not yet
+> run. Video and detector work not started.
+>
+> **Relationship to this repository:** none structurally. This is a separate
+> product that happens to be prototyped in `playground/`. Long term it becomes
+> either its own system or a tool the existing agent can call.
+>
+> **Revision note:** the requirement changed after the first draft. Price is no
+> longer the primary output — see §1.
 
 ---
 
 ## 1. The product
 
-A client wants a system that:
+A customer records a room full of recyclable goods. The system identifies which
+items are collectable, counts them, and attaches **approximate physical metadata
+to each** — weight, dimensions, volume, material, and optionally price. A
+trained employee reviews the result and finalises it.
 
-1. Takes a recording of a room full of recyclable goods (warehouse / garage /
-   storage room) — either an uploaded video file or live camera footage.
-2. Identifies which items in that room are recyclable **according to the
-   client's own catalog**, and ignores everything else.
-3. Produces a priced estimate: each identified item type, its count, its unit
-   price from the client's catalog, and a total.
+Sold as **SaaS**. The camera operator is an untrained customer; the reviewer is
+a trained employee.
 
-Sold as **SaaS**. The person recording is a *customer* (untrained). A trained
-employee then reviews the AI's draft and issues the final price.
+### What changed from the original requirement
+
+| Originally | Now |
+|---|---|
+| Primary output was an estimated **price** per item | Primary output is **approximate metadata** per item — weight, size, volume, material. Price is one optional field among several. |
+| Catalog was a price list | Catalog is a **physical properties table**. Price is a column, not the purpose. |
+
+Truck load planning (fitting items into 4-tonne trucks, splitting across
+multiple vehicles) was discussed and is **explicitly out of scope for now**. The
+metadata model is deliberately shaped so it could be added later without
+rework — but do not build it until asked.
+
+### Why the change makes the project easier
+
+An LLM genuinely knows physical facts about kinds of object, and does not know
+prices.
+
+| Property | Can an LLM estimate it? | Why |
+|---|---|---|
+| Weight | Yes, reasonably | A stable physical fact, widely documented |
+| Dimensions | Yes, reasonably | Standard product sizes |
+| Nestable / stackable | Yes | Follows from what the object is |
+| Material | Usually | |
+| **Price** | **No** | Market, region, condition and date dependent |
+
+So the catalog's whole physical block can be populated automatically and
+spot-checked, rather than authored. Price stays `null` until a human or the
+client supplies it.
 
 ### Client-stated constraints
 
 | Constraint | Meaning |
 |---|---|
-| Do not tag the same item twice | No double-billing an object seen in many frames |
-| Same type, different colour or multiple units still counted | Quantity must be captured |
-| No brand or model identification | A 2K TV and a 4K TV are both just "TV". Accepted inaccuracy. |
+| Do not tag the same item twice | No double counting across frames or runs |
+| Same type, different colour or several units | Counted as one row with a quantity |
+| No brand or model identification | A 2K TV and a 4K TV are both "tv" |
 | No damage assessment | Condition is out of scope |
-| Input may be live footage or an uploaded file | Both eventually; file first |
-| Exclusion list exists | A room door is technically recyclable but must **not** be listed |
-| Price source | Client supplies a relational DB or Excel spreadsheet of items + prices |
+| Input may be live footage or an uploaded file | File first, video later |
+| Exclusion list exists | A room door is technically recyclable but must not be listed |
 
-### Answers already given by the developer (do not re-ask)
+### Answers already given by the developer — do not re-ask
 
 | # | Question | Answer |
 |---|---|---|
-| 1 | Who operates the camera? | A **customer**, untrained. A trained employee then reconfirms the AI result and sets the exact price. Sold as SaaS. |
-| 2 | Is human review allowed before pricing? | **Yes — mandatory.** The client requires it. |
-| 3 | Catalog size? | Unknown, but assume **100–1,000+ rows**. Large but not enormous. |
-| 4 | What does "approximate price" mean commercially? | Literally a reference figure from the catalog. The employee sets the real price afterwards. |
-| 5 | Quantity handling? | Group by **item type**: 6 identical plastic chairs become `chair x 6`. Different *types* (plastic chair vs sofa) stay separate rows. Colour does **not** split rows. |
-| 6 | Real-time required? | **No.** Recorded video is fine. A live bounding-box overlay while recording is a nice-to-have, not needed for the prototype. |
+| 1 | Who operates the camera? | An untrained **customer**. A trained employee reconfirms afterwards. Sold as SaaS. |
+| 2 | Is human review allowed? | **Yes — mandatory.** The client requires it. |
+| 3 | Catalog size? | Unknown; assume 100–1,000+ rows. |
+| 4 | What is the estimate for? | A reference figure the employee finalises. |
+| 5 | Quantity handling? | Group by item **type**: six identical chairs is `chair x 6`. Different types stay separate. Colour never splits a row. |
+| 6 | Real-time required? | **No.** Recorded video is fine; a live overlay is cosmetic. |
+| 7 | Reference photos from the client? | **No.** Deliberately building without them — see §6. |
 
-Answer #5 is architecturally important — see §3.
+Answer #5 is architecturally load-bearing: see §3.
 
 ---
 
-## 2. The three approaches originally considered, and the verdict
+## 2. The three approaches considered, and the verdict
 
 | Approach | Verdict | Reason |
 |---|---|---|
-| **A. Let the AI decide, with instructions supplied behind the scenes** | **Chosen** (in refined form) | Open-vocabulary detection + a vision LLM. Flexible, needs no training data, ships in weeks. |
-| **B. Feed the whole video and analyse frame by frame** | Not a distinct approach | This is A done naively. A 5-minute video at 2 fps is 600 model calls producing 600 duplicate detections to reconcile. Expensive, and it makes the dedup problem worse rather than better. |
-| **C. Hardcoded / algorithmic extraction with classical CV (OpenCV)** | Dead on arrival | OpenCV is image *processing* — resize, blur, edges, contours, thresholds. It has no concept of "this object is a television." The only non-LLM route is training a detector like YOLO on a hand-labelled dataset: thousands of manually drawn boxes per class. That is the *expensive* path, not the cheap one. |
+| **A. AI decides, with instructions supplied behind the scenes** | **Chosen**, in refined form | A vision LLM plus, later, open-vocabulary detection. No training data, ships in weeks. |
+| **B. Feed the video and analyse frame by frame** | Not a distinct approach | This is A done naively — 600 calls producing 600 duplicate detections to reconcile. |
+| **C. Hardcoded / classical CV (OpenCV)** | Dead on arrival | OpenCV is image *processing* — resize, blur, edges, contours. It has no concept of "this is a television". The only non-LLM route is training a detector on a hand-labelled dataset, which is the expensive path, not the cheap one. |
 
-**Important framing correction:** OpenCV is not a competitor to the AI approach.
-It is the plumbing *inside* it — decoding video, sampling frames, cropping
-regions, drawing overlays. Both get used.
+**Framing correction that matters:** OpenCV is not a competitor to the AI
+approach. It is the plumbing inside it — decoding video, sampling frames,
+cropping regions. Both get used.
 
 ---
 
-## 3. Why answer #5 simplified the whole project
+## 3. Why answer #5 simplified the project
 
-Grouping by item type rather than by physical instance changes the question the
-system must answer:
+Grouping by type rather than by physical instance changes the question:
 
-| | If instances mattered | With type-level counts (actual requirement) |
+| | If instances mattered | With type-level counts |
 |---|---|---|
-| Question | "Is this TV the same physical TV I saw 40 frames ago?" | "How many TVs are in this room?" |
-| Requires | Re-identification across occlusion and camera backtracking | A robust count estimate |
+| Question | "Is this the same TV I saw 40 frames ago?" | "How many TVs are in this room?" |
+| Requires | Re-identification across occlusion and backtracking | A robust count estimate |
 | Difficulty | Research-grade | Engineering-grade |
 
-Per-object identity is no longer needed. This is the single biggest reduction in
-project risk, and it is why the plan below is achievable.
-
-### The residual risk: re-entry double counting
-
-A tracker assigns one ID per object *while it stays visible*. The failure mode:
-
-> The customer pans right across the garage, then pans back left. The same
-> ceiling fan becomes `track_id=3`, then later `track_id=47`. It gets billed twice.
-
-Mitigations, cheapest first:
-
-| Mitigation | Cost | Reliability |
-|---|---|---|
-| **Guided capture** — app instructs a single slow sweep, rejects backtracking | Free (UX work) | Depends on operator compliance, but very high leverage |
-| **Census cross-check** — independent whole-room count, flag disagreements | Low | Good confidence signal |
-| ReID appearance embeddings | Low | Good for distinct objects; fails on six identical chairs |
-| **Human review UI** | Medium | **Highest — ship this regardless** |
-| 3D reconstruction (SLAM / COLMAP) | Very high | Correct, but a research project. Do not attempt. |
+Residual risk for video: a camera panning back over the same object assigns it a
+new track id and double counts it. Mitigations, cheapest first — guided capture
+(app instructs a single slow sweep), census cross-check, ReID embeddings, and
+the human review UI, which is the only one that always works.
 
 ---
 
@@ -105,338 +117,285 @@ Mitigations, cheapest first:
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Recognition strategy | Retrieval-constrained labelling with a vision LLM | Flexible, no training data |
-| **Catalog role** | The catalog is the **input vocabulary and the closed answer set** | See §5 — the most important decision in this document |
+| Recognition | Retrieval-constrained labelling with a vision LLM | No training data needed |
+| **Catalog role** | The **canonical item table**: identity, aliases, exclusion, physical metadata | See §5 |
 | Filter position | **At the front, never post-hoc** | See §5 |
-| Exclusions (doors, walls, fixtures) | Simply absent from the catalog, so never a candidate | Deterministic, auditable, client-editable in Excel. No prompt engineering. |
-| Grouping key | `catalog_item_id`. Colour is a display attribute only. | Per client answer #5 |
-| **Price** | Always a database join on a catalog row. **The model never emits a number.** | An LLM asked for prices will produce confident, plausible, wrong figures. Discovered on the invoice. |
-| Human review | Mandatory, so optimise for **recall** and **review throughput**, not autonomous accuracy | Deleting a wrong row is 1 click. A missing row means the employee re-watches the video. Asymmetric cost, so deliberately over-detect. |
-| Evidence | Every line item stores its cropped image | Without a thumbnail the employee must re-watch the video, and the product is worse than useless |
-| Input format | **Stills first.** Video decodes *into* stills later. | One pipeline: `list[Image]` to results. A video is just a slower way to produce that list. **Never convert images into a video** — that only adds a decode step that throws information away. |
-| Reference photos from client | **Skipped deliberately.** | See §6 |
-| Multi-tenancy | Catalog, vocabulary and vector index are all per-tenant | SaaS. Retrofitting tenancy is painful; design it in from day one. |
+| Exclusions | A catalog row with `excluded: true`, not a separate file | Keeps aliases attached; one place to look; a reviewer flips a boolean |
+| Grouping key | `catalog_item_id`. Colour is a display attribute only. | Client answer #5 |
+| Metadata | Weight, dimensions, volume, material, nesting; **price optional** | The new requirement |
+| Missing metadata | `None`, never `0` | Zero silently produces a wrong total; `None` forces the caller to decide |
+| Every value | Carries a `source`: `llm_estimate` / `measured` / `client_supplied` | A reviewer must know which numbers to distrust |
+| Human review | Mandatory, so optimise for **recall** and review throughput | Deleting a wrong row is one click; a missing row means re-watching the video |
+| Input format | **Stills first.** Video decodes *into* stills later. | One pipeline: `list[Image]` in. Never convert images into a video. |
+| Reference photos | Skipped | See §6 |
+| Multi-tenancy | Catalog is per-tenant | SaaS; retrofitting tenancy is painful |
 
 ---
 
 ## 5. Why the catalog filter goes at the FRONT
 
-The intuitive design is: scan everything, get free-form JSON, then filter the
-results against the catalog. **This is wrong and it must not be built that way.**
+The intuitive design is: scan everything, get free-form labels, then filter
+against the catalog. **This is wrong and must not be built that way.**
 
 | | Post-filter (wrong) | Retrieval-first (correct) |
 |---|---|---|
-| Flow | scan, free-form labels, fuzzy-match against catalog, drop non-matches | catalog, retrieve top-K candidates, model picks one **or abstains** |
-| A door is excluded because | it failed to match any catalog row | it was never a candidate |
-| Failure mode | **"correctly excluded" and "match failed" are indistinguishable** | abstentions are explicit, counted, and reviewable |
+| Flow | scan, free labels, fuzzy match, drop non-matches | catalog first, model picks a known row **or abstains** |
+| A door is excluded because | it matched nothing | it is a row marked excluded |
+| Failure mode | **"correctly excluded" and "match failed" look identical** | abstentions are explicit and reviewable |
 
-Concrete failure: a real ceiling fan is labelled
-`"industrial air circulator, ceiling-mounted"`. Fuzzy-matched against a
-1,000-row catalog it finds nothing and is dropped as "not in list" — exactly
-like the door. The employee never sees it. That is a silent revenue leak with
-no signal that anything went wrong.
-
-With retrieval-first, the model receives 8 real catalog rows and must pick one
-or answer "none of these." An abstention becomes a visible row in the review UI
-reading `unidentified item — needs attention`, with the crop attached. Same
-information, but it is a question instead of a silent deletion.
+Concrete failure: a real ceiling fan labelled `"industrial air circulator"`
+matches nothing and is dropped exactly like the door. The employee never sees
+it. Silent revenue and material loss with no signal.
 
 ### Collapse the catalog into visual classes
 
-A 1,000-row catalog is not 1,000 visually distinct objects. It is more likely
-~80 visual classes with commercial variants:
+A 1,000-row catalog is not 1,000 visually distinct objects — more likely ~80
+visual classes with variants:
 
 ```
-catalog rows                          visual class
------------------------------------------------------
-TV - LCD under 32"          |
-TV - LCD 32-50"             +-------> "television"
-TV - LCD over 50"           |
-Refrigerator - single door  |
-Refrigerator - double door  +-------> "refrigerator"
-Refrigerator - commercial   |
+TV - LCD under 32"   |
+TV - LCD 32-50"      +---> visual_class "television"
+TV - LCD over 50"    |
 ```
 
-Vision only needs to hit the **class**. The variant is then decided by a coarse
-attribute the model can estimate (size, door count) or by the reviewing
-employee. Build the `catalog_row -> visual_class` mapping in Phase 0; it shrinks
-the recognition problem by roughly an order of magnitude.
+Vision only needs the class; the variant is a coarse attribute or a reviewer
+decision. This matters practically: **open-vocabulary detectors degrade badly
+past roughly a hundred classes**, so this collapse is a hard requirement for
+the detector stage, not tidiness.
 
 ---
 
 ## 6. Reference photos — decision and reasoning
 
-The developer chose to proceed **without** client-supplied reference images,
-to learn how far text-only retrieval gets. This is a sound call.
+Proceeding **without** client-supplied reference images. Whether text-only
+matching works depends on how the client names things, not on catalog size:
 
-Whether text-only works depends on **how the client names things**, not on how
-big the catalog is:
-
-| Catalog naming style | Text-only outcome |
+| Naming style | Outcome |
 |---|---|
-| Plain nouns — "ceiling fan", "microwave oven", "office chair" | Works well. These are in every vision model's training data. |
-| Fine-grained variants — "radiator, copper" vs "radiator, aluminium" | Unreliable. Material is hard to see. |
-| Client jargon or codes — "Unit Type B4", "Assembly 220" | Fails outright. Nothing meaningful to embed. |
+| Plain nouns — "ceiling fan", "microwave oven" | Works well; these are in every model's training data |
+| Fine-grained variants — "radiator, copper" vs "aluminium" | Unreliable; material is hard to see |
+| Client jargon — "Unit Type B4" | Fails outright |
 
-**Therefore the client ask is NOT "send 1,000 photos." It is "send 50 sample
-rows of your actual catalog."** Trivial for them, and it immediately reveals
-which row of that table this project is in. See Open Questions.
+**So the ask to the client is not "send 1,000 photos" — it is "send 50 sample
+rows of your real catalog".** That reveals which row above applies.
 
-### Free substitutes for reference photos
-
-1. **Text-side enrichment (do this in Phase 0).** Run each catalog row name
-   through an LLM once, offline, producing a short visual description and
-   aliases. Embed the *description*, not the bare row name.
-
-   ```
-   "Fan, Ceiling, Domestic"
-     -> description: "ceiling-mounted fan with 3-5 blades and a central motor
-                      housing, often with an integrated light fixture"
-     -> aliases: ceiling fan, paddle fan, overhead fan
-   ```
-
-   One batch job, no client involvement. Have an employee skim the output once.
-
-2. **The review UI generates reference photos for free.** Every employee
-   confirmation is a human-verified `(image, catalog_row_id)` pair. After a
-   couple hundred estimates there is a reference library nobody had to request,
-   concentrated on the items that actually appear in real rooms — far more
-   useful than a uniform client-supplied set.
+Two free substitutes are already built in: the catalog is enriched with visual
+descriptions and aliases by an LLM at build time, and the review UI will
+eventually harvest confirmed crops into a reference library nobody had to
+request.
 
 ---
 
-## 7. Architecture
+## 7. Architecture as built
 
 ```mermaid
 flowchart TD
-    A["Customer records<br/>guided capture, app-directed"] --> B["Upload to job queue"]
-    B --> C["Frame sampler<br/>~1 fps, drop blurred/dark"]
-
-    C --> D["Open-vocab detector<br/>vocabulary = tenant catalog"]
-    D --> E["Tracker (ByteTrack)<br/>track_id per object"]
-    E --> F["Best crop per track"]
-    F --> G["Embed crop"]
-    G --> H[("Catalog index<br/>pgvector, per tenant")]
-    H --> I["Top-K candidate rows"]
-    I --> J["Vision LLM: pick one of K<br/>or abstain; plus colour"]
-    J --> K["Group by catalog_item_id"]
-
-    C --> P["Census pass<br/>LLM counts per keyframe"]
-    P --> Q["Robust count<br/>per category"]
-    Q --> K
-
-    K --> R{"Counts agree?"}
-    R -->|yes| L["Join unit_price x count"]
-    R -->|no| S["Flag low-confidence"]
-    S --> L
-
-    L --> M["Draft estimate<br/>plus crop evidence per row"]
-    M --> N{{"Employee review UI<br/>delete / add / adjust count"}}
-    N --> O["Final priced estimate"]
-    N -.corrections.-> T[("Feedback store<br/>tunes thresholds")]
+    A["image (or video frame, later)"] --> B["vision.py<br/>one model call, one look"]
+    B --> C["consensus.py<br/>N independent looks, merged"]
+    C --> D["labels.py<br/>collapse spelling variants"]
+    D --> E{"catalog.match(label)"}
+    E -->|"row, excluded=false"| F["resolve.py<br/>group by catalog_item_id"]
+    E -->|"row, excluded=true"| G["Excluded"]
+    E -->|"None"| H["Unmatched<br/>needs a human"]
+    F --> I["attach metadata<br/>weight, volume, material"]
+    I --> J["estimate.py<br/>report + totals"]
+    H -.reviewer names it.-> K[("catalog.json<br/>grows")]
 ```
 
-ASCII fallback:
+Text form:
 
 ```
-  customer video / stills (guided capture)
-             |
-        [ job queue ]
-             |
-      frame sampler ~1fps
-        |            \
-        |             \______________
-        |                            \
-  detector (vocab = catalog)      census pass
-        |                          (LLM counts
-   tracker -> track_id              per keyframe)
-        |                               |
-   best crop per track             robust count
-        |                            per category
-   embed crop --> [catalog index]        |
-        |                                |
-   top-K rows                            |
-        |                                |
-   LLM: pick 1 of K / abstain            |
-        |                                |
-        +---> group by catalog_item_id <-+
-                     |
-              counts agree? --no--> flag low-confidence
-                     |                      |
-                     +----------+-----------+
-                                |
-                     count x unit_price
-                                |
-                draft estimate + crop evidence
-                                |
-                    EMPLOYEE REVIEW UI
-                 (delete / add / adjust count)
-                                |
-                       final priced estimate
-                                |
-                         corrections -> feedback store
+image
+  -> vision.py       one call: what objects are visible, and how many
+  -> consensus.py    repeat N times, merge, keep the spread and agreement
+  -> labels.py       "mouse pad" == "mousepad"
+  -> catalog.match   "desk" -> the "table" row      (this merges SYNONYMS)
+  -> resolve.py      regroup by catalog id, attach metadata, three buckets:
+                       matched / excluded / unmatched
+  -> estimate.py     table + totals, unmatched always shown
+```
+
+Two grouping passes on two different axes, and both are needed:
+`consensus` merges spelling variants, the catalog merges synonyms.
+
+---
+
+## 8. Files
+
+```
+llm-system/
+├── requirements.txt              # + openai, pydantic, pillow
+├── images/                       # test photographs
+└── playground/
+    ├── labels.py                 # normalize() display / collapse_key() matching
+    ├── vision.py                 # one image -> one LLM call -> DetectedItem[]
+    ├── consensus.py              # N runs -> StableItem[] with agreement + spread
+    ├── exclusions.py             # text-file exclusion list (detect.py only)
+    ├── exclusions.txt            # seeded from real output; feeds catalog build
+    ├── detect.py                 # CLI: raw detection. Harvesting and debugging.
+    ├── catalog.py                # CatalogItem / ItemMetadata / Catalog + match()
+    ├── build_catalog.py          # CLI: photos -> harvest -> cluster -> enrich -> catalog.json
+    ├── resolve.py                # StableItem[] + Catalog -> matched/excluded/unmatched
+    ├── estimate.py               # CLI: the product. image -> items + metadata + totals
+    ├── run.py                    # earliest ad-hoc runner; superseded by detect.py
+    ├── harvest.json              # generated: raw label frequencies (cache)
+    └── catalog.json              # generated: the catalog. REVIEW BY HAND.
+```
+
+Two CLIs on purpose. `detect.py` reports whatever the model said and is the
+harvesting and debugging tool. `estimate.py` is the product path and requires a
+catalog.
+
+---
+
+## 9. How to run it
+
+```bash
+# 1. raw detection, no catalog needed
+cd playground
+python detect.py ..\images\table.jpg --runs 3
+
+# 2. build a catalog from a folder of photos  (the slow, paid step)
+python build_catalog.py ..\images --runs 2
+
+# 3. re-cluster or re-enrich for free while tuning prompts
+python build_catalog.py --from-harvest
+
+# 4. REVIEW catalog.json BY HAND  <- not optional
+
+# 5. the product
+python estimate.py ..\images\table.jpg
+python estimate.py ..\images\table.jpg --json
 ```
 
 ---
 
-## 8. Tech stack
+## 10. Findings from the first real runs
 
-| Layer | Pick | Phase | Why |
-|---|---|---|---|
-| Catalog ingest | pandas + openpyxl | 0 | .xlsx and CSV in one line each |
-| Catalog enrichment | LLM batch job, offline | 0 | Row name to visual description + aliases |
-| Embeddings | OpenAI `text-embedding-3-small`, or CLIP if image-side later | 0 | |
-| Vector index | **pgvector** | 0 | Postgres is already in use; avoids a second datastore |
-| Vision + labelling | Vision-capable LLM with structured output | 1 | Region proposal + closed-list pick |
-| API | FastAPI | 1 | Already known |
-| Job queue | RQ + Redis | 1 | Processing is long-running. Never do it in a request handler. |
-| Object store | MinIO locally, S3 later | 1 | Crops and originals |
-| DB | PostgreSQL | 0 | Catalog, tenants, estimates, corrections |
-| Review UI | React (already familiar) | 2 | It is a table with thumbnails. Do not overthink it. |
-| Video decode | OpenCV + ffmpeg | 4 | ~10 functions total |
-| Detector | YOLO-World / YOLOE (Ultralytics) | 3 | Open-vocabulary — catalog as text prompts, no training |
-| Tracker | ByteTrack | 3 | One flag in Ultralytics |
-| Live overlay | WebRTC, or just draw on frames | 6 | Cosmetic |
+Three runs of the same photograph produced 24, 22 and 22 kinds; grape counts of
+25, 32 and 20; `table` once and `desk` twice.
 
-### Licensing warning
+**The important discovery:** almost everything that appeared in only one run was
+a *synonym of something already found*, not a missed object.
 
-**Ultralytics is AGPL-3.0.** Fine for prototyping; a closed-source SaaS product
-needs their commercial licence. Raise with Katsu-san **before** Phase 3, not
-after.
-
-Mitigation regardless: wrap it behind a narrow interface —
-
-```python
-class Detector(Protocol):
-    def detect(self, image: Image) -> list[Box]: ...
-```
-
-so `ultralytics` is imported in exactly one file, and swapping to raw ONNX or
-torchvision later is a one-file change.
-
----
-
-## 9. Phases
-
-### Phase 0 — Catalog pipeline (~2 days)
-
-| In scope | Out of scope |
-|---|---|
-| Load .xlsx / CSV / DB table into `catalog_items` | Multi-tenant auth |
-| LLM-generate visual description + aliases per row | UI for editing the catalog |
-| Map rows to `visual_class` | |
-| Embed descriptions, store in pgvector | |
-| `retrieve(query, k=8) -> list[CatalogRow]` | |
-
-**Done when:** typing "ceiling fan with a light" returns the right catalog rows, ranked.
-
-### Phase 1 — Stills to priced JSON (~3–4 days)
-
-| In scope | Out of scope |
-|---|---|
-| Upload N images | Video |
-| Vision LLM lists visible regions, returns crops | Detector, tracker |
-| Per crop: retrieve top-K, LLM picks one **or abstains** | Colour |
-| Group by `catalog_item_id`, count | Dedup across images (accept over-count for now) |
-| Join unit price, sum | Any UI |
-| Emit JSON: line items, abstentions, total | |
-
-**Done when:** photos of a real cluttered room produce a priced JSON list with
-plausible items. **This phase proves the entire commercial chain and is the most
-important one in the project.**
-
-### Phase 2 — Review UI (~1 week) — the mock-up prototype ends here
-
-| In scope | Out of scope |
-|---|---|
-| Table: thumbnail, catalog row, count, unit price, line total | Roles / permissions |
-| Delete row, adjust count, change catalog row, add missed item | Real auth |
-| Abstentions shown as `needs attention` with crop | PDF export |
-| Confirm to final estimate | |
-| Log every correction to a `corrections` table | |
-
-**Done when:** a stranger given 8 photos can produce a finished estimate in
-under two minutes. **This is the demo.** Roughly 2 weeks total from a standing start.
-
-### Phase 3 — Detector + tracker (~1–2 weeks)
-
-Replace LLM region-proposal with YOLO-World + ByteTrack. Automatic crops,
-cheaper per image, real per-category counts. Keep the Phase 1 path behind a
-feature flag so the two can be compared.
-
-### Phase 4 — Video input (~1 week)
-
-Decode, sample ~1 fps, drop blurred/dark frames, then the existing pipeline.
-Plus **guided capture**: the app instructs a single slow sweep and rejects
-backtracking. The UX work matters more than the code here.
-
-### Phase 5 — Census cross-check (~3–5 days)
-
-Independent whole-room count pass. Where it disagrees with the tracker, flag the
-row rather than silently choosing. Disagreement is the cheapest confidence
-signal available.
-
-### Phase 6 — Live overlay (cosmetic, last)
-
-Bounding boxes and name tags during recording. Impressive in demos, changes
-nothing about correctness.
-
-### Rough timeline
-
-| Milestone | Realistic |
-|---|---|
-| Phases 0–2 (demo-able prototype) | ~2 weeks |
-| Phases 3–5 | ~1 month more |
-| Client-acceptable accuracy | Open-ended — this is the long pole |
-
----
-
-## 10. Immediate next action
-
-Take 8 photos of any cluttered room. Hand-write a 30-row catalog in a
-spreadsheet. Build Phase 0 + Phase 1 against it. This confirms or kills the core
-idea within three days, and requires **no OpenCV, no YOLO, and not a single line
-of classical computer vision.**
-
----
-
-## 11. Open questions for the client
-
-| # | Question | Why it matters |
+| Kept | Seen once | Same object? |
 |---|---|---|
-| 1 | **Send 50 sample rows of the real catalog** | Determines whether text-only retrieval works at all (§6). Highest-value ask. |
-| 2 | Is the catalog Excel or a relational database? How often does it change? | Decides whether ingest is a one-off import or a sync job |
-| 3 | Roughly how many rows, and how many are visually distinct? | Sizes the `visual_class` mapping |
-| 4 | Is the price a single figure per row, or does it vary by weight/size/grade? | A per-kg price needs size estimation, which is a much harder problem |
-| 5 | Confirm in writing that the AI figure is a *reference* the employee overrides | Lowers the accuracy bar and protects against a later accuracy dispute |
+| `headset` | `headphone` | Yes |
+| `table` | `desk` | Yes |
+| `usb drive` | `usb flash drive` | Yes |
+| `backpack` | `bag` | Yes |
+
+So the model's **perception is stable; its naming is not.** The problem was
+never recognition. This is why the catalog's alias list is the highest-value
+component, and why an open-vocabulary detector was moved down the plan.
+
+Other findings:
+
+- `gpt-5.6-luna` **rejects the `temperature` parameter** outright: *"Only the
+  default (1) value is supported."* Sampling control is unavailable, so
+  stabilisation must come from consensus across runs.
+- Counting past roughly eight identical objects is unreliable — grapes ranged
+  20–32. `count_is_unstable` flags this.
+- The model's self-reported `confidence` is not calibrated: it reported 0.99 for
+  items it failed to mention at all on the next run. **Agreement across runs is
+  the real confidence signal.**
+- The model has no notion of relevance — it reports a coin and a floor with
+  equal seriousness. Only the catalog fixes that.
+
+---
+
+## 11. Where YOLO-World fits, and why it is not next
+
+YOLO-World is an **open-vocabulary detector**: you supply class names as text at
+inference time and it returns bounding boxes, with no training. It cannot
+enumerate objects on its own — given no class list it detects nothing, so it
+cannot bootstrap its own vocabulary. The catalog produces that vocabulary
+(`Catalog.vocabulary()` already returns it).
+
+| | Vision LLM | YOLO-World |
+|---|---|---|
+| Naming things you did not anticipate | Yes | **Cannot** |
+| Deterministic | No | Yes |
+| Bounding boxes | No | Yes |
+| Counting | Weak | **Strong** |
+| Video at frame rate | No | Yes |
+
+**Its justification is latency and boxes, not accuracy.** 300 frames at ~15s per
+LLM call is over an hour serially; YOLO does it in seconds. Boxes are needed for
+tracking, evidence thumbnails and the live overlay. It is *worse* at naming.
+
+Integration is already seamed: `consensus.py` calls one function. Inject an
+alternative detector with the same output shape and nothing else changes.
+
+Note also that `consensus.py` is the video module in disguise — its job is
+merging repeated observations of one scene. Swap "runs" for "frames" and it
+works unmodified.
+
+**Licensing:** Ultralytics is AGPL-3.0. Fine for prototyping; a closed-source
+SaaS product needs a commercial licence. Raise with Katsu-san before starting
+detector work. Wrap it behind `Detector.detect(image) -> list[Box]` so it is
+imported in exactly one file.
+
+**Environment risk:** the project runs Python 3.14.2. PyTorch and Ultralytics
+wheels lag new Python releases. Check `pip index versions torch` before
+committing time; the CV stage may need its own 3.12 environment.
+
+---
+
+## 12. Plan
+
+| Phase | Work | Status |
+|---|---|---|
+| 0 | Detection, consensus, exclusions | **Done** |
+| 1 | Catalog build + resolve + metadata | **Written, not yet run** |
+| 2 | Review UI — table, thumbnails, edit count, add missing, name unmatched | Next |
+| 3 | Multi-image estimate (a whole room, not one photo) | |
+| 4 | YOLO-World detector behind the same interface | |
+| 5 | Video: frames -> consensus, guided capture | |
+| 6 | Live overlay (cosmetic) | |
+
+Phase 2 is the demo. Phase 3 matters more than it sounds: a room is several
+photographs, and deduplicating across them is the first real instance of the
+double-counting problem.
+
+---
+
+## 13. Open questions for the client
+
+| # | Question | Why |
+|---|---|---|
+| 1 | **Send 50 sample rows of the real catalog** | Decides whether text matching works at all. Highest-value ask. |
+| 2 | Excel or relational database? How often does it change? | One-off import or a sync job |
+| 3 | Which metadata fields do they actually need? | Weight and volume are assumed; material and price may not matter |
+| 4 | Are dimensions needed per unit, or only totals? | Affects how much precision to chase |
+| 5 | Confirm in writing that the estimate is a reference an employee overrides | Lowers the accuracy bar; protects against a later dispute |
 | 6 | Can the capture app instruct the customer, or must arbitrary video be accepted? | Guided capture is the highest-leverage risk reduction available |
 
 ---
 
-## 12. Glossary
+## 14. Glossary
 
 | Term | Meaning |
 |---|---|
-| **Vision-capable LLM** | A language model whose input encoder accepts images as well as text, so pixels enter the same context as the prompt. A text-only model cannot see an image no matter how it is described in JSON. |
-| **CLIP** | A model that maps images *and* text into one shared vector space, so an image and its description land near each other. Enables searching images with text, or matching a crop to a catalog row. |
-| **Text embedding** | A vector representation of text only. Text-to-text similarity. Cannot compare an image to anything. |
-| **Open-vocabulary detection** | Object detection where the class list is supplied as text at inference time instead of being fixed at training time. Lets the client's catalog become the detector's vocabulary. |
-| **YOLO-World / YOLOE** | Open-vocabulary detectors. Given `["ceiling fan", "microwave"]` they return boxes for those things without any training. |
-| **ByteTrack** | A multi-object tracker. Links detections across frames and assigns each object a persistent `track_id`. |
-| **ReID** | Re-identification: matching an object to one seen earlier via appearance features, after tracking has lost it. |
-| **Abstention** | The model answering "none of these candidates" instead of forcing a wrong pick. Must be surfaced in the UI, never dropped. |
-| **Census pass** | A cheap whole-room count used as an independent cross-check against the tracker's count. |
+| **Vision-capable LLM** | A model whose encoder accepts images, so pixels enter the same context as the prompt. A text-only model cannot see an image however it is described. |
+| **CLIP** | Maps images *and* text into one shared vector space, so a photo and its description land near each other. |
+| **Text embedding** | A vector for text only. Cannot compare an image to anything. |
+| **Open-vocabulary detection** | Detection where the class list is supplied as text at inference time rather than fixed at training time. |
+| **YOLO-World / YOLOE** | Open-vocabulary detectors. Given `["ceiling fan"]` they return boxes, untrained. |
+| **ByteTrack** | Multi-object tracker; links detections across frames into persistent `track_id`s. |
+| **ReID** | Re-identification: matching an object to one seen earlier by appearance, after tracking lost it. |
+| **Abstention** | The model answering "none of these" rather than forcing a wrong pick. Must always be surfaced. |
+| **Consensus / census** | Merging several independent observations of one scene into one measurement, keeping the spread. |
+| **Collapse key** | A normalised, punctuation-stripped label used only for matching. Never displayed. |
 
 ---
 
-## 13. Model note
+## 15. Model note
 
-`gpt-5.6-luna` (already in use on the recruitment project, and chosen by the
-client there) **does support image input**, per the OpenAI model page:
-input modalities text + image, output text; 1,050,000 token context;
-128,000 max output tokens; knowledge cutoff 2026-02-16; structured outputs and
-function calling both supported; $0.2 / 1M input and $1.2 / 1M output, with 2x
-input and 1.5x output pricing above 272K input tokens.
+`gpt-5.6-luna` supports image input: modalities text + image in, text out;
+1,050,000 token context; 128,000 max output; knowledge cutoff 2026-02-16;
+structured outputs and function calling both supported; $0.2 / 1M input and
+$1.2 / 1M output, with 2x input and 1.5x output above 272K input tokens.
 
-So no model change is needed to start. Verify current figures on the model page
-before relying on them commercially.
+**It rejects `temperature`.** Verified empirically. Confirm current figures on
+the model page before relying on them commercially.

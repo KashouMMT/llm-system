@@ -46,7 +46,7 @@ class Actor:
     """Who the current turn is being generated for."""
 
     user_id: UUID
-    username: str
+    email: str
     role: str
 
 
@@ -63,7 +63,7 @@ _actor: ContextVar[Actor | None] = ContextVar(
 
 
 def set_actor(user: "User") -> None:
-    _actor.set(Actor(user_id=user.id, username=user.username, role=user.role))
+    _actor.set(Actor(user_id=user.id, email=user.email, role=user.role))
 
 
 def is_enabled() -> bool:

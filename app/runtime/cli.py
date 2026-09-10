@@ -179,7 +179,7 @@ async def run_cli(
 
     if root is None:
         raise RuntimeError(
-            "No root user exists. Set AUTH_BOOTSTRAP_USERNAME / "
+            "No root user exists. Set AUTH_BOOTSTRAP_EMAIL / "
             "AUTH_BOOTSTRAP_PASSWORD and restart, or run with --seed-admin.",
         )
 

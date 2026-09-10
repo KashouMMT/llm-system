@@ -5,7 +5,7 @@ import selectors
 import uvicorn
 
 from app.authentication.seed import seed_root
-from app.config.settings import AUTH_BOOTSTRAP_PASSWORD, AUTH_BOOTSTRAP_USERNAME
+from app.config.settings import AUTH_BOOTSTRAP_EMAIL, AUTH_BOOTSTRAP_PASSWORD
 from app.runtime.application import Application
 from app.runtime.cli import run_cli
 from app.runtime.server import create_api
@@ -45,7 +45,7 @@ async def main():
         if args.seed_admin:
             await seed_root(
                 application.user_repository,
-                username=AUTH_BOOTSTRAP_USERNAME,
+                email=AUTH_BOOTSTRAP_EMAIL,
                 password=AUTH_BOOTSTRAP_PASSWORD,
                 force=True,
             )

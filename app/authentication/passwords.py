@@ -7,7 +7,7 @@ from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatc
 _hasher = PasswordHasher()
 
 # Verified against on the user-not-found path so login response time does not
-# reveal whether a username exists.
+# reveal whether an account exists.
 _DUMMY_HASH = _hasher.hash("timing-parity-placeholder")
 
 

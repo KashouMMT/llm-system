@@ -50,14 +50,14 @@ def create_tables() -> None:
             # ---------------------------------------------------------
             # Users
             # ---------------------------------------------------------
-            # username is stored already-lowercased by the repository, so a
+            # email is stored already-lowercased by the repository, so a
             # plain UNIQUE is enough for case-insensitive identity without
             # needing the citext extension.
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS users (
                     id UUID PRIMARY KEY,
-                    username TEXT UNIQUE NOT NULL,
+                    email TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

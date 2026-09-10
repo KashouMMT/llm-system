@@ -186,7 +186,7 @@ SSE_QUEUE_MAXSIZE = get_positive_int("SSE_QUEUE_MAXSIZE", 256)
 # The root user is seeded from these on startup if no root exists yet.
 # Leaving them empty means nobody can log in until a root is created.
 # Not stripped: leading/trailing spaces are legitimate in a password.
-AUTH_BOOTSTRAP_USERNAME = os.getenv("AUTH_BOOTSTRAP_USERNAME", "").strip()
+AUTH_BOOTSTRAP_EMAIL = os.getenv("AUTH_BOOTSTRAP_EMAIL", "").strip()
 AUTH_BOOTSTRAP_PASSWORD = os.getenv("AUTH_BOOTSTRAP_PASSWORD", "")
 
 # Absolute session lifetime. No sliding expiry — that is a write on every

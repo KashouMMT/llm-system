@@ -38,7 +38,7 @@ class SessionRepository:
                 """
                 SELECT
                     u.id,
-                    u.username,
+                    u.email,
                     u.password_hash,
                     u.role,
                     u.created_at,

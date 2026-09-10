@@ -25,8 +25,8 @@ from app.config.runtime_settings import (
     RuntimeSettingsHolder,
 )
 from app.config.settings import (
+    AUTH_BOOTSTRAP_EMAIL,
     AUTH_BOOTSTRAP_PASSWORD,
-    AUTH_BOOTSTRAP_USERNAME,
     ENABLED_TOOL_PLUGINS,
     FILE_STORAGE_DIR,
     LLM_PROVIDER,
@@ -202,7 +202,7 @@ class Application:
             logger.info("Ensuring root user exists")
             await seed_root(
                 self.user_repository,
-                username=AUTH_BOOTSTRAP_USERNAME,
+                email=AUTH_BOOTSTRAP_EMAIL,
                 password=AUTH_BOOTSTRAP_PASSWORD,
                 force=False,
             )

@@ -10,7 +10,7 @@ export type AuthState =
 	| { status: "unauthenticated" };
 
 export type AuthContextValue = AuthState & {
-	login: (username: string, password: string) => Promise<void>;
+	login: (email: string, password: string) => Promise<void>;
 	logout: () => Promise<void>;
 };
 

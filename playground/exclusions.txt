@@ -1,0 +1,56 @@
+# Labels dropped before reporting.
+#
+# One per line. Blank lines and lines starting with # are ignored.
+# Matching ignores case, spaces and punctuation, so "mouse pad", "mousepad"
+# and "Mouse-Pad" are the same entry. It does NOT understand synonyms:
+# "door" here will not exclude "doorway". Add both.
+#
+# Everything below was chosen from real output of images/table.jpg.
+
+# --- Structure of the room itself ---
+# Technically recyclable, deliberately out of scope per the client.
+wall
+floor
+ceiling
+window
+door
+doorway
+curtain
+blind
+carpet
+rug
+light switch
+power outlet
+power socket
+radiator
+pipe
+
+# --- People and what they are wearing ---
+person
+hand
+arm
+face
+shirt
+t-shirt
+tshirt
+trousers
+pants
+cap
+hat
+jacket
+shoe
+glasses
+
+# --- Not goods: consumables, waste, ephemera ---
+grape
+fruit
+food
+plate
+cup
+mug
+paper
+packet
+package
+sticker
+coin
+banknote

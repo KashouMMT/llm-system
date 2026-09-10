@@ -211,7 +211,7 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 				{auth.status === "authenticated" && (
 					<div className="sidebar-account">
 						<span className="sidebar-account-name">
-							{auth.user.username}
+							{auth.user.email}
 						</span>
 
 						<button

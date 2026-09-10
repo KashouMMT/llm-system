@@ -80,7 +80,7 @@ export function getCurrentUser(signal?: AbortSignal): Promise<AuthUser> {
 }
 
 export function login(credentials: {
-	username: string;
+	email: string;
 	password: string;
 }): Promise<AuthUser> {
 	return request<AuthUser>("/auth/login", {
@@ -91,6 +91,21 @@ export function login(credentials: {
 
 export function logout(): Promise<void> {
 	return request<void>("/auth/logout", { method: "POST" });
+}
+
+/**
+ * Creates a normal-role account. Does not sign the user in — the caller
+ * sends the same credentials to `login` afterwards. Rejects with an
+ * ApiError of status 409 if the email is already registered.
+ */
+export function register(credentials: {
+	email: string;
+	password: string;
+}): Promise<AuthUser> {
+	return request<AuthUser>("/auth/register", {
+		method: "POST",
+		body: JSON.stringify(credentials),
+	});
 }
 
 export function listConversations(

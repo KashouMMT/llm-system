@@ -14,3 +14,6 @@ argon2-cffi
 jinja2
 openpyxl
 docxtpl
+pydantic
+pillow
+openai

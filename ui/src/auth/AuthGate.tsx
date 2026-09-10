@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import LoginPage from "../layout/LoginPage";
+import AuthPanel from "../layout/AuthPanel";
 import { useAuth } from "./AuthContext";
 
 /**
@@ -19,7 +19,7 @@ export const AuthGate = ({ children }: { children: ReactNode }) => {
 	}
 
 	if (auth.status === "unauthenticated") {
-		return <LoginPage />;
+		return <AuthPanel />;
 	}
 
 	return <>{children}</>;

@@ -46,10 +46,24 @@ class SendMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=MAX_USER_INPUT_CHARS)
 
 
+# A deliberately loose check: a non-empty local part, an "@", and a
+# non-empty domain with no whitespace. Enough to reject obvious typos
+# without pulling in the email-validator dependency for RFC-perfect
+# parsing, and permissive enough for a bare host like "root@localhost".
+_EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+$"
+
+
 class LoginRequest(BaseModel):
     # max_length caps bound the argon2 input; a password longer than this is
     # not a real password.
-    username: str = Field(min_length=1, max_length=254)
+    email: str = Field(min_length=3, max_length=254, pattern=_EMAIL_PATTERN)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class RegisterRequest(BaseModel):
+    # Same shape and bounds as LoginRequest: the sign-up form asks for
+    # exactly what the login form asks for, nothing more.
+    email: str = Field(min_length=3, max_length=254, pattern=_EMAIL_PATTERN)
     password: str = Field(min_length=1, max_length=1024)
 
 
@@ -107,12 +121,12 @@ def create_api(application: Application) -> FastAPI:
 
     @app.post("/auth/login")
     async def login(body: LoginRequest, response: Response):
-        result = await application.auth_service.login(body.username, body.password)
+        result = await application.auth_service.login(body.email, body.password)
 
         if result is None:
             raise HTTPException(
                 status_code=401,
-                detail="Invalid username or password",
+                detail="Invalid email or password",
             )
 
         user, token, expires_at = result
@@ -134,7 +148,29 @@ def create_api(application: Application) -> FastAPI:
 
         return {
             "id": str(user.id),
-            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+        }
+
+    @app.post("/auth/register", status_code=201)
+    async def register(body: RegisterRequest):
+        user = await application.auth_service.register(
+            body.email,
+            body.password,
+        )
+
+        if user is None:
+            raise HTTPException(
+                status_code=409,
+                detail="That email is already registered.",
+            )
+
+        # No session cookie here: registering and signing in are separate
+        # steps, so the client posts the new credentials to /auth/login
+        # next.
+        return {
+            "id": str(user.id),
+            "email": user.email,
             "role": user.role,
         }
 
@@ -156,7 +192,7 @@ def create_api(application: Application) -> FastAPI:
     async def me(user: Annotated[User, Depends(current_user)]):
         return {
             "id": str(user.id),
-            "username": user.username,
+            "email": user.email,
             "role": user.role,
         }
 

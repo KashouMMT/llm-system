@@ -1,25 +1,16 @@
 import { type FormEvent, useState } from "react";
 
-import { ApiError } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
+import { ApiError, register } from "../api/client";
 
-type LoginPageProps = {
-	/** Prefilled email, e.g. straight after creating an account. */
-	initialEmail?: string;
-	/** One-line info shown above the form, e.g. "Account created." */
-	notice?: string | null;
-	/** Switch to the sign-up form. */
-	onShowSignUp: () => void;
+type SignUpPageProps = {
+	/** Called with the normalised email after the account is created. */
+	onSignedUp: (email: string) => void;
+	/** Switch back to the sign-in form. */
+	onShowLogin: () => void;
 };
 
-const LoginPage = ({
-	initialEmail = "",
-	notice = null,
-	onShowSignUp,
-}: LoginPageProps) => {
-	const { login } = useAuth();
-
-	const [email, setEmail] = useState(initialEmail);
+const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
+	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState<string | null>(null);
 	const [submitting, setSubmitting] = useState(false);
@@ -30,12 +21,15 @@ const LoginPage = ({
 		setSubmitting(true);
 
 		try {
-			await login(email, password);
+			await register({ email, password });
+			// The backend lower-cases and trims the email; mirror that so
+			// the value handed to the login form matches.
+			onSignedUp(email.trim().toLowerCase());
 		} catch (caught) {
 			setError(
-				caught instanceof ApiError && caught.status === 401
-					? "Incorrect email or password."
-					: "Could not sign in. Is the API running?",
+				caught instanceof ApiError && caught.status === 409
+					? "That email is already registered."
+					: "Could not sign up. Is the API running?",
 			);
 		} finally {
 			setSubmitting(false);
@@ -45,19 +39,13 @@ const LoginPage = ({
 	return (
 		<main className="login-page">
 			<form className="login-card" onSubmit={onSubmit}>
-				<h1 className="login-title">LLM System</h1>
+				<h1 className="login-title">Create an account</h1>
 
-				{notice && (
-					<p className="login-notice" role="status">
-						{notice}
-					</p>
-				)}
-
-				<label className="form-label" htmlFor="login-email">
+				<label className="form-label" htmlFor="signup-email">
 					Email
 				</label>
 				<input
-					id="login-email"
+					id="signup-email"
 					type="email"
 					className="form-control"
 					autoComplete="email"
@@ -67,14 +55,14 @@ const LoginPage = ({
 					required
 				/>
 
-				<label className="form-label mt-3" htmlFor="login-password">
+				<label className="form-label mt-3" htmlFor="signup-password">
 					Password
 				</label>
 				<input
-					id="login-password"
+					id="signup-password"
 					type="password"
 					className="form-control"
-					autoComplete="current-password"
+					autoComplete="new-password"
 					value={password}
 					onChange={(event) => setPassword(event.target.value)}
 					required
@@ -91,17 +79,17 @@ const LoginPage = ({
 					className="btn btn-primary w-100 mt-4"
 					disabled={submitting || !email || !password}
 				>
-					{submitting ? "Signing in…" : "Sign in"}
+					{submitting ? "Creating account…" : "Sign up"}
 				</button>
 
 				<p className="login-alt">
-					Need an account?{" "}
+					Already have an account?{" "}
 					<button
 						type="button"
 						className="login-link"
-						onClick={onShowSignUp}
+						onClick={onShowLogin}
 					>
-						Sign up
+						Sign in
 					</button>
 				</p>
 			</form>
@@ -109,4 +97,4 @@ const LoginPage = ({
 	);
 };
 
-export default LoginPage;
+export default SignUpPage;

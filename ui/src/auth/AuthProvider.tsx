@@ -66,8 +66,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 	}, [queryClient]);
 
 	const login = useCallback(
-		async (username: string, password: string) => {
-			const user = await loginRequest({ username, password });
+		async (email: string, password: string) => {
+			const user = await loginRequest({ email, password });
 			queryClient.setQueryData(authKey, user);
 		},
 		[queryClient],
