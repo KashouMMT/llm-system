@@ -1,0 +1,41 @@
+# Production compose — EC2 test box. Image pulled from Docker Hub, DB on RDS.
+# Lives at /opt/llm-system/docker-compose.prod.yml, alongside .env.
+#
+#   cd /opt/llm-system
+#   docker login
+#   docker compose -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# API binds 127.0.0.1:8000 only; host nginx serves the SPA and proxies to it.
+# No `db` service and no extra_hosts: DATABASE_URL in .env points at RDS by
+# its real DNS name.
+
+services:
+  api:
+    image: ${API_IMAGE:-kashoummt/llm-system:v1}
+    restart: unless-stopped
+
+    # python-dotenv parses this. compose's own env_file parser mishandles
+    # quoting and '#', so bind-mount rather than use env_file:.
+    volumes:
+      - ./.env:/app/.env:ro
+      - api-generated:/app/app/generated_files
+      - api-logs:/app/app/logs
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  api-generated:
+  api-logs:
