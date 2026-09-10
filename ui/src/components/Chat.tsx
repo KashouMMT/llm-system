@@ -5,6 +5,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type { Message, MessageStatus } from "../api/types";
 import type { ChatError, useChat } from "../hooks/useChat";
 import type {
@@ -29,36 +30,6 @@ type ChatProps = {
 // How close to the bottom counts as "following along".
 const NEAR_BOTTOM_PX = 80;
 
-const STATUS_LABEL: Record<StreamStatus, string> = {
-	idle: "No conversation",
-	connecting: "Connecting…",
-	open: "Online",
-	closed: "Disconnected",
-};
-
-// Only the outcomes worth explaining to the reader; a finished answer and
-// one still arriving need no note.
-const OUTCOME_NOTE: Partial<Record<MessageStatus, string>> = {
-	interrupted: "The server stopped before this answer finished.",
-	cancelled: "This answer was cancelled.",
-	failed: "This answer failed to generate.",
-};
-
-const errorText = (error: ChatError): string => {
-	switch (error.kind) {
-		case "busy":
-			return "This conversation is already generating an answer.";
-		case "missing":
-			return "This conversation no longer exists.";
-		case "invalid":
-			return error.message;
-		case "network":
-			return "Could not reach the server.";
-		default:
-			return error.message;
-	}
-};
-
 const formatBytes = (bytes: number): string => {
 	if (bytes < 1024) {
 		return `${bytes} B`;
@@ -80,7 +51,48 @@ const Chat = ({
 	chat,
 	onToggleSidebar,
 }: ChatProps) => {
+	const { t } = useTranslation();
+
 	const [input, setInput] = useState("");
+
+	// Built from `t` per render rather than as module constants, so they
+	// follow a language switch. Cheap: a handful of lookups.
+	const statusLabel: Record<StreamStatus, string> = {
+		idle: t("chat.statusIdle"),
+		connecting: t("chat.statusConnecting"),
+		open: t("chat.statusOpen"),
+		closed: t("chat.statusClosed"),
+	};
+
+	// Only the outcomes worth explaining to the reader; a finished answer
+	// and one still arriving need no note.
+	const outcomeNote = (status: MessageStatus): string | undefined => {
+		switch (status) {
+			case "interrupted":
+				return t("chat.noteInterrupted");
+			case "cancelled":
+				return t("chat.noteCancelled");
+			case "failed":
+				return t("chat.noteFailed");
+			default:
+				return undefined;
+		}
+	};
+
+	const errorText = (error: ChatError): string => {
+		switch (error.kind) {
+			case "busy":
+				return t("chat.errBusy");
+			case "missing":
+				return t("chat.errMissing");
+			case "invalid":
+				return error.message;
+			case "network":
+				return t("chat.errNetwork");
+			default:
+				return error.message;
+		}
+	};
 
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -169,12 +181,12 @@ const Chat = ({
 					</button>
 
 					<div>
-						<h5 className="mb-0">AI Assistant</h5>
+						<h5 className="mb-0">{t("chat.assistant")}</h5>
 
 						<small className="text-secondary">
 							{isGenerating
-								? "Generating…"
-								: STATUS_LABEL[stream.status]}
+								? t("chat.generating")
+								: statusLabel[stream.status]}
 						</small>
 					</div>
 				</div>
@@ -186,18 +198,18 @@ const Chat = ({
 				>
 					{!conversationId && (
 						<p className="text-secondary">
-							Pick a conversation, or start a new one.
+							{t("chat.pickConversation")}
 						</p>
 					)}
 
 					{isLoading && (
-						<p className="text-secondary">Loading messages…</p>
+						<p className="text-secondary">
+							{t("chat.loadingMessages")}
+						</p>
 					)}
 
 					{loadError && (
-						<p className="text-danger">
-							Could not load this conversation.
-						</p>
+						<p className="text-danger">{t("chat.loadError")}</p>
 					)}
 
 					{conversationId &&
@@ -205,7 +217,7 @@ const Chat = ({
 						!loadError &&
 						messages.length === 0 && (
 							<p className="text-secondary">
-								No messages yet — say something.
+								{t("chat.noMessages")}
 							</p>
 						)}
 
@@ -224,7 +236,7 @@ const Chat = ({
 						const isStreaming =
 							stream.drafts[message.id] !== undefined;
 
-						const note = OUTCOME_NOTE[message.status];
+						const note = outcomeNote(message.status);
 
 						return (
 							<div
@@ -286,8 +298,7 @@ const Chat = ({
 
 				{stream.joinedLate && (
 					<div className="alert alert-info m-3 mb-0 py-2 small">
-						Joined while an answer was already in progress — showing
-						it from here.
+						{t("chat.joinedLate")}
 					</div>
 				)}
 
@@ -302,14 +313,14 @@ const Chat = ({
 									className="btn btn-sm btn-outline-secondary"
 									onClick={() => void chat.retry()}
 								>
-									Retry
+									{t("chat.retry")}
 								</button>
 							)}
 
 							<button
 								type="button"
 								className="btn-close"
-								aria-label="Dismiss"
+								aria-label={t("chat.dismiss")}
 								onClick={chat.clearError}
 							/>
 						</span>
@@ -323,8 +334,8 @@ const Chat = ({
 						rows={1}
 						placeholder={
 							conversationId
-								? "Type a message..."
-								: "Select a conversation first"
+								? t("chat.inputPlaceholder")
+								: t("chat.inputPlaceholderNoConv")
 						}
 						value={input}
 						disabled={!conversationId}
@@ -336,7 +347,7 @@ const Chat = ({
 						className="btn btn-primary"
 						disabled={!canSend}
 					>
-						{chat.isSending ? "Sending…" : "Send"}
+						{chat.isSending ? t("chat.sending") : t("chat.send")}
 					</button>
 				</form>
 			</div>

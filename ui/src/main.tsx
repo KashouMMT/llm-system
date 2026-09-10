@@ -7,6 +7,9 @@ import App from "./App.tsx";
 import { AuthGate } from "./auth/AuthGate";
 import { AuthProvider } from "./auth/AuthProvider";
 
+// Side-effect import: initialises i18next before any component renders.
+import "./i18n";
+
 import "bootstrap/dist/css/bootstrap.min.css";
 import "bootstrap/dist/js/bootstrap.bundle.min.js";
 import "bootstrap-icons/font/bootstrap-icons.css";

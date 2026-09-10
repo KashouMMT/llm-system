@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -17,6 +18,7 @@ const LoginPage = ({
 	notice = null,
 	onShowSignUp,
 }: LoginPageProps) => {
+	const { t } = useTranslation();
 	const { login } = useAuth();
 
 	const [email, setEmail] = useState(initialEmail);
@@ -34,8 +36,8 @@ const LoginPage = ({
 		} catch (caught) {
 			setError(
 				caught instanceof ApiError && caught.status === 401
-					? "Incorrect email or password."
-					: "Could not sign in. Is the API running?",
+					? t("auth.errWrongCredentials")
+					: t("auth.errSignInGeneric"),
 			);
 		} finally {
 			setSubmitting(false);
@@ -54,7 +56,7 @@ const LoginPage = ({
 				)}
 
 				<label className="form-label" htmlFor="login-email">
-					Email
+					{t("auth.email")}
 				</label>
 				<input
 					id="login-email"
@@ -68,7 +70,7 @@ const LoginPage = ({
 				/>
 
 				<label className="form-label mt-3" htmlFor="login-password">
-					Password
+					{t("auth.password")}
 				</label>
 				<input
 					id="login-password"
@@ -91,17 +93,17 @@ const LoginPage = ({
 					className="btn btn-primary w-100 mt-4"
 					disabled={submitting || !email || !password}
 				>
-					{submitting ? "Signing in…" : "Sign in"}
+					{submitting ? t("auth.signingIn") : t("auth.signIn")}
 				</button>
 
 				<p className="login-alt">
-					Need an account?{" "}
+					{t("auth.needAccount")}{" "}
 					<button
 						type="button"
 						className="login-link"
 						onClick={onShowSignUp}
 					>
-						Sign up
+						{t("auth.signUp")}
 					</button>
 				</p>
 			</form>

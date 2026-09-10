@@ -1,10 +1,13 @@
 import { Link, NavLink } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import "../assets/css/navbar.css";
 import { useAuth } from "../auth/AuthContext";
 import { useTheme } from "../hooks/useTheme";
+import LanguageSwitcher from "./LanguageSwitcher";
 
 const Navbar = () => {
+	const { t } = useTranslation();
 	const { theme, toggleTheme } = useTheme();
 	const auth = useAuth();
 
@@ -28,7 +31,7 @@ const Navbar = () => {
 									isActive ? "nav-link active" : "nav-link"
 								}
 							>
-								Home
+								{t("nav.home")}
 							</NavLink>
 						</li>
 
@@ -40,11 +43,13 @@ const Navbar = () => {
 										isActive ? "nav-link active" : "nav-link"
 									}
 								>
-									Setting
+									{t("nav.setting")}
 								</NavLink>
 							</li>
 						)}
 					</ul>
+
+					<LanguageSwitcher />
 
 					<button
 						type="button"
@@ -52,8 +57,8 @@ const Navbar = () => {
 						onClick={toggleTheme}
 						aria-label={
 							theme === "light"
-								? "Switch to dark mode"
-								: "Switch to light mode"
+								? t("nav.themeToDark")
+								: t("nav.themeToLight")
 						}
 					>
 						{/* Show the theme you would switch to: moon while

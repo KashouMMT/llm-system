@@ -100,6 +100,8 @@ Assistant replies are rendered as Markdown. Four dependencies cover that, all co
 
 The Vite dev server is pinned to port `5173` with `strictPort`, because the API's CORS allowlist names that exact origin. Without the pin, a busy port would silently move the UI to `5174` and every request — including the event stream — would fail CORS with an error that looks like the backend is down.
 
+`i18next` and `react-i18next` provide interface localisation in English and Japanese. There is nothing to configure: the language defaults to Japanese, is switchable from a control in the UI, and is remembered in `localStorage` under `lang`. The catalogues ship with the bundle, so `npm install` is the whole setup.
+
 ## Running
 
 ```bash
@@ -214,6 +216,8 @@ Recovery is deliberately simple. Deltas are not replayable, so the stream re-rea
 Authentication is a gate around the whole app rather than a route. `AuthProvider` (`ui/src/auth/`) holds one TanStack Query entry for `GET /auth/me` whose query function swallows a `401` into `null`, so "not logged in" is data rather than an error; `AuthGate` renders `AuthPanel` or the app from it. `AuthPanel` is the whole signed-out screen and toggles between `LoginPage` and `SignUpPage` in local state, since `BrowserRouter` is mounted below the authenticated boundary and the signed-out screen has no routes of its own. A session that expires mid-use is caught in one place: the provider subscribes to the query and mutation caches and flips the auth entry to `null` on any `401`, so every screen reacts to a lost session without a single component checking for it. Signing out clears every cached query except the auth entry itself, so the next user never sees the previous one's conversations. `api/client.ts` sends `credentials: "include"` on every `fetch` and `useConversationStream` opens its `EventSource` with `withCredentials: true`, which is what carries the `HttpOnly` cookie onto the event stream.
 
 The context is split across two files on purpose — `AuthContext.ts` exports the hook and context, `AuthProvider.tsx` exports only the component — because a module exporting both a component and non-components defeats React Fast Refresh, which ESLint's `react-refresh/only-export-components` rule enforces.
+
+**Localisation** (`ui/src/i18n/`). Interface text is localised with `i18next` and `react-i18next`. The catalogues are two typed modules: `locales/en.ts` defines the shape and `locales/ja.ts` is typed against it (`Messages = typeof en`), so a key added on one side without the other fails `tsc` — there is no runtime "missing translation" state to notice. `index.ts` initialises i18next synchronously from those bundled resources (`useSuspense: false`, since nothing ever loads lazily) and is pulled in for its side effect by `main.tsx` before the first render. Japanese is the default because the app is used mostly from Japan; there is deliberately no locale or geolocation detection, only an explicit choice persisted to `localStorage` under `lang` and mirrored onto `<html lang>` for accessibility. `LanguageSwitcher` — a Bootstrap dropdown with a globe icon, reusing the navbar's `.theme-toggle` button style — sits in the navbar for the signed-in app and is pinned to the corner of `AuthPanel` for the signed-out screen, which has no navbar. The auth pages, navbar, sidebar and chat chrome are translated; the "LLM System" wordmark, the 履歴書 / 職務経歴書 form names, and server-supplied error strings (`ApiError` detail) are left as they come. Assistant message content is the model's own output, not interface text, so it is unaffected by the switch.
 
 **LLM** (`app/llm/`). `llm_factory.py` holds a provider registry and returns a LangChain `BaseChatModel`, so the rest of the codebase never names a vendor. `ollama_llm.py` builds `ChatOllama`; `openai_llm.py` builds `ChatOpenAI` and accepts a custom `base_url`, which covers OpenRouter, Groq, DeepSeek and anything else speaking the OpenAI Chat Completions API. An unknown `LLM_PROVIDER` fails at startup with the list of valid values. `system_prompt.py` loads the persona from the prompt set named by `SYSTEM_PROMPT` (`app/prompts/<name>/system_prompt.txt`); set resolution lives in `config/prompts.py` and is all-or-nothing, so an incomplete folder falls back — persona included — to the `default/` set, and an unreadable `default/` degrades to a built-in prompt rather than failing startup. `load_first_message` reads the same set's optional `first_message.txt`; the `POST /conversations` handler seeds it as a complete `assistant` row in the conversation's own transaction, so the persona opens with a stated direction. Every persona, including that fallback, is composed with a shared `RESPONSE_FORMAT` block describing what the frontend can render (Markdown, mermaid, no LaTeX or raw HTML). That contract belongs to the interface rather than to any one persona, so it lives in code instead of being duplicated across prompt files. The composed prompt is measured against `SYSTEM_PROMPT_TOKEN_BUDGET` and logs a warning when it exceeds it — a warning rather than an error, because a long prompt still works and this module's contract is to degrade rather than block startup.
 
@@ -351,7 +355,7 @@ llm-system/
 │   ├── vite.config.ts                            # Dev server pinned to :5173 to match the API's CORS origin
 │   ├── package.json
 │   └── src/
-│       ├── main.tsx                              # Root render; QueryClientProvider + BrowserRouter
+│       ├── main.tsx                              # Root render; QueryClientProvider + BrowserRouter; imports ./i18n to initialise it
 │       ├── App.tsx                               # Routes; /c/:conversationId carries the selected conversation
 │       ├── api/
 │       │   ├── client.ts                         # fetch wrapper, ApiError, endpoint functions, event stream URL
@@ -366,6 +370,11 @@ llm-system/
 │       │   ├── useConversationStream.ts          # One EventSource per conversation; owns the live token drafts
 │       │   ├── useChat.ts                        # Opens a turn (POST); owns no message state
 │       │   └── useTheme.ts                       # Light/dark theme
+│       ├── i18n/
+│       │   ├── index.ts                          # i18next init: default ja, localStorage 'lang', <html lang> sync, setLanguage()
+│       │   └── locales/
+│       │       ├── en.ts                         # English messages; this object's shape is the Messages type
+│       │       └── ja.ts                         # Japanese messages, typed as Messages so a missing/extra key fails tsc
 │       ├── layout/
 │       │   ├── ChatPage.tsx                      # Reads the route param and wires the four hooks together
 │       │   ├── AuthPanel.tsx                     # Signed-out screen; toggles between LoginPage and SignUpPage
@@ -377,6 +386,7 @@ llm-system/
 │       │   ├── Markdown.tsx                      # Renders assistant text as Markdown; routes mermaid fences
 │       │   ├── MermaidDiagram.tsx                # Renders one mermaid fence to SVG
 │       │   ├── Sidebar.tsx                       # Conversation list, active highlight, new chat, inline rename, account block
+│       │   ├── LanguageSwitcher.tsx              # Globe dropdown: English | 日本語 (used in Navbar and AuthPanel)
 │       │   ├── Navbar.tsx
 │       │   └── Footer.tsx
 │       └── assets/

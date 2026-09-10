@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 import "../assets/css/sidebar.css";
 import { blankDocumentUrl } from "../api/client";
@@ -33,6 +34,7 @@ const BLANK_FORMS = [
 ];
 
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const auth = useAuth();
 
@@ -92,25 +94,27 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 						disabled={createConversation.isPending}
 					>
 						{createConversation.isPending
-							? "Creating…"
-							: "+ New chat"}
+							? t("sidebar.creating")
+							: t("sidebar.newChat")}
 					</button>
 				</div>
 
 				<div className="sidebar-conversations">
 					{conversationsQuery.isPending && (
-						<p className="small text-secondary px-2">Loading…</p>
+						<p className="small text-secondary px-2">
+							{t("sidebar.loading")}
+						</p>
 					)}
 
 					{conversationsQuery.isError && (
 						<p className="small text-danger px-2">
-							Could not load conversations.
+							{t("sidebar.loadError")}
 						</p>
 					)}
 
 					{conversationsQuery.data?.length === 0 && (
 						<p className="small text-secondary px-2">
-							No conversations yet.
+							{t("sidebar.empty")}
 						</p>
 					)}
 
@@ -165,8 +169,8 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 								<button
 									type="button"
 									className="sidebar-conversation-rename"
-									aria-label="Rename conversation"
-									title="Rename"
+									aria-label={t("sidebar.renameAria")}
+									title={t("sidebar.rename")}
 									onClick={() =>
 										startEditing(
 											conversation.id,
@@ -189,7 +193,9 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 				    browser downloads without navigating away and the session
 				    cookie rides along on the GET. */}
 				<div className="sidebar-forms">
-					<p className="sidebar-forms-heading">Blank forms</p>
+					<p className="sidebar-forms-heading">
+						{t("sidebar.blankForms")}
+					</p>
 
 					{BLANK_FORMS.map((form) => (
 						<a
@@ -221,7 +227,7 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 								void auth.logout();
 							}}
 						>
-							Sign out
+							{t("sidebar.signOut")}
 						</button>
 					</div>
 				)}

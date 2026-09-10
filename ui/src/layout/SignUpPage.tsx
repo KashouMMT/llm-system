@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ApiError, register } from "../api/client";
 
@@ -10,6 +11,8 @@ type SignUpPageProps = {
 };
 
 const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
+	const { t } = useTranslation();
+
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [error, setError] = useState<string | null>(null);
@@ -28,8 +31,8 @@ const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
 		} catch (caught) {
 			setError(
 				caught instanceof ApiError && caught.status === 409
-					? "That email is already registered."
-					: "Could not sign up. Is the API running?",
+					? t("auth.errEmailTaken")
+					: t("auth.errSignUpGeneric"),
 			);
 		} finally {
 			setSubmitting(false);
@@ -39,10 +42,10 @@ const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
 	return (
 		<main className="login-page">
 			<form className="login-card" onSubmit={onSubmit}>
-				<h1 className="login-title">Create an account</h1>
+				<h1 className="login-title">{t("auth.signUpTitle")}</h1>
 
 				<label className="form-label" htmlFor="signup-email">
-					Email
+					{t("auth.email")}
 				</label>
 				<input
 					id="signup-email"
@@ -56,7 +59,7 @@ const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
 				/>
 
 				<label className="form-label mt-3" htmlFor="signup-password">
-					Password
+					{t("auth.password")}
 				</label>
 				<input
 					id="signup-password"
@@ -79,17 +82,17 @@ const SignUpPage = ({ onSignedUp, onShowLogin }: SignUpPageProps) => {
 					className="btn btn-primary w-100 mt-4"
 					disabled={submitting || !email || !password}
 				>
-					{submitting ? "Creating account…" : "Sign up"}
+					{submitting ? t("auth.creatingAccount") : t("auth.signUp")}
 				</button>
 
 				<p className="login-alt">
-					Already have an account?{" "}
+					{t("auth.haveAccount")}{" "}
 					<button
 						type="button"
 						className="login-link"
 						onClick={onShowLogin}
 					>
-						Sign in
+						{t("auth.signIn")}
 					</button>
 				</p>
 			</form>

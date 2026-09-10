@@ -161,3 +161,38 @@ body {
 .login-link:hover {
 	color: var(--text-muted);
 }
+
+/* Bootstrap dropdown — themed here like the .theme-toggle and
+   .form-control overrides above, since the app toggles [data-theme]
+   rather than Bootstrap's own data-bs-theme. Used by LanguageSwitcher. */
+
+.dropdown-menu {
+	background-color: var(--bg);
+	border-color: var(--border);
+}
+
+.dropdown-item {
+	color: var(--text);
+}
+
+.dropdown-item:hover,
+.dropdown-item:focus {
+	background-color: var(--bg-subtle);
+	color: var(--text);
+}
+
+.dropdown-item.active,
+.dropdown-item:active {
+	background-color: var(--accent);
+	color: var(--accent-contrast);
+}
+
+/* The signed-out screen has no navbar, so its language switcher is pinned
+   to the top-right corner instead. */
+
+.auth-lang-switch {
+	position: fixed;
+	top: 1rem;
+	right: 1rem;
+	z-index: 10;
+}
