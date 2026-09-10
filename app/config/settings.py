@@ -258,6 +258,13 @@ CSRF_TRUSTED_ORIGINS = tuple(
 # in the environment for any real deployment.
 CSRF_SECRET = os.getenv("CSRF_SECRET", "").strip()
 
+# API SERVER (--api mode)
+# Where uvicorn binds. 0.0.0.0 is correct inside a container; override the
+# port when running two instances on one host, or bind to 127.0.0.1 when a
+# reverse proxy on the same host is the only thing that should reach it.
+API_HOST = get_valid_string("API_HOST", "0.0.0.0")
+API_PORT = get_positive_int("API_PORT", 8000)
+
 # LOG CONFIGURATION
 LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")
 CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")

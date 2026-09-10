@@ -1,11 +1,17 @@
 import argparse
 import asyncio
 import selectors
+import sys
 
 import uvicorn
 
 from app.authentication.seed import seed_root
-from app.config.settings import AUTH_BOOTSTRAP_EMAIL, AUTH_BOOTSTRAP_PASSWORD
+from app.config.settings import (
+    API_HOST,
+    API_PORT,
+    AUTH_BOOTSTRAP_EMAIL,
+    AUTH_BOOTSTRAP_PASSWORD,
+)
 from app.runtime.application import Application
 from app.runtime.cli import run_cli
 from app.runtime.server import create_api
@@ -58,8 +64,8 @@ async def main():
             # connection pool is bound to this one. Serve in place.
             config = uvicorn.Config(
                 api,
-                host="0.0.0.0",
-                port=8000,
+                host=API_HOST,
+                port=API_PORT,
                 # SSE streams never end on their own — the client stays
                 # connected and the generator keeps emitting heartbeats,
                 # so graceful shutdown would wait for them forever. Cut
@@ -78,10 +84,21 @@ async def main():
 
 if __name__ == "__main__":
     try:
-        asyncio.run(
-            main(),
-            loop_factory=lambda: asyncio.SelectorEventLoop(selectors.SelectSelector()),
-        )
+        if sys.platform == "win32":
+            # psycopg's async path does not work on Windows' default
+            # (Proactor) event loop, so force a selector loop there.
+            # Deliberately NOT done on Linux: its default selector loop
+            # already uses epoll, and forcing plain select() would cap the
+            # process at ~1024 file descriptors — a ceiling that long-lived
+            # SSE streams can reach.
+            asyncio.run(
+                main(),
+                loop_factory=lambda: asyncio.SelectorEventLoop(
+                    selectors.SelectSelector(),
+                ),
+            )
+        else:
+            asyncio.run(main())
 
     except KeyboardInterrupt:
         # A second Ctrl+C during shutdown cancels cleanup on purpose.

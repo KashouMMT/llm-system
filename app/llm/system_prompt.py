@@ -1,12 +1,20 @@
 from app.config.prompts import (
     FIRST_MESSAGE_FILE,
+    SUMMARY_CHUNK_PROMPT_FILE,
+    SUMMARY_MERGE_PROMPT_FILE,
     SYSTEM_PROMPT_FILE,
     TITLE_PROMPT_FILE,
     read_optional_prompt_file,
     read_prompt_file,
     resolve_prompt_set,
 )
-from app.config.settings import DEFAULT_PROMPT, DEFAULT_TITLE_PROMPT, SYSTEM_PROMPT
+from app.config.settings import (
+    DEFAULT_PROMPT,
+    DEFAULT_TITLE_PROMPT,
+    SUMMARY_CHUNK_PROMPT,
+    SUMMARY_MERGE_PROMPT,
+    SYSTEM_PROMPT,
+)
 from app.utils.logger import logger
 
 # Appended to every persona, including the fallback.
@@ -200,3 +208,60 @@ def load_title_prompt(name: str = SYSTEM_PROMPT) -> str:
     )
 
     return content
+
+
+def _load_summary_prompt(name: str, filename: str, fallback: str) -> str:
+    """
+    Load one required summarization prompt (`summary_chunk_prompt.txt` or
+    `summary_merge_prompt.txt`) from prompt set `name`, live.
+
+    Same all-or-nothing set resolution as the persona: an incomplete
+    `name` folder falls back to the `default` set. If even that read
+    fails — a transient filesystem error, not a normal state — this
+    degrades to `fallback`, the copy `settings` resolved at startup from
+    the env `SYSTEM_PROMPT`, so a background summarization run never fails
+    for want of a prompt.
+
+    The returned text still contains its `{…}` placeholders; the caller
+    runs `.format(...)` on it exactly as before.
+    """
+    try:
+        set_dir = resolve_prompt_set(name)
+        content = read_prompt_file(set_dir, filename)
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "Summary prompt unreadable, using the startup set's copy | "
+            "name=%s file=%s error=%s",
+            name,
+            filename,
+            error,
+        )
+        return fallback
+
+    logger.debug(
+        "Summary prompt loaded | name=%s file=%s dir=%s characters=%s",
+        name,
+        filename,
+        set_dir.name,
+        len(content),
+    )
+
+    return content
+
+
+def load_summary_chunk_prompt(name: str = SYSTEM_PROMPT) -> str:
+    """Live-load `summary_chunk_prompt.txt` for prompt set `name`."""
+    return _load_summary_prompt(
+        name,
+        SUMMARY_CHUNK_PROMPT_FILE,
+        SUMMARY_CHUNK_PROMPT,
+    )
+
+
+def load_summary_merge_prompt(name: str = SYSTEM_PROMPT) -> str:
+    """Live-load `summary_merge_prompt.txt` for prompt set `name`."""
+    return _load_summary_prompt(
+        name,
+        SUMMARY_MERGE_PROMPT_FILE,
+        SUMMARY_MERGE_PROMPT,
+    )

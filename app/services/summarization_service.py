@@ -5,9 +5,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 
 from app.config.runtime_settings import RuntimeSettingsHolder
-from app.config.settings import (
-    SUMMARY_CHUNK_PROMPT,
-    SUMMARY_MERGE_PROMPT,
+from app.llm.system_prompt import (
+    load_summary_chunk_prompt,
+    load_summary_merge_prompt,
 )
 from app.repositories.message_repository import Message, MessageRepository
 from app.repositories.summary_repository import SummaryRepository, SummaryState
@@ -123,7 +123,13 @@ class SummarizationService:
     async def _generate_chunk_summary(self, rows: list[Message]) -> str:
         conversation = "\n".join(f"{row.role}: {row.content}" for row in rows)
 
-        prompt = SUMMARY_CHUNK_PROMPT.format(conversation=conversation)
+        # Resolved live from the active prompt set, so a runtime
+        # system_prompt_name change swaps the summarization prompts too —
+        # not only the persona.
+        template = load_summary_chunk_prompt(
+            self.settings.current.system_prompt_name,
+        )
+        prompt = template.format(conversation=conversation)
 
         response = await self.llm.ainvoke([HumanMessage(content=prompt)])
 
@@ -143,7 +149,10 @@ class SummarizationService:
         # Asked for less than the hard cap on purpose: the cap is a backstop
         # for a model that ignored the budget, so it must not double as the
         # target. Room between the two is what keeps _cap_summary quiet.
-        prompt = SUMMARY_MERGE_PROMPT.format(
+        template = load_summary_merge_prompt(
+            self.settings.current.system_prompt_name,
+        )
+        prompt = template.format(
             current_summary=current_summary,
             chunk_summary=chunk_summary,
             max_characters=int(self.settings.current.max_summary_chars * 0.75),

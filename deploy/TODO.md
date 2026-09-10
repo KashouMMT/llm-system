@@ -52,21 +52,21 @@ a Dockerfile.
       password rather than a config bug. (The same trap applies to
       systemd's `EnvironmentFile`.)
 - [ ] **`DB_HOST`** follows from the Postgres decision above.
-- [ ] **Health check.** There is no health endpoint today. Compose and any
-      future orchestrator both want one. A `GET /health` that checks the
-      connection pool is enough — it must not require authentication.
+- [x] **Health check.** `GET /health` (in `app/runtime/server.py`) is
+      unauthenticated, borrows a pooled connection, runs `SELECT 1`, and
+      returns `200 {"status":"ok"}` or `503`.
 - [ ] **Restart policy.** `restart: unless-stopped` gives crash-restart and
       start-on-boot together, provided `docker.service` is enabled. Note
       there is no clean equivalent to systemd's `StartLimitBurst`, so a
       crash-on-startup fault retries forever with backoff instead of
       failing loudly. `on-failure:10` caps retries but will not come back
       after a host reboot.
-- [ ] **`host` and `port` are hardcoded** in `app/main.py`
-      (`0.0.0.0:8000`). Correct inside a container, but make them
-      configurable rather than leaving it as luck.
-- [ ] **Verify the event loop policy** in `app/main.py`. It forces a
-      selector loop for Windows; confirm the platform guard means Linux
-      containers get the default policy.
+- [x] **`host` and `port`** are now `API_HOST` / `API_PORT` env vars
+      (default `0.0.0.0` / `8000`).
+- [x] **Event loop policy.** `app/main.py` now guards the forced
+      `SelectSelector` loop with `if sys.platform == "win32"`; Linux
+      containers get the default epoll-backed selector loop, which has no
+      ~1024-fd ceiling for SSE streams.
 
 ## Frontend image
 
@@ -81,9 +81,9 @@ a Dockerfile.
 - [ ] **nginx needs an SPA fallback** (`try_files $uri /index.html`), or a
       hard refresh on any route other than `/` returns 404 under
       `BrowserRouter`.
-- [ ] **CORS is hardcoded.** `app/runtime/server.py` sets
-      `allow_origins=["http://localhost:5173"]`. Must become configurable,
-      or become unnecessary by serving both from one origin.
+- [x] **CORS is configurable.** `app/runtime/server.py` now sets
+      `allow_origins` from `CSRF_TRUSTED_ORIGINS` (comma-separated env
+      var). Still becomes a no-op if both are served from one origin.
 - [ ] **SSE through nginx.** `X-Accel-Buffering: no` is already sent by the
       app, but confirm `proxy_buffering off` and a long
       `proxy_read_timeout` on the `/events` location, or streams will stall
@@ -93,9 +93,11 @@ a Dockerfile.
 
 - [ ] **`COOKIE_SECURE=true`** once TLS is in front. It is `false` now for
       plain-HTTP localhost.
-- [ ] **CSRF.** Deliberately deferred during development. `SameSite=lax`
-      covers most of it, but revisit before anyone outside the team logs
-      in — especially if the single-origin decision is reversed.
+- [x] **CSRF.** Built: `app/authentication/csrf.py` — Origin/Referer check
+      + Content-Type check + signed double-submit token, on every
+      non-safe method. Needs `CSRF_SECRET` set to a stable value in the
+      environment (unset ⇒ regenerated per restart ⇒ everyone 403s until
+      they reload).
 - [ ] **Rotate every credential.** `DB_PASSWORD` and
       `AUTH_BOOTSTRAP_PASSWORD` are development values. Longer term these
       belong in Docker secrets or the host's secret store, not `.env`.

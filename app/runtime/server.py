@@ -127,6 +127,30 @@ def create_api(application: Application) -> FastAPI:
 
         return conversation
 
+    # ---- health -------------------------------------------------------
+
+    @app.get("/health")
+    async def health():
+        """
+        Liveness + readiness for a load balancer or orchestrator.
+
+        Unauthenticated by design, and a deep check: it borrows a pooled
+        connection and runs `SELECT 1`, so a `200` means the process is up
+        *and* the database is reachable. `503` otherwise.
+        """
+        try:
+            async with application.pool.connection() as conn:
+                await conn.execute("SELECT 1")
+        except Exception:
+            logger.exception("Health check failed")
+
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unavailable"},
+            )
+
+        return {"status": "ok"}
+
     # ---- auth -----------------------------------------------------------
 
     @app.post("/auth/login")
