@@ -28,6 +28,35 @@ function describe(detail: unknown): string {
 	return typeof detail === "string" ? detail : JSON.stringify(detail);
 }
 
+/**
+ * A v4 UUID that also works outside a secure context.
+ *
+ * crypto.randomUUID() is only defined on HTTPS and http://localhost, so a
+ * bare-IP HTTP deployment must fall back. crypto.getRandomValues() carries
+ * no such restriction.
+ */
+function newClientMessageId(): string {
+	if (typeof crypto.randomUUID === "function") {
+		return crypto.randomUUID();
+	}
+
+	const bytes = crypto.getRandomValues(new Uint8Array(16));
+	const hex: string[] = [];
+
+	for (let i = 0; i < 16; i += 1) {
+		let byte = bytes[i] ?? 0;
+
+		if (i === 6) byte = (byte & 0x0f) | 0x40; // version 4
+		if (i === 8) byte = (byte & 0x3f) | 0x80; // variant 10
+
+		hex.push(byte.toString(16).padStart(2, "0"));
+	}
+
+	const s = hex.join("");
+
+	return `${s.slice(0, 8)}-${s.slice(8, 12)}-${s.slice(12, 16)}-${s.slice(16, 20)}-${s.slice(20)}`;
+}
+
 function toChatError(caught: unknown): ChatError {
 	if (!(caught instanceof ApiError)) {
 		return { kind: "network" };
@@ -118,9 +147,8 @@ export const useChat = (conversationId: string | undefined) => {
 				return Promise.resolve(null);
 			}
 
-			// crypto.randomUUID needs a secure context; localhost qualifies.
 			return post({
-				clientMessageId: crypto.randomUUID(),
+				clientMessageId: newClientMessageId(),
 				message,
 			});
 		},
