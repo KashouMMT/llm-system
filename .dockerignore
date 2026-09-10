@@ -1,0 +1,35 @@
+# Build context is the repo root. The backend image needs only
+# requirements.txt and app/.
+
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Frontend — built and served separately (host nginx).
+ui/
+
+# Not needed at runtime.
+deploy/
+documentation/
+playground/
+images/
+*.md
+
+# Runtime-generated; recreated inside the image.
+app/logs/
+app/generated_files/
+
+# Never bake secrets into an image (compose bind-mounts .env at runtime).
+.env
+*.env
+
+# Editor / OS noise.
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

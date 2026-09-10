@@ -1,0 +1,77 @@
+# Runs the llm-system backend as a single container.
+#
+# The database is external on purpose — the host's Postgres locally, RDS
+# on AWS — so there is no `db` service.
+#
+# Local (container reaches the host's Postgres via host.docker.internal):
+#
+#   DATABASE_URL='postgresql://postgres:PASS@host.docker.internal:5432/llm_system' \
+#     docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml logs -f
+#   docker compose -f deploy/docker-compose.yml down
+#
+# On AWS: do NOT set DATABASE_URL in the shell — the bind-mounted .env
+# carries the RDS URL (with ?sslmode=require).
+#
+# Publish an image (one private Docker Hub repo is enough):
+#
+#   API_IMAGE=<dockerhub-user>/llm-system:v1 \
+#     docker compose -f deploy/docker-compose.yml build
+#   docker push <dockerhub-user>/llm-system:v1
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ${API_IMAGE:-llm-system:local}
+    restart: unless-stopped
+
+    # Bind-mount the real .env and let python-dotenv parse it: compose's
+    # env_file parser is not dotenv's (quoting and '#' handling differ),
+    # which can silently corrupt a value such as a password.
+    volumes:
+      - ../.env:/app/.env:ro
+      - api-generated:/app/app/generated_files
+      - api-logs:/app/app/logs
+
+    # settings.py calls load_dotenv() without override=True, so a real
+    # environment variable set here wins over the bind-mounted .env; a
+    # bare name (no `=`) is a pass-through, forwarded only if set in the
+    # shell and omitted otherwise (so it never shadows the .env value).
+    environment:
+      # Local: redirect the container to the host's Postgres. Works when
+      # .env uses the split DB_* parts. If .env instead uses DATABASE_URL,
+      # this line is ignored (settings.py takes the host from the URL) —
+      # point that URL at host.docker.internal, or pass DATABASE_URL in
+      # the shell. On AWS with DATABASE_URL=<rds> in .env, ignored, fine.
+      - DB_HOST=host.docker.internal
+      - DATABASE_URL
+      - LOG_LEVEL
+      - CONVERSATION_LOG
+
+    # Lets a host.docker.internal in DATABASE_URL resolve on plain Linux
+    # too (Docker Desktop provides it already; unused on AWS/RDS).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Only the host — and the Vite dev server running on it — can reach the
+    # API. For public-IP prod with no reverse proxy yet, change to
+    # "0.0.0.0:8000:8000" (and set COOKIE_SECURE only once TLS is in front).
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  api-generated:
+  api-logs:
