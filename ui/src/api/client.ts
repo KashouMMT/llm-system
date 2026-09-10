@@ -31,6 +31,22 @@ export class ApiError extends Error {
 	}
 }
 
+/**
+ * Reads one cookie by name. Used for the CSRF token, which the server
+ * sets as a readable (non-HttpOnly) cookie for exactly this purpose.
+ */
+function readCookie(name: string): string | null {
+	const prefix = `${name}=`;
+
+	for (const part of document.cookie.split("; ")) {
+		if (part.startsWith(prefix)) {
+			return decodeURIComponent(part.slice(prefix.length));
+		}
+	}
+
+	return null;
+}
+
 async function readDetail(response: Response): Promise<unknown> {
 	try {
 		const body = await response.json();
@@ -49,6 +65,15 @@ async function request<TResponse>(
 	path: string,
 	init?: RequestInit,
 ): Promise<TResponse> {
+	const method = (init?.method ?? "GET").toUpperCase();
+
+	// The server's CSRF gate wants the signed double-submit token echoed
+	// back on every state-changing request. Safe methods don't carry it.
+	const csrfToken =
+		method === "GET" || method === "HEAD"
+			? null
+			: readCookie("csrf_token");
+
 	const response = await fetch(`${API_BASE_URL}${path}`, {
 		...init,
 		// Harmless today; required once sessions become an httpOnly cookie,
@@ -59,6 +84,7 @@ async function request<TResponse>(
 			// application/json on a bodyless GET isn't a safelisted CORS
 			// value and costs a preflight OPTIONS round trip for nothing.
 			...(init?.body ? { "Content-Type": "application/json" } : {}),
+			...(csrfToken ? { "X-CSRF-Token": csrfToken } : {}),
 			...init?.headers,
 		},
 	});

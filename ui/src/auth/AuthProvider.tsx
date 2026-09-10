@@ -1,4 +1,10 @@
-import { type ReactNode, useCallback, useEffect, useMemo } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -12,6 +18,10 @@ import { AuthContext, type AuthContextValue, authKey } from "./AuthContext";
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
 	const queryClient = useQueryClient();
+
+	// Last non-401 HTTP error worth showing full-screen. Today only 403
+	// (a stale CSRF token) qualifies; 401 is handled by signing out.
+	const [httpError, setHttpError] = useState<number | null>(null);
 
 	const query = useQuery({
 		queryKey: authKey,
@@ -38,8 +48,14 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 	// a null result, not an error.
 	useEffect(() => {
 		const onError = (error: unknown) => {
-			if (error instanceof ApiError && error.status === 401) {
+			if (!(error instanceof ApiError)) {
+				return;
+			}
+
+			if (error.status === 401) {
 				queryClient.setQueryData(authKey, null);
+			} else if (error.status === 403) {
+				setHttpError(403);
 			}
 		};
 
@@ -87,8 +103,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 		}
 	}, [queryClient]);
 
+	const dismissHttpError = useCallback(() => setHttpError(null), []);
+
 	const value = useMemo<AuthContextValue>(() => {
-		const actions = { login, logout };
+		const actions = { login, logout, httpError, dismissHttpError };
 
 		if (query.isPending) {
 			return { status: "loading", ...actions };
@@ -99,7 +117,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 		}
 
 		return { status: "unauthenticated", ...actions };
-	}, [query.isPending, query.data, login, logout]);
+	}, [query.isPending, query.data, login, logout, httpError, dismissHttpError]);
 
 	return (
 		<AuthContext.Provider value={value}>{children}</AuthContext.Provider>

@@ -66,4 +66,16 @@ export const ja: Messages = {
 		send: "送信",
 		sending: "送信中…",
 	},
+	error: {
+		notFoundTitle: "ページが見つかりません",
+		notFoundBody: "このページは存在しないか、移動されました。",
+		forbiddenTitle: "リクエストがブロックされました",
+		forbiddenBody:
+			"セキュリティチェックに失敗しました。ページを再読み込みすると解決することがほとんどです。",
+		serverErrorTitle: "問題が発生しました",
+		serverErrorBody: "予期しないエラーが発生しました。ページを再読み込みしてください。",
+		reload: "再読み込み",
+		backHome: "ホームに戻る",
+		dismiss: "閉じる",
+	},
 };

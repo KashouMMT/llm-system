@@ -13,11 +13,17 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.authentication.authorization import is_admin
+from app.authentication.csrf import (
+    CSRFMiddleware,
+    clear_csrf_cookie,
+    set_csrf_cookie,
+)
 from app.authentication.dependencies import make_current_user, make_require_admin
 from app.authentication.models import User
 from app.config.settings import (
     COOKIE_SAMESITE,
     COOKIE_SECURE,
+    CSRF_TRUSTED_ORIGINS,
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
     TITLE_MAX_CHARS,
@@ -89,9 +95,13 @@ def create_api(application: Application) -> FastAPI:
 
     app = FastAPI()
 
+    # Order matters: the last add_middleware call is the outermost layer.
+    # CORS must wrap the CSRF gate so that a 403 from the gate still comes
+    # back with the Access-Control headers a browser needs to read it.
+    app.add_middleware(CSRFMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
+        allow_origins=list(CSRF_TRUSTED_ORIGINS),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -146,6 +156,9 @@ def create_api(application: Application) -> FastAPI:
             path="/",
         )
 
+        # Issue the matching CSRF cookie, bound to this session token.
+        set_csrf_cookie(response, token)
+
         return {
             "id": str(user.id),
             "email": user.email,
@@ -187,9 +200,21 @@ def create_api(application: Application) -> FastAPI:
             secure=COOKIE_SECURE,
             samesite=COOKIE_SAMESITE,
         )
+        clear_csrf_cookie(response)
 
     @app.get("/auth/me")
-    async def me(user: Annotated[User, Depends(current_user)]):
+    async def me(
+        request: Request,
+        response: Response,
+        user: Annotated[User, Depends(current_user)],
+    ):
+        # The SPA hits this on every load, so it is also where a missing
+        # or restart-invalidated CSRF cookie gets repaired.
+        session_token = request.cookies.get(SESSION_COOKIE_NAME)
+
+        if session_token:
+            set_csrf_cookie(response, session_token)
+
         return {
             "id": str(user.id),
             "email": user.email,

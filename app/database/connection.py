@@ -3,13 +3,8 @@ from psycopg_pool import AsyncConnectionPool
 
 from app.config.settings import (
     DATABASE_URL,
-    DB_HOST,
-    DB_NAME,
-    DB_PASSWORD,
     DB_POOL_MAX_SIZE,
     DB_POOL_MIN_SIZE,
-    DB_PORT,
-    DB_USER,
 )
 from app.utils.logger import logger
 
@@ -24,13 +19,7 @@ def get_connection():
     blocks the event loop — and therefore every open SSE stream at once.
     """
     try:
-        conn = psycopg.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-        )
+        conn = psycopg.connect(DATABASE_URL)
 
         logger.info("PostgreSQL connected")
 

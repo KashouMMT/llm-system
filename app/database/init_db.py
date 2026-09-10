@@ -1,18 +1,18 @@
 import psycopg
 
-from app.config.settings import DB_HOST, DB_NAME, DB_PASSWORD, DB_PORT, DB_USER
+from app.config.settings import DATABASE_URL, DB_NAME
 from app.database.connection import get_connection
 from app.database.migrations import run_migrations
 from app.utils.logger import logger
 
 
 def create_db_if_not_exist() -> None:
+    # Connect to the maintenance database — the target one may not exist
+    # yet. dbname overrides whatever DATABASE_URL carries; host,
+    # credentials, sslmode and the rest still come from it.
     conn = psycopg.connect(
-        host=DB_HOST,
-        port=DB_PORT,
+        DATABASE_URL,
         dbname="postgres",
-        user=DB_USER,
-        password=DB_PASSWORD,
         autocommit=True,
     )
 

@@ -65,6 +65,18 @@ export const en = {
 		send: "Send",
 		sending: "Sending…",
 	},
+	error: {
+		notFoundTitle: "Page not found",
+		notFoundBody: "That page doesn't exist or has moved.",
+		forbiddenTitle: "Request blocked",
+		forbiddenBody:
+			"A security check failed. Reloading the page usually fixes it.",
+		serverErrorTitle: "Something went wrong",
+		serverErrorBody: "An unexpected error occurred. Try reloading the page.",
+		reload: "Reload",
+		backHome: "Back to home",
+		dismiss: "Dismiss",
+	},
 };
 
 export type Messages = typeof en;

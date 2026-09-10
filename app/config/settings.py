@@ -2,6 +2,7 @@ import os
 from urllib.parse import quote
 
 from dotenv import load_dotenv
+from psycopg.conninfo import conninfo_to_dict
 
 from app.config.prompts import (
     SUMMARY_CHUNK_PROMPT_FILE,
@@ -157,24 +158,53 @@ SUMMARY_CHUNK_PROMPT = read_prompt_file(_PROMPT_SET_DIR, SUMMARY_CHUNK_PROMPT_FI
 SUMMARY_MERGE_PROMPT = read_prompt_file(_PROMPT_SET_DIR, SUMMARY_MERGE_PROMPT_FILE)
 
 # POSTGRESQL CONFIGURATION
-DB_HOST = get_valid_string("DB_HOST", "localhost")
-DB_PORT = get_positive_int("DB_PORT", 5432)
-DB_NAME = get_valid_string("DB_NAME", "llm_system")
-DB_USER = get_valid_string("DB_USER", "postgres")
-DB_PASSWORD = get_valid_string("DB_PASSWORD", "")
+# Configure the connection one of two ways:
+#   1. DATABASE_URL — a full connection string
+#      (postgresql://user:pass@host:port/dbname?sslmode=require). When set
+#      it wins, and DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASSWORD are
+#      parsed back out of it, because a few callers need a part on its own
+#      (creating the database if it is missing needs DB_NAME).
+#   2. The individual DB_* variables — assembled into DATABASE_URL when
+#      DATABASE_URL is not set.
+# Either way, DATABASE_URL and every DB_* name end up populated and
+# consistent, so a caller can use whichever it needs.
+_DATABASE_URL_ENV = os.getenv("DATABASE_URL", "").strip()
+
+if _DATABASE_URL_ENV:
+    _db_parts = conninfo_to_dict(_DATABASE_URL_ENV)
+
+    DATABASE_URL = _DATABASE_URL_ENV
+    DB_HOST = _db_parts.get("host") or "localhost"
+    DB_PORT = int(_db_parts.get("port") or 5432)
+    DB_NAME = _db_parts.get("dbname") or ""
+    DB_USER = _db_parts.get("user") or ""
+    DB_PASSWORD = _db_parts.get("password") or ""
+
+    if not DB_NAME:
+        raise ValueError(
+            "DATABASE_URL must name a database (postgresql://.../<dbname>)."
+        )
+else:
+    DB_HOST = get_valid_string("DB_HOST", "localhost")
+    DB_PORT = get_positive_int("DB_PORT", 5432)
+    DB_NAME = get_valid_string("DB_NAME", "llm_system")
+    DB_USER = get_valid_string("DB_USER", "postgres")
+    DB_PASSWORD = get_valid_string("DB_PASSWORD", "")
+
+    DATABASE_URL = (
+        f"postgresql://"
+        f"{DB_USER}:"
+        f"{quote(DB_PASSWORD, safe='')}"
+        f"@{DB_HOST}:"
+        f"{DB_PORT}/"
+        f"{DB_NAME}"
+    )
+
 # psycopg_pool keeps this many connections open and reuses them. Opening a
 # connection per query costs a TCP handshake plus a Postgres backend fork,
 # which is wasted work on every single repository call.
 DB_POOL_MIN_SIZE = get_positive_int("DB_POOL_MIN_SIZE", 2)
 DB_POOL_MAX_SIZE = get_positive_int("DB_POOL_MAX_SIZE", 10)
-DATABASE_URL = (
-    f"postgresql://"
-    f"{DB_USER}:"
-    f"{quote(DB_PASSWORD, safe='')}"
-    f"@{DB_HOST}:"
-    f"{DB_PORT}/"
-    f"{DB_NAME}"
-)
 
 # REALTIME (SSE)
 SSE_HEARTBEAT_SECONDS = get_positive_float("SSE_HEARTBEAT_SECONDS", 15.0)
@@ -196,13 +226,37 @@ SESSION_TTL_HOURS = get_positive_int("SESSION_TTL_HOURS", 720)
 SESSION_COOKIE_NAME = get_valid_string("SESSION_COOKIE_NAME", "session_id")
 
 # Secure cannot be set over plain-HTTP localhost, so it defaults off and is
-# turned on in any real deployment. SameSite=Lax already blocks the
-# cross-site POST cookie, which is most of the CSRF surface.
+# turned on in any real deployment. SameSite is the browser-level half of
+# the CSRF defence; the CSRF middleware (Origin check + signed
+# double-submit token) is the application-level half.
 COOKIE_SECURE = get_bool("COOKIE_SECURE", False)
 COOKIE_SAMESITE = get_valid_string("COOKIE_SAMESITE", "lax")  # lax | strict | none
 
 if COOKIE_SAMESITE not in ("lax", "strict", "none"):
     raise ValueError("COOKIE_SAMESITE must be one of: lax, strict, none")
+
+# Browsers drop a SameSite=None cookie that is not also Secure, which
+# would leave the app with no session at all — fail loudly instead.
+if COOKIE_SAMESITE == "none" and not COOKIE_SECURE:
+    raise ValueError("COOKIE_SAMESITE=none requires COOKIE_SECURE=true")
+
+# CSRF
+# Origins the browser SPA is served from. One list drives both the CSRF
+# middleware's Origin/Referer check and the CORS allowlist, so there is no
+# second copy to keep in sync.
+CSRF_TRUSTED_ORIGINS = tuple(
+    origin.strip().rstrip("/")
+    for origin in os.getenv(
+        "CSRF_TRUSTED_ORIGINS", "http://localhost:5173"
+    ).split(",")
+    if origin.strip()
+)
+
+# HMAC key for the signed double-submit CSRF token. If unset, app.authentication.csrf
+# generates a random key at startup and logs a warning once — which means
+# every issued CSRF cookie stops validating after a restart, so set this
+# in the environment for any real deployment.
+CSRF_SECRET = os.getenv("CSRF_SECRET", "").strip()
 
 # LOG CONFIGURATION
 LOG_LEVEL = get_valid_string("LOG_LEVEL", "INFO")

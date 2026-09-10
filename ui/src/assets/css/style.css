@@ -196,3 +196,53 @@ body {
 	right: 1rem;
 	z-index: 10;
 }
+
+/* Full-screen error pages (404 / 403 / 500), laid out like the login
+   card. Used by ErrorScreen. */
+
+.error-page {
+	min-height: 100vh;
+	display: grid;
+	place-items: center;
+	padding: 1rem;
+	background-color: var(--bg);
+}
+
+.error-card {
+	width: 100%;
+	max-width: 26rem;
+	padding: 2rem;
+	text-align: center;
+	border: 1px solid var(--border);
+	border-radius: 0.75rem;
+	background-color: var(--bg);
+}
+
+.error-code {
+	margin: 0;
+	font-size: 3rem;
+	font-weight: 700;
+	line-height: 1;
+	color: var(--text-muted);
+}
+
+.error-title {
+	margin: 0.75rem 0 0;
+	font-size: 1.25rem;
+	font-weight: 600;
+	color: var(--text);
+}
+
+.error-body {
+	margin: 0.75rem 0 0;
+	font-size: 0.9375rem;
+	color: var(--text-muted);
+}
+
+.error-actions {
+	margin-top: 1.5rem;
+	display: flex;
+	gap: 0.75rem;
+	justify-content: center;
+	flex-wrap: wrap;
+}
