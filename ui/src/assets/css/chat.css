@@ -116,8 +116,22 @@
 }
 
 .message-user .message-content {
-	background-color: var(--accent);
-	color: var(--accent-contrast);
+	background-color: var(--user-bubble-bg);
+	color: var(--user-bubble-text);
+}
+
+/* .message-attachment normally inherits enough contrast from --text /
+   --border against --bg-subtle (the assistant bubble), but the user
+   bubble is a solid color with its own text color — this is the fix for
+   the filename rendering invisible (dark text on a dark bubble, or the
+   reverse, depending on theme) before the bubble had a fixed color. */
+.message-user .message-content .message-attachment {
+	color: var(--user-bubble-text);
+	border-color: rgba(255, 255, 255, 0.5);
+}
+
+.message-user .message-content .message-attachment-size {
+	color: rgba(255, 255, 255, 0.8);
 }
 
 .chat-input {

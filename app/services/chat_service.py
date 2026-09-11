@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import contextlib
 import time
 import uuid
@@ -11,9 +12,17 @@ from langchain_core.messages import HumanMessage
 from app.agent.graph import AgentGraph
 from app.authentication.authorization import is_admin
 from app.authentication.models import User
-from app.config.settings import MAX_ATTACHMENT_BATCH_BYTES, MAX_USER_INPUT_CHARS
+from app.config.settings import (
+    LLM_SUPPORTS_VISION,
+    MAX_ATTACHMENT_BATCH_BYTES,
+    MAX_USER_INPUT_CHARS,
+)
 from app.repositories.conversation_repository import ConversationRepository
-from app.repositories.file_repository import FileRepository, serialize_attachment
+from app.repositories.file_repository import (
+    FileRecord,
+    FileRepository,
+    serialize_attachment,
+)
 from app.repositories.message_repository import MessageRepository
 from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import (
@@ -28,7 +37,11 @@ from app.runtime.event_bus import (
 )
 from app.services.conversation_title_service import ConversationTitleService
 from app.services.summarization_service import SummarizationService
+from app.storage.base import FileStorage
 from app.utils import conversation_log
+from app.utils.attachment_manifest import format_attachment_manifest_line
+from app.utils.detect import IMAGE_JPEG, IMAGE_PNG
+from app.utils.images import downscale_image
 from app.utils.logger import logger
 
 # Terminal status -> the event that announces it.
@@ -37,6 +50,13 @@ TERMINAL_EVENTS = {
     "cancelled": EVENT_MESSAGE_CANCELLED,
     "failed": EVENT_MESSAGE_FAILED,
 }
+
+_IMAGE_CONTENT_TYPES = {IMAGE_PNG, IMAGE_JPEG}
+
+# Long side, in pixels, an image is downscaled to before being sent to a
+# vision model. 2048 is generous for anything a phone camera or a screen
+# capture produces, while bounding the token cost a single image adds.
+VISION_MAX_IMAGE_DIMENSION_PX = 2048
 
 
 class ConversationHeldError(Exception):
@@ -83,6 +103,7 @@ class ChatService:
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository,
         file_repository: FileRepository,
+        file_storage: FileStorage,
         summarization_service: SummarizationService,
         title_service: ConversationTitleService,
         event_bus: EventBus,
@@ -93,6 +114,7 @@ class ChatService:
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
         self.file_repository = file_repository
+        self.file_storage = file_storage
         self.summarization_service = summarization_service
         self.title_service = title_service
         self.event_bus = event_bus
@@ -269,6 +291,97 @@ class ChatService:
                 conversation_id,
             )
 
+    async def _build_human_message(
+        self,
+        conversation_id: UUID,
+        user_message_id: int,
+        user_input: str,
+    ) -> HumanMessage:
+        """
+        The current turn's HumanMessage — plain text if nothing is
+        attached, or content blocks (text + a manifest line per
+        attachment + image blocks) if there is.
+
+        This is the only turn that ever carries image bytes.
+        HistoryContextBuilder re-describes the same attachments as
+        text-only manifest lines on every later turn, via the same
+        format_attachment_manifest_line this uses, so the model is never
+        told two different things about one file.
+        """
+        files = await self.file_repository.get_by_message_ids([user_message_id])
+
+        if not files:
+            return HumanMessage(content=user_input)
+
+        vision_enabled = LLM_SUPPORTS_VISION
+        manifest_lines: list[str] = []
+        image_blocks: list[dict[str, Any]] = []
+
+        for file in files:
+            image_prepared = False
+
+            if file.content_type in _IMAGE_CONTENT_TYPES and vision_enabled:
+                block = await self._build_image_block(conversation_id, file)
+
+                if block is not None:
+                    image_blocks.append(block)
+                    image_prepared = True
+
+            manifest_lines.append(
+                format_attachment_manifest_line(
+                    file,
+                    is_current_turn=True,
+                    vision_enabled=vision_enabled,
+                    image_prepared=image_prepared,
+                )
+            )
+
+        text_lines = ([user_input] if user_input else []) + manifest_lines
+
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": "\n".join(text_lines)},
+            *image_blocks,
+        ]
+
+        return HumanMessage(content=content)
+
+    async def _build_image_block(
+        self,
+        conversation_id: UUID,
+        file: FileRecord,
+    ) -> dict[str, Any] | None:
+        """
+        Read, downscale, and base64-encode one image for a vision content
+        block. Returns None on any failure — reading a stray-corrupt image
+        or a decompression edge case must not fail the whole turn, only
+        that one image, and the caller reflects the failure in that
+        image's own manifest line rather than dropping it silently.
+        """
+        try:
+            raw = await self.file_storage.read(file.storage_key)
+
+            downscaled = await asyncio.to_thread(
+                downscale_image,
+                raw,
+                file.content_type,
+                max_dimension=VISION_MAX_IMAGE_DIMENSION_PX,
+            )
+
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Could not prepare image for the model | conversation=%s file=%s",
+                conversation_id,
+                file.id,
+            )
+            return None
+
+        encoded = base64.b64encode(downscaled).decode("ascii")
+
+        return {
+            "type": "image_url",
+            "image_url": {"url": f"data:{file.content_type};base64,{encoded}"},
+        }
+
     async def generate(
         self,
         conversation_id: UUID,
@@ -299,8 +412,14 @@ class ChatService:
         status = "failed"
 
         try:
+            human_message = await self._build_human_message(
+                conversation_id=conversation_id,
+                user_message_id=user_message_id,
+                user_input=user_input,
+            )
+
             async for message_chunk, metadata in self.agent_graph.stream(
-                input_messages=[HumanMessage(content=user_input)],
+                input_messages=[human_message],
                 thread_id=str(conversation_id),
                 current_user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,

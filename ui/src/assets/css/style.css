@@ -7,6 +7,11 @@
 	--accent: #000000;
 	--accent-contrast: #ffffff;
 	--accent-hover: #333333;
+	/* The sent-message bubble, deliberately fixed rather than following
+	   --accent — a Messenger-style blue that reads the same in both
+	   themes instead of flipping to white-on-black in dark mode. */
+	--user-bubble-bg: #0084ff;
+	--user-bubble-text: #ffffff;
 }
 
 [data-theme="dark"] {
@@ -18,6 +23,9 @@
 	--accent: #ffffff;
 	--accent-contrast: #000000;
 	--accent-hover: #cccccc;
+	/* Same values as :root on purpose — see the comment there. */
+	--user-bubble-bg: #0084ff;
+	--user-bubble-text: #ffffff;
 }
 
 html,

@@ -267,6 +267,7 @@ class Application:
             logger.info("Creating history context builder")
             self.history_context_builder = HistoryContextBuilder(
                 message_repository=self.message_repository,
+                file_repository=self.file_repository,
                 settings=self.runtime_settings,
             )
             logger.info("History context builder initialized")
@@ -324,6 +325,7 @@ class Application:
                 conversation_repository=self.conversation_repository,
                 message_repository=self.message_repository,
                 file_repository=self.file_repository,
+                file_storage=self.file_storage,
                 summarization_service=self.summarization_service,
                 title_service=self.title_service,
                 event_bus=self.event_bus,

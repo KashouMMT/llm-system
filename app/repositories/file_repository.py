@@ -63,6 +63,13 @@ def serialize_attachment(file: FileRecord) -> dict[str, Any]:
     the two can never drift apart. storage_key is deliberately excluded —
     a client addresses a file by id through GET /files/{id}, and where the
     bytes actually live is not its business.
+
+    created_at is pre-formatted to ISO text rather than left as a
+    datetime: the message-list endpoint's JSONResponse would encode either
+    one, but the message.created event reaches format_sse's plain
+    json.dumps, which does not know how to serialize a datetime — the same
+    reason every other timestamp built into an event payload elsewhere in
+    this codebase is already .isoformat()'d before it gets there.
     """
     return {
         "id": str(file.id),
@@ -70,7 +77,7 @@ def serialize_attachment(file: FileRecord) -> dict[str, Any]:
         "filename": file.filename,
         "content_type": file.content_type,
         "size_bytes": file.size_bytes,
-        "created_at": file.created_at,
+        "created_at": file.created_at.isoformat(),
     }
 
 

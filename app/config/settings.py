@@ -97,6 +97,14 @@ OLLAMA_BASE_URL = get_valid_string("OLLAMA_BASE_URL", "http://localhost:11434")
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
 LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
 
+# Off by default: not every model behind LLM_PROVIDER understands an image
+# content block, and a model that doesn't would either error or silently
+# ignore it. Turn on only once the configured MODEL_NAME is confirmed to
+# support vision. When off, an uploaded image is still attached and
+# downloadable — the model is just told in the manifest line that it
+# cannot see it.
+LLM_SUPPORTS_VISION = get_bool("LLM_SUPPORTS_VISION", False)
+
 # SUMMARY CONFIGURATION
 # The normal trigger. Sized so it fires before MAX_UNSUMMARIZED_MESSAGES
 # does: the message cap is a floor against a flood of one-word turns, not

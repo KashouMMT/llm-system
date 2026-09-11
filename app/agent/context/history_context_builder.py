@@ -1,9 +1,12 @@
+from collections.abc import Sequence
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from app.config.runtime_settings import RuntimeSettingsHolder
+from app.repositories.file_repository import FileRecord, FileRepository
 from app.repositories.message_repository import MessageRepository
+from app.utils.attachment_manifest import format_attachment_manifest_line
 from app.utils.logger import logger
 
 
@@ -20,9 +23,11 @@ class HistoryContextBuilder:
     def __init__(
         self,
         message_repository: MessageRepository,
+        file_repository: FileRepository,
         settings: RuntimeSettingsHolder,
     ) -> None:
         self.message_repository = message_repository
+        self.file_repository = file_repository
         self.settings = settings
 
     async def build(
@@ -57,11 +62,24 @@ class HistoryContextBuilder:
 
             rows = list(rows)[-max_history_messages:]
 
+        # One query for every user message in this window, rather than one
+        # per message — the same reasoning as
+        # FileRepository.get_by_message_ids' other callers.
+        user_message_ids = [message.id for message in rows if message.role == "user"]
+        files_by_message = await self._files_by_message_id(user_message_ids)
+
         history_messages: list[BaseMessage] = []
 
         for message in rows:
             if message.role == "user":
-                history_messages.append(HumanMessage(content=message.content))
+                history_messages.append(
+                    HumanMessage(
+                        content=self._with_attachment_manifest(
+                            message.content,
+                            files_by_message.get(message.id, []),
+                        )
+                    )
+                )
 
             elif message.role == "assistant":
                 history_messages.append(AIMessage(content=message.content))
@@ -73,3 +91,41 @@ class HistoryContextBuilder:
         )
 
         return history_messages
+
+    async def _files_by_message_id(
+        self,
+        message_ids: Sequence[int],
+    ) -> dict[int, list[FileRecord]]:
+        if not message_ids:
+            return {}
+
+        files = await self.file_repository.get_by_message_ids(message_ids)
+
+        grouped: dict[int, list[FileRecord]] = {}
+
+        for file in files:
+            if file.message_id is not None:
+                grouped.setdefault(file.message_id, []).append(file)
+
+        return grouped
+
+    @staticmethod
+    def _with_attachment_manifest(content: str, files: list[FileRecord]) -> str:
+        """
+        Append a manifest line per attachment as plain text.
+
+        Only ever text here — an image's bytes were sent once, on the turn
+        it arrived (ChatService._build_human_message); every later replay
+        of this message says so instead of re-sending them.
+        """
+        if not files:
+            return content
+
+        lines = [content] if content else []
+
+        lines.extend(
+            format_attachment_manifest_line(file, is_current_turn=False)
+            for file in files
+        )
+
+        return "\n".join(lines)

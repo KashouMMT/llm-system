@@ -402,7 +402,7 @@ const Chat = ({
 						disabled={!conversationId}
 						onClick={() => fileInputRef.current?.click()}
 					>
-						📎
+						<i className="bi bi-paperclip" aria-hidden="true" />
 					</button>
 
 					<textarea

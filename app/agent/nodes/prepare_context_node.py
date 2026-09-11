@@ -14,6 +14,27 @@ from app.utils.logger import logger
 PrepareContextNode = Callable[[AgentState, RunnableConfig], Awaitable[dict]]
 
 
+def _extract_text(content: str | list) -> str:
+    """
+    The plain-text portion of a HumanMessage's content.
+
+    Plain text when there are no attachments; content blocks — a list with
+    one text block plus a manifest line per attachment, and image blocks
+    when vision is on — when there are (see
+    ChatService._build_human_message). Only the text matters here: this
+    feeds a debug log and ConversationContextBuilder's not-yet-built RAG
+    extension point, neither of which needs the image blocks.
+    """
+    if isinstance(content, str):
+        return content
+
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            return block.get("text", "")
+
+    return ""
+
+
 def create_prepare_context_node(
     conversation_context_builder: ConversationContextBuilder,
 ) -> PrepareContextNode:
@@ -45,14 +66,9 @@ def create_prepare_context_node(
                 "The current turn must begin with a HumanMessage."
             )
 
-        if not isinstance(current_user_message.content, str):
-            raise TypeError(
-                "Only text user messages are currently supported."
-            )
-
         prepared_context = await conversation_context_builder.build(
             conversation_id=conversation_id,
-            user_query=current_user_message.content,
+            user_query=_extract_text(current_user_message.content),
             before_message_id=current_user_message_id,
         )
 
