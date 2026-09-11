@@ -62,6 +62,9 @@ class MessageRepository:
         conversation_id: UUID,
         user_content: str,
         client_message_id: UUID,
+        user_id: UUID,
+        max_attachment_batch_bytes: int,
+        attachment_ids: Sequence[UUID] = (),
     ) -> Turn:
         """
         Open one conversation turn atomically, before generation starts.
@@ -72,13 +75,32 @@ class MessageRepository:
         'streaming' so every client can see that an answer is on its way, and
         so a crash leaves a visible row to sweep rather than silence.
 
+        attachment_ids, when given, are uploaded files to attach to the new
+        user message. The UPDATE below is both the ownership check and the
+        attach: it only touches a row that is an unattached upload owned by
+        this user in this conversation, so a stray or already-attached id
+        cannot be smuggled in. Doing it inside this same block — rather than
+        as a separate call after create_turn returns — is what makes a failed
+        send leave the uploads unattached and reusable instead of half
+        committed, and what makes a client_message_id retry a no-op: the
+        UniqueViolation on the insert below fires before this UPDATE ever
+        runs, so a retry can only reach this point once.
+
+        max_attachment_batch_bytes bounds the combined size_bytes of what
+        gets attached, checked from the same UPDATE's own RETURNING rather
+        than a second query. The frontend already refuses to queue a batch
+        this large, but that is a UX convenience — a direct API call is
+        stopped here.
+
         The parent conversation's updated_at is bumped in the same
         transaction — every statement shares one connection block, which the
         pool commits on a clean exit and rolls back if it raises.
 
         Raises psycopg.errors.UniqueViolation if client_message_id was already
         used — that is the idempotency guard, enforced by the database because
-        retries race.
+        retries race. Raises ValueError if any attachment_ids do not resolve
+        to an unattached upload owned by this user in this conversation, or if
+        their combined size exceeds max_attachment_batch_bytes.
         """
         async with (
             self._pool.connection() as conn,
@@ -106,6 +128,45 @@ class MessageRepository:
             )
 
             user_message_id, user_created_at = await cur.fetchone()
+
+            # Deduplicated so a client sending the same id twice cannot make
+            # this reject a perfectly valid attachment.
+            unique_attachment_ids = list(dict.fromkeys(attachment_ids))
+
+            if unique_attachment_ids:
+                await cur.execute(
+                    """
+                    UPDATE files
+                    SET message_id = %s
+                    WHERE id = ANY(%s)
+                      AND conversation_id = %s
+                      AND user_id = %s
+                      AND origin = 'uploaded'
+                      AND message_id IS NULL
+                    RETURNING size_bytes
+                    """,
+                    (
+                        user_message_id,
+                        unique_attachment_ids,
+                        conversation_id,
+                        user_id,
+                    ),
+                )
+
+                attached_sizes = [row[0] for row in await cur.fetchall()]
+
+                if len(attached_sizes) != len(unique_attachment_ids):
+                    raise ValueError(
+                        "One or more attachment_ids are invalid, already "
+                        "attached, or do not belong to this conversation."
+                    )
+
+                if sum(attached_sizes) > max_attachment_batch_bytes:
+                    raise ValueError(
+                        "Attachments exceed the "
+                        f"{max_attachment_batch_bytes}-byte limit for one "
+                        "message."
+                    )
 
             await cur.execute(
                 """

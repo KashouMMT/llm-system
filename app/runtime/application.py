@@ -212,6 +212,21 @@ class Application:
             # that no task will ever finish.
             await self.message_repository.sweep_streaming()
 
+            # An upload a user never sent, or abandoned mid-compose. 24
+            # hours is generous enough that a slow send is never caught by
+            # it, while still not keeping bytes around indefinitely for
+            # something nobody is coming back to attach.
+            orphaned_keys = await self.file_repository.sweep_orphaned_uploads()
+
+            for key in orphaned_keys:
+                await self.file_storage.delete(key)
+
+            if orphaned_keys:
+                logger.warning(
+                    "Swept orphaned uploads | count=%s",
+                    len(orphaned_keys),
+                )
+
             logger.info("Loading system prompt")
             # Loaded once here to fail fast on a bad SYSTEM_PROMPT and to
             # log its size. The agent node reloads it per turn, so this
@@ -308,6 +323,7 @@ class Application:
                 agent_graph=self.agent_graph,
                 conversation_repository=self.conversation_repository,
                 message_repository=self.message_repository,
+                file_repository=self.file_repository,
                 summarization_service=self.summarization_service,
                 title_service=self.title_service,
                 event_bus=self.event_bus,

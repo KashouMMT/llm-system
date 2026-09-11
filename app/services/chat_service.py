@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import time
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -11,8 +11,9 @@ from langchain_core.messages import HumanMessage
 from app.agent.graph import AgentGraph
 from app.authentication.authorization import is_admin
 from app.authentication.models import User
-from app.config.settings import MAX_USER_INPUT_CHARS
+from app.config.settings import MAX_ATTACHMENT_BATCH_BYTES, MAX_USER_INPUT_CHARS
 from app.repositories.conversation_repository import ConversationRepository
+from app.repositories.file_repository import FileRepository, serialize_attachment
 from app.repositories.message_repository import MessageRepository
 from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import (
@@ -81,6 +82,7 @@ class ChatService:
         agent_graph: AgentGraph,
         conversation_repository: ConversationRepository,
         message_repository: MessageRepository,
+        file_repository: FileRepository,
         summarization_service: SummarizationService,
         title_service: ConversationTitleService,
         event_bus: EventBus,
@@ -90,6 +92,7 @@ class ChatService:
         self.agent_graph = agent_graph
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
+        self.file_repository = file_repository
         self.summarization_service = summarization_service
         self.title_service = title_service
         self.event_bus = event_bus
@@ -106,10 +109,10 @@ class ChatService:
         logger.info("ChatService initialized")
 
     @staticmethod
-    def validate_user_input(user_input: str) -> str:
+    def validate_user_input(user_input: str, *, has_attachments: bool) -> str:
         user_input = user_input.strip()
 
-        if not user_input:
+        if not user_input and not has_attachments:
             raise ValueError("Message must not be empty.")
 
         if len(user_input) > MAX_USER_INPUT_CHARS:
@@ -126,13 +129,17 @@ class ChatService:
         user: User,
         user_input: str,
         client_message_id: UUID,
+        attachment_ids: Sequence[UUID] = (),
     ) -> TurnIds:
         """
         Persist both sides of a turn and announce them.
 
         The caller must already hold the conversation lock.
         """
-        user_input = self.validate_user_input(user_input)
+        user_input = self.validate_user_input(
+            user_input,
+            has_attachments=bool(attachment_ids),
+        )
 
         # Re-read, not cached from the route, so a hold applied mid-session
         # takes effect on the very next send. Admins are never held.
@@ -150,6 +157,9 @@ class ChatService:
             conversation_id=conversation_id,
             user_content=user_input,
             client_message_id=client_message_id,
+            user_id=user.id,
+            max_attachment_batch_bytes=MAX_ATTACHMENT_BATCH_BYTES,
+            attachment_ids=attachment_ids,
         )
 
         user_message_id = turn.user_message_id
@@ -158,6 +168,20 @@ class ChatService:
         self.conversation_lock.attach_message_id(
             conversation_id,
             assistant_message_id,
+        )
+
+        # Only queried when there is something to attach — the common case
+        # has none, and re-reading what create_turn just wrote would be
+        # wasted work on every turn.
+        attachments = (
+            [
+                serialize_attachment(file)
+                for file in await self.file_repository.get_by_message_ids(
+                    [user_message_id],
+                )
+            ]
+            if attachment_ids
+            else []
         )
 
         self.event_bus.publish(
@@ -172,6 +196,7 @@ class ChatService:
                     "status": "complete",
                     "created_at": turn.user_created_at.isoformat(),
                     "client_message_id": str(client_message_id),
+                    "attachments": attachments,
                 },
             )
         )

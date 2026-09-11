@@ -15,17 +15,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
+from config import PLAYGROUND_DIR, default_model, load_env, make_client
 from consensus import StableItem, detect_stable
-from dotenv import load_dotenv
 from exclusions import load_exclusions, partition
-from vision import DetectionError, build_client
-
-HERE = Path(__file__).resolve().parent
-DEFAULT_MODEL = "gpt-5.6-luna"
+from vision import DetectionError
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -57,7 +53,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--exclusions",
         type=Path,
-        default=HERE / "exclusions.txt",
+        default=PLAYGROUND_DIR / "exclusions.txt",
         help="Exclusion list file (default: exclusions.txt beside this script)",
     )
     parser.add_argument(
@@ -70,8 +66,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default=os.getenv("DETECT_MODEL", DEFAULT_MODEL),
-        help=f"Model to call (default: {DEFAULT_MODEL}, or $DETECT_MODEL)",
+        default=default_model(),
+        help="Model to call (default: $DETECT_MODEL, or the project default)",
     )
     parser.add_argument(
         "--temperature",
@@ -82,16 +78,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "accepts one.",
     )
     return parser.parse_args(argv)
-
-
-def resolve_api_key() -> str:
-    """Accept either name, so this shares the repository's existing .env."""
-    key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise DetectionError(
-            "No API key. Set LLM_API_KEY (or OPENAI_API_KEY) in the project .env."
-        )
-    return key
 
 
 def format_count(item: StableItem) -> str:
@@ -137,13 +123,11 @@ def to_payload(item: StableItem) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # The repository's own .env, one level up. No separate playground config.
-    load_dotenv(HERE.parent / ".env")
-
+    load_env()
     args = parse_args(argv)
 
     try:
-        client = build_client(resolve_api_key(), os.getenv("LLM_BASE_URL"))
+        client = make_client()
         items = detect_stable(
             args.image,
             client=client,

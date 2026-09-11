@@ -227,20 +227,33 @@ llm-system/
 ├── requirements.txt              # + openai, pydantic, pillow
 ├── images/                       # test photographs
 └── playground/
+    ├── config.py                 # .env location, default model, API client — one place
     ├── labels.py                 # normalize() display / collapse_key() matching
     ├── vision.py                 # one image -> one LLM call -> DetectedItem[]
-    ├── consensus.py              # N runs -> StableItem[] with agreement + spread
+    ├── consensus.py              # N runs -> StableItem[]; merge_runs() is pure, keyable
     ├── exclusions.py             # text-file exclusion list (detect.py only)
     ├── exclusions.txt            # seeded from real output; feeds catalog build
     ├── detect.py                 # CLI: raw detection. Harvesting and debugging.
     ├── catalog.py                # CatalogItem / ItemMetadata / Catalog + match()
     ├── build_catalog.py          # CLI: photos -> harvest -> cluster -> enrich -> catalog.json
-    ├── resolve.py                # StableItem[] + Catalog -> matched/excluded/unmatched
+    ├── resolve.py                # grouping_key() + StableItem[] -> matched/excluded/unmatched
     ├── estimate.py               # CLI: the product. image -> items + metadata + totals
     ├── run.py                    # earliest ad-hoc runner; superseded by detect.py
     ├── harvest.json              # generated: raw label frequencies (cache)
+    ├── clusters.json             # generated: clustering result (cache, hand-editable)
     └── catalog.json              # generated: the catalog. REVIEW BY HAND.
 ```
+
+**The one rule every file follows: nothing detected is ever dropped without the
+reviewer seeing it.** Low-agreement items, unmatched labels, labels the
+clustering model forgot, unanswered enrichment and contested aliases are all
+reported. Five early bugs were violations of this rule; check it first when
+reviewing any change.
+
+**Synonyms are merged per run, inside consensus.** `estimate.py` passes
+`grouping_key(catalog)` to `detect_stable`, so "table" in two runs and "desk" in
+the third is one table. Merging later, after runs are combined, cannot tell one
+object named twice from two objects, and double counts.
 
 Two CLIs on purpose. `detect.py` reports whatever the model said and is the
 harvesting and debugging tool. `estimate.py` is the product path and requires a
@@ -256,10 +269,14 @@ cd playground
 python detect.py ..\images\table.jpg --runs 3
 
 # 2. build a catalog from a folder of photos  (the slow, paid step)
-python build_catalog.py ..\images --runs 2
+python build_catalog.py ..\images\catalog --runs 2
 
-# 3. re-cluster or re-enrich for free while tuning prompts
-python build_catalog.py --from-harvest
+# 3. iterate without re-paying for detection
+python build_catalog.py --from-harvest     # redo clustering + enrichment
+python build_catalog.py --from-clusters    # redo enrichment only (edit clusters.json first if you like)
+
+# --min-observations defaults to 1. Raise to 2-3 only with 20+ photos:
+# on a small set a real item may appear in a single photo.
 
 # 4. REVIEW catalog.json BY HAND  <- not optional
 

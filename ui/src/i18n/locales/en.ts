@@ -64,6 +64,12 @@ export const en = {
 		inputPlaceholderNoConv: "Select a conversation first",
 		send: "Send",
 		sending: "Sending…",
+		attach: "Attach a file",
+		attachmentUploading: "Uploading…",
+		attachmentError: "Upload failed.",
+		attachmentRemove: "Remove attachment",
+		attachmentTooMany: "Up to 10 attachments per message.",
+		attachmentTooLarge: "Would exceed the 100 MB total attachment limit.",
 	},
 	error: {
 		notFoundTitle: "Page not found",

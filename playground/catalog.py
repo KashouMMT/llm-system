@@ -22,12 +22,12 @@ total while `None` forces the caller to decide what to do.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator, Literal
-
-from pydantic import BaseModel, Field
+from typing import Literal
 
 from labels import collapse_key, normalize
+from pydantic import BaseModel, Field
 
 # Where a metadata value came from, so a reviewer knows what to distrust.
 # An LLM estimate of a washing machine's weight is a reasonable starting point;
@@ -110,16 +110,6 @@ class ItemMetadata(BaseModel):
         if self.volume_m3 is not None:
             return self.volume_m3
         return self.dimensions.volume_m3
-
-    @property
-    def weight_is_estimated(self) -> bool:
-        """True when the range is wide enough that the point value is a guess."""
-        if self.weight_kg is None:
-            return False
-        if self.weight_kg_min is None or self.weight_kg_max is None:
-            return self.source == "llm_estimate"
-        spread = self.weight_kg_max - self.weight_kg_min
-        return spread > max(0.5, self.weight_kg * 0.4)
 
     def missing_fields(self) -> list[str]:
         """Which of the fields we actually rely on are absent."""

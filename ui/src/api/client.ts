@@ -6,6 +6,7 @@ import type {
 	RenameConversationRequest,
 	SendMessageRequest,
 	SendMessageResponse,
+	UploadedAttachment,
 } from "./types";
 
 const API_BASE_URL =
@@ -182,6 +183,33 @@ export function sendMessage(
 		{
 			method: "POST",
 			body: JSON.stringify(body),
+		},
+	);
+}
+
+/**
+ * Uploads one file, unattached to any message yet — sendMessage attaches
+ * it afterward by id.
+ *
+ * The body is the file's raw bytes, not multipart, and Content-Type is
+ * deliberately application/octet-stream rather than the file's own type:
+ * the server never trusts the header anyway (it sniffs the real type from
+ * the bytes), and the CSRF gate rejects text/plain and the multipart/
+ * form-urlencoded encodings outright — sending a .txt file's real
+ * text/plain type here would be blocked before the request ever reached
+ * the route. filename goes in the query string, percent-encoded, since it
+ * may be Japanese and header values are restricted to latin-1.
+ */
+export function uploadFile(
+	conversationId: string,
+	file: File,
+): Promise<UploadedAttachment> {
+	return request<UploadedAttachment>(
+		`/conversations/${conversationId}/uploads?filename=${encodeURIComponent(file.name)}`,
+		{
+			method: "POST",
+			headers: { "Content-Type": "application/octet-stream" },
+			body: file,
 		},
 	);
 }

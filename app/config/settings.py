@@ -274,6 +274,22 @@ CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
 # started from the repository root either way.
 FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
 
+# UPLOADS
+# Matches nginx's client_max_body_size for this deployment (see
+# deploy/nginx/llm-system.conf) so the app's own limit is never the looser
+# one — a request nginx would already have rejected should not reach here
+# expecting a different answer.
+UPLOAD_MAX_BYTES = get_positive_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024)
+
+# Cap on the combined size of the attachment_ids one send attaches. The
+# frontend already refuses to queue a batch this large, but that is a UX
+# convenience, not enforcement — a direct API call could otherwise attach
+# up to 10 uploads at UPLOAD_MAX_BYTES each (200 MB) in one message.
+MAX_ATTACHMENT_BATCH_BYTES = get_positive_int(
+    "MAX_ATTACHMENT_BATCH_BYTES",
+    100 * 1024 * 1024,
+)
+
 # TOOL PLUGINS
 # Allowlist of plugin folder names under app/plugins/. Empty (the default)
 # means load every plugin folder that is present, which is the point:

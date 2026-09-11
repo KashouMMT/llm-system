@@ -1,4 +1,5 @@
 import {
+	type ChangeEvent,
 	type FormEvent,
 	type UIEvent,
 	useEffect,
@@ -7,6 +8,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message, MessageStatus } from "../api/types";
+import type { Attachments } from "../hooks/useAttachments";
 import type { ChatError, useChat } from "../hooks/useChat";
 import type {
 	ConversationStream,
@@ -24,6 +26,7 @@ type ChatProps = {
 	loadError: Error | null;
 	stream: ConversationStream;
 	chat: ReturnType<typeof useChat>;
+	attachments: Attachments;
 	onToggleSidebar: () => void;
 };
 
@@ -49,11 +52,13 @@ const Chat = ({
 	loadError,
 	stream,
 	chat,
+	attachments,
 	onToggleSidebar,
 }: ChatProps) => {
 	const { t } = useTranslation();
 
 	const [input, setInput] = useState("");
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	// Built from `t` per render rather than as module constants, so they
 	// follow a language switch. Cheap: a handful of lookups.
@@ -146,27 +151,42 @@ const Chat = ({
 		event.preventDefault();
 
 		const text = input;
+		const attachmentIds = attachments.attachedIds;
 
-		if (!text.trim() || !conversationId) {
+		if ((!text.trim() && attachmentIds.length === 0) || !conversationId) {
 			return;
 		}
 
 		setInput("");
 		pinnedRef.current = true;
 
-		void chat.send(text).then((result) => {
-			// A refused turn must not cost the user their typing.
+		void chat.send(text, attachmentIds).then((result) => {
+			// A refused turn must not cost the user their typing or
+			// re-upload their files.
 			if (result === null) {
 				setInput(text);
+			} else {
+				attachments.clear();
 			}
 		});
 	};
 
+	const handleFilesPicked = (event: ChangeEvent<HTMLInputElement>) => {
+		if (event.target.files) {
+			attachments.addFiles(event.target.files);
+		}
+
+		// Clears the input's own value so picking the same file again (after
+		// removing its chip) fires onChange a second time.
+		event.target.value = "";
+	};
+
 	const canSend =
 		Boolean(conversationId) &&
-		Boolean(input.trim()) &&
+		(Boolean(input.trim()) || attachments.attachedIds.length > 0) &&
 		!chat.isSending &&
-		!isGenerating;
+		!isGenerating &&
+		!attachments.isUploading;
 
 	return (
 		<section className="chat-section">
@@ -327,7 +347,64 @@ const Chat = ({
 					</div>
 				)}
 
+				{attachments.slots.length > 0 && (
+					<ul className="attachment-chips">
+						{attachments.slots.map((slot) => (
+							<li
+								key={slot.localId}
+								className={`attachment-chip attachment-chip-${slot.status}`}
+							>
+								<span className="attachment-chip-name">
+									{slot.file.name}
+								</span>
+
+								{slot.status === "uploading" && (
+									<span className="attachment-chip-status">
+										{t("chat.attachmentUploading")}
+									</span>
+								)}
+
+								{slot.status === "error" && (
+									<span className="attachment-chip-status text-danger">
+										{slot.errorMessage ??
+											t("chat.attachmentError")}
+									</span>
+								)}
+
+								<button
+									type="button"
+									className="attachment-chip-remove"
+									aria-label={t("chat.attachmentRemove")}
+									onClick={() =>
+										attachments.removeSlot(slot.localId)
+									}
+								>
+									×
+								</button>
+							</li>
+						))}
+					</ul>
+				)}
+
 				<form className="chat-input" onSubmit={handleSubmit}>
+					<input
+						ref={fileInputRef}
+						type="file"
+						multiple
+						hidden
+						onChange={handleFilesPicked}
+					/>
+
+					<button
+						type="button"
+						className="btn btn-outline-secondary attachment-button"
+						aria-label={t("chat.attach")}
+						disabled={!conversationId}
+						onClick={() => fileInputRef.current?.click()}
+					>
+						📎
+					</button>
+
 					<textarea
 						className="form-control"
 						ref={textareaRef}

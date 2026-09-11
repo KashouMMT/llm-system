@@ -1,4 +1,4 @@
-"""CLI: the product. One image in, a reviewed-ready item list with metadata out.
+"""CLI: the product. One image in, a review-ready item list with metadata out.
 
     python estimate.py ..\\images\\table.jpg
     python estimate.py ..\\images\\table.jpg --runs 5
@@ -7,33 +7,31 @@
 `detect.py` is the raw detection tool used for harvesting and debugging; this is
 the pipeline a product would call. The difference is the catalog: `detect.py`
 reports whatever the model said, `estimate.py` reports catalog items with their
-physical metadata, plus an explicit account of what it could not identify.
+physical metadata, plus an explicit account of everything it could not settle.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from catalog import Catalog, CatalogError
+from config import PLAYGROUND_DIR, default_model, load_env, make_client
 from consensus import detect_stable
-from resolve import Resolution, ResolvedItem, resolve
-from vision import DetectionError, build_client
-
-HERE = Path(__file__).resolve().parent
-DEFAULT_MODEL = "gpt-5.6-luna"
+from resolve import Resolution, ResolvedItem, UnmatchedItem, grouping_key, resolve
+from vision import DetectionError
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("image", type=Path, help="Path to a .jpg/.png/.webp image")
     parser.add_argument(
-        "--catalog", type=Path, default=HERE / "catalog.json", help="Catalog file"
+        "--catalog",
+        type=Path,
+        default=PLAYGROUND_DIR / "catalog.json",
+        help="Catalog file",
     )
     parser.add_argument(
         "--runs", type=int, default=3, help="Detection passes (default: 3)"
@@ -42,24 +40,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--min-runs-seen",
         type=int,
         default=2,
-        help="Ignore detections seen in fewer runs than this (default: 2)",
+        help="Detections seen in fewer runs than this are reported separately "
+        "as low-agreement, not counted in totals (default: 2)",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON")
-    parser.add_argument(
-        "--model", default=os.getenv("DETECT_MODEL", DEFAULT_MODEL), help="Model id"
-    )
+    parser.add_argument("--model", default=default_model(), help="Model id")
     return parser.parse_args(argv)
-
-
-def resolve_api_key() -> str:
-    key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise DetectionError("No API key. Set LLM_API_KEY in the project .env.")
-    return key
 
 
 def format_number(value: float | None, unit: str, places: int = 1) -> str:
     return "?" if value is None else f"{value:.{places}f}{unit}"
+
+
+def format_count(item: ResolvedItem) -> str:
+    if item.count_min == item.count_max:
+        return str(item.count)
+    return f"{item.count} ({item.count_min}-{item.count_max})"
 
 
 def render_items(items: list[ResolvedItem], title: str) -> str:
@@ -69,11 +65,7 @@ def render_items(items: list[ResolvedItem], title: str) -> str:
     rows = [
         (
             item.label,
-            (
-                str(item.count)
-                if item.count_min == item.count_max
-                else f"{item.count} ({item.count_min}-{item.count_max})"
-            ),
+            format_count(item),
             format_number(item.total_weight_kg, " kg"),
             format_number(item.total_volume_m3, " m3", 2),
             f"{item.runs_seen}/{item.total_runs}",
@@ -93,12 +85,25 @@ def render_items(items: list[ResolvedItem], title: str) -> str:
         ]
         return "  " + "  ".join(cells)
 
-    out = [f"{title} ({len(items)}):", line(headers), "  " + "  ".join("-" * w for w in widths)]
+    out = [
+        f"{title} ({len(items)}):",
+        line(headers),
+        "  " + "  ".join("-" * width for width in widths),
+    ]
     for item, row in zip(items, rows):
         # "!" means the runs disagreed badly enough that the model was
         # estimating the count rather than counting it.
         out.append(line(row) + (" !" if item.count_is_unstable else ""))
     return "\n".join(out)
+
+
+def render_unmatched(items: list[UnmatchedItem], title: str) -> str:
+    lines = [f"{title} ({len(items)}):"]
+    for item in items:
+        lines.append(
+            f"  {item.label}  x{item.count}  ({item.runs_seen}/{item.total_runs} runs)"
+        )
+    return "\n".join(lines)
 
 
 def render_totals(resolution: Resolution) -> str:
@@ -125,6 +130,29 @@ def render_totals(resolution: Resolution) -> str:
     return "\n".join(lines)
 
 
+def render_low_agreement(low: Resolution, min_runs_seen: int) -> str:
+    """Items too few runs agreed on. Not counted — but never silently dropped.
+
+    A thing seen in one run of three may be a real object the model only
+    noticed once. Low-agreement items the catalog excludes need no human, so
+    they are summarised rather than listed.
+    """
+    title = f"Low agreement - seen in fewer than {min_runs_seen} runs, not counted"
+    lines = [f"{title}:"]
+    for item in low.matched:
+        lines.append(
+            f"  {item.label}  x{item.count}  ({item.runs_seen}/{item.total_runs} runs)"
+        )
+    for item in low.unmatched:
+        lines.append(
+            f"  {item.label}  x{item.count}  ({item.runs_seen}/{item.total_runs} runs)"
+            "  [not in catalog]"
+        )
+    if low.excluded:
+        lines.append(f"  (+{len(low.excluded)} excluded by catalog)")
+    return "\n".join(lines)
+
+
 def to_payload(item: ResolvedItem) -> dict:
     return {
         "id": item.catalog_item.id,
@@ -142,22 +170,41 @@ def to_payload(item: ResolvedItem) -> dict:
     }
 
 
+def resolution_payload(resolution: Resolution) -> dict:
+    return {
+        "matched": [to_payload(item) for item in resolution.matched],
+        "excluded": [to_payload(item) for item in resolution.excluded],
+        "unmatched": [item.model_dump() for item in resolution.unmatched],
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv(HERE.parent / ".env")
+    load_env()
     args = parse_args(argv)
 
     try:
+        # The catalog loads first: if it is broken, find out before paying for
+        # detection.
         catalog = Catalog.load(args.catalog)
-        client = build_client(resolve_api_key(), os.getenv("LLM_BASE_URL"))
+        client = make_client()
+        # Grouping through the catalog merges synonyms per run — the only point
+        # where "one table, named differently" and "a table and a desk" can
+        # still be told apart.
         detected = detect_stable(
-            args.image, client=client, model=args.model, runs=args.runs
+            args.image,
+            client=client,
+            model=args.model,
+            runs=args.runs,
+            key=grouping_key(catalog),
         )
     except (DetectionError, CatalogError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
     confident = [item for item in detected if item.runs_seen >= args.min_runs_seen]
+    low = [item for item in detected if item.runs_seen < args.min_runs_seen]
     resolution = resolve(confident, catalog)
+    low_resolution = resolve(low, catalog)
 
     if args.json:
         print(
@@ -166,10 +213,10 @@ def main(argv: list[str] | None = None) -> int:
                     "image": str(args.image),
                     "model": args.model,
                     "runs": args.runs,
+                    "min_runs_seen": args.min_runs_seen,
                     "catalog_items": len(catalog),
-                    "matched": [to_payload(item) for item in resolution.matched],
-                    "excluded": [to_payload(item) for item in resolution.excluded],
-                    "unmatched": [item.model_dump() for item in resolution.unmatched],
+                    **resolution_payload(resolution),
+                    "low_agreement": resolution_payload(low_resolution),
                     "totals": {
                         "weight_kg": resolution.total_weight_kg,
                         "volume_m3": resolution.total_volume_m3,
@@ -181,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    # Every section prints whenever it is non-empty. Nothing detected is ever
+    # discarded without the reviewer seeing it.
     print()
     print(render_items(resolution.matched, "Collectable"))
     print()
@@ -190,16 +239,13 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print(render_items(resolution.excluded, "Excluded by catalog"))
 
-    # Never silent. An unmatched item is not an error, it is the next catalog
-    # row — but only if somebody sees it.
     if resolution.unmatched:
         print()
-        print(f"Not in catalog ({len(resolution.unmatched)}) - needs a human:")
-        for item in resolution.unmatched:
-            print(
-                f"  {item.label}  x{item.count}  "
-                f"({item.runs_seen}/{item.total_runs} runs)"
-            )
+        print(render_unmatched(resolution.unmatched, "Not in catalog - needs a human"))
+
+    if low_resolution.matched or low_resolution.unmatched or low_resolution.excluded:
+        print()
+        print(render_low_agreement(low_resolution, args.min_runs_seen))
     print()
     return 0
 

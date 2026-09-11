@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import Chat from "../components/Chat";
 import Navbar from "../components/Navbar";
 import Sidebar from "../components/Sidebar";
+import { useAttachments } from "../hooks/useAttachments";
 import { useChat } from "../hooks/useChat";
 import { useConversationStream } from "../hooks/useConversationStream";
 import { useMessages } from "../hooks/useMessages";
@@ -23,6 +24,7 @@ const ChatPage = () => {
 	const messagesQuery = useMessages(conversationId);
 	const stream = useConversationStream(conversationId);
 	const chat = useChat(conversationId);
+	const attachments = useAttachments(conversationId);
 
 	return (
 		<>
@@ -45,6 +47,7 @@ const ChatPage = () => {
 					loadError={messagesQuery.error}
 					stream={stream}
 					chat={chat}
+					attachments={attachments}
 					onToggleSidebar={() =>
 						setSidebarOpen((previous) => !previous)
 					}

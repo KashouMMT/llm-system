@@ -1,30 +1,32 @@
 """Build a catalog from photographs, with no reference images and no data entry.
 
-    python build_catalog.py ..\\images --out catalog.json
+    python build_catalog.py ..\\images\\catalog
+    python build_catalog.py --from-harvest      # redo clustering + enrichment
+    python build_catalog.py --from-clusters     # redo enrichment only
 
-Four stages, each writing its output so the expensive ones are never repeated:
+Four stages, each caching its output so an expensive stage is never repeated
+by accident:
 
-    1. HARVEST    every photo -> raw labels + how often each was seen   (costs money)
-    2. CLUSTER    raw labels  -> canonical items with aliases           (one call)
-    3. ENRICH     canonical items -> weight, dimensions, material       (a few calls)
-    4. WRITE      catalog.json
-
-Stage 1 is the only slow one, so it is cached in `harvest.json`. Re-run with
-`--from-harvest` to redo clustering or enrichment for free while you tune the
-prompts — which you will, several times.
+    1. HARVEST    every photo -> raw labels + how often each was seen   harvest.json
+    2. CLUSTER    raw labels  -> canonical items with aliases           clusters.json
+    3. ENRICH     canonical items -> weight, dimensions, material
+    4. ASSEMBLE   everything -> catalog.json
 
 Nobody photographs a reference item and nobody fills in a spreadsheet. The
 catalog is assembled from what the detector already said, then reviewed by a
 human once. That review is the only manual step and it is not optional: the
-model produces inconsistent granularity and occasionally invents a category,
-and two hours with the JSON file fixes both.
+model produces inconsistent granularity and occasionally invents a category.
+
+Every stage reports what it could not place rather than dropping it. A label
+the clustering model forgot comes back as its own row; an enrichment answer
+that cannot be matched is reported; a duplicate cluster is folded into the row
+that owns its name. The reviewer sees all of it in the closing summary.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -38,16 +40,12 @@ from catalog import (
     make_id,
     write_json,
 )
+from config import PLAYGROUND_DIR, default_model, load_env, make_client
 from consensus import detect_stable
-from dotenv import load_dotenv
 from labels import collapse_key, normalize
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from vision import DetectionError, build_client
-
-HERE = Path(__file__).resolve().parent
-DEFAULT_MODEL = "gpt-5.6-luna"
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+from vision import SUPPORTED_SUFFIXES, DetectionError
 
 # Enrichment is batched: one call per chunk of items. Small enough that a long
 # reply cannot be truncated, large enough that the model sees related items
@@ -178,7 +176,7 @@ def find_images(folder: Path) -> list[Path]:
     images = sorted(
         path
         for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES
+        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
     )
     if not images:
         raise DetectionError(f"No images in {folder}")
@@ -188,15 +186,11 @@ def find_images(folder: Path) -> list[Path]:
 def harvest(
     images: list[Path], *, client: OpenAI, model: str, runs: int
 ) -> dict[str, int]:
-    """Detect over every image and count how often each label was produced.
+    """Detect over every image and count how many photos each label appeared in.
 
-    Counts *label occurrences*, not object counts: seeing six chairs in one
-    photo is one observation of "chair". The question this answers is "is this
-    label real", not "how many are there".
-
-    Nothing is excluded and nothing is thresholded here. A one-off sighting is
-    still an observation, and the clustering stage handles the noise better
-    than a blunt filter would.
+    Counts *label occurrences*, not object counts: six chairs in one photo is
+    one observation of "chair". The question this answers is "is this label
+    real", not "how many are there".
     """
     frequencies: Counter[str] = Counter()
 
@@ -214,6 +208,18 @@ def harvest(
     return dict(frequencies.most_common())
 
 
+def load_harvest(path: Path) -> dict[str, int]:
+    if not path.is_file():
+        raise DetectionError(f"No cached harvest at {path}. Run a harvest first.")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise DetectionError(f"Could not read {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DetectionError(f"{path} is not a label -> count mapping.")
+    return {str(label): int(count) for label, count in payload.items()}
+
+
 # --------------------------------------------------------------------------
 # Stage 2: cluster
 # --------------------------------------------------------------------------
@@ -228,7 +234,9 @@ def cluster(
     try:
         completion = client.chat.completions.parse(
             model=model,
-            messages=[{"role": "user", "content": _CLUSTER_PROMPT.format(labels=listing)}],
+            messages=[
+                {"role": "user", "content": _CLUSTER_PROMPT.format(labels=listing)}
+            ],
             response_format=ClusterResult,
         )
     except Exception as exc:
@@ -240,6 +248,53 @@ def cluster(
     return parsed.items
 
 
+def reconcile(
+    clusters: list[ClusteredItem], labels: list[str]
+) -> tuple[list[ClusteredItem], list[str]]:
+    """Check the clustering accounted for every input label; restore any it lost.
+
+    The prompt asks the model to place every label. Asking is not checking: on
+    a long list it reliably forgets a few. A forgotten label is returned as its
+    own unmerged row, marked for review, rather than vanishing.
+
+    Idempotent, so it is safe to run again on cached clusters.
+    """
+    covered: set[str] = set()
+    for item in clusters:
+        covered.add(collapse_key(item.canonical_label))
+        covered.update(collapse_key(alias) for alias in item.aliases)
+
+    missing = [
+        label
+        for label in labels
+        if collapse_key(label) and collapse_key(label) not in covered
+    ]
+    restored = [
+        ClusteredItem(
+            canonical_label=label,
+            aliases=[],
+            visual_class=label,
+            excluded=False,
+            reason="Not placed by the clustering model; added unmerged for review.",
+        )
+        for label in missing
+    ]
+    return [*clusters, *restored], missing
+
+
+def load_clusters(path: Path) -> list[ClusteredItem]:
+    if not path.is_file():
+        raise DetectionError(f"No cached clusters at {path}. Run without --from-clusters.")
+    try:
+        return ClusterResult.model_validate_json(path.read_text(encoding="utf-8")).items
+    except (OSError, ValueError) as exc:
+        raise DetectionError(f"Could not read {path}: {exc}") from exc
+
+
+def save_clusters(path: Path, clusters: list[ClusteredItem]) -> None:
+    write_json(path, ClusterResult(items=clusters).model_dump())
+
+
 # --------------------------------------------------------------------------
 # Stage 3: enrich
 # --------------------------------------------------------------------------
@@ -249,6 +304,11 @@ def enrich(
     labels: list[str], *, client: OpenAI, model: str
 ) -> dict[str, EnrichedItem]:
     """Fill in physical metadata, one batch at a time.
+
+    Returned facts are keyed by `collapse_key`, not by the exact label: the
+    model is told to copy each name back verbatim and occasionally changes a
+    space to a hyphen anyway. Keying on the collapsed form means that costs
+    nothing.
 
     Weight and size are things a language model genuinely knows, because they
     are stable physical facts about kinds of object. Price is not, which is why
@@ -278,7 +338,9 @@ def enrich(
         if parsed is None:
             raise DetectionError("Enrichment returned no parseable result.")
         for item in parsed.items:
-            enriched[normalize(item.canonical_label)] = item
+            key = collapse_key(item.canonical_label)
+            if key:
+                enriched[key] = item
 
     return enriched
 
@@ -288,77 +350,117 @@ def enrich(
 # --------------------------------------------------------------------------
 
 
+def _metadata_from(facts: EnrichedItem | None) -> ItemMetadata:
+    if facts is None:
+        return ItemMetadata()
+    return ItemMetadata(
+        weight_kg=facts.weight_kg,
+        weight_kg_min=facts.weight_kg_min,
+        weight_kg_max=facts.weight_kg_max,
+        dimensions=Dimensions(
+            length_cm=facts.length_cm,
+            width_cm=facts.width_cm,
+            height_cm=facts.height_cm,
+        ),
+        material=facts.material,
+        nestable=facts.nestable,
+        stackable=facts.stackable,
+        source="llm_estimate",
+    )
+
+
+def _claim_aliases(
+    item: CatalogItem,
+    aliases: set[str],
+    owners: dict[str, CatalogItem],
+    warnings: list[str],
+) -> list[str]:
+    """Give `item` every alias no other row owns. Report the ones it cannot have."""
+    added: list[str] = []
+    for alias in sorted(aliases):
+        key = collapse_key(alias)
+        if not key:
+            continue
+        holder = owners.get(key)
+        if holder is item:
+            continue
+        if holder is not None:
+            warnings.append(
+                f"alias '{alias}' was given to both '{holder.id}' and '{item.id}'; "
+                f"kept on '{holder.id}'"
+            )
+            continue
+        owners[key] = item
+        item.aliases.append(alias)
+        added.append(alias)
+    item.aliases.sort()
+    return added
+
+
 def assemble(
     clusters: list[ClusteredItem],
     enriched: dict[str, EnrichedItem],
     frequencies: dict[str, int],
-) -> Catalog:
+) -> tuple[Catalog, list[str]]:
+    """Combine clusters, enrichment and harvest counts into a validated catalog.
+
+    Returns the catalog plus every conflict it had to settle, so the reviewer
+    can check each one. Two kinds come up:
+
+    A duplicate cluster — the model emitted a row whose name another row
+    already owns. It is folded into that row: its aliases are synonyms of the
+    same thing, and dropping them would lose exactly what clustering is for.
+
+    A contested alias — two rows both claim "desk". The first row keeps it,
+    since `Catalog` refuses an ambiguous alias (which row won would depend on
+    file order). The reviewer can move it.
+    """
     items: list[CatalogItem] = []
-    seen_ids: set[str] = set()
-    # Every match key already spoken for. The clustering model reliably assigns
-    # the same alias to two clusters now and then, and `Catalog` refuses to load
-    # an ambiguous alias — correctly, since which row won would depend on file
-    # order. Resolving it here on a first-come basis costs one alias and saves
-    # discarding an entire paid harvest. The reviewer can move it afterwards.
-    claimed: set[str] = set()
+    owners: dict[str, CatalogItem] = {}  # every match key -> the row that owns it
+    warnings: list[str] = []
 
     for cluster_item in clusters:
         canonical = normalize(cluster_item.canonical_label)
-        item_id = make_id(canonical)
-        # The model occasionally emits the same canonical twice; keeping both
-        # would trip the same conflict check.
-        if item_id in seen_ids or collapse_key(canonical) in claimed:
+        canonical_key = collapse_key(canonical)
+        if not canonical_key:
+            warnings.append(
+                f"skipped a cluster with an unusable name: {cluster_item.canonical_label!r}"
+            )
             continue
-        seen_ids.add(item_id)
 
-        # Observations for the whole cluster: the canonical plus every alias.
-        names = [canonical, *(normalize(a) for a in cluster_item.aliases)]
-        observations = sum(frequencies.get(name, 0) for name in names)
+        aliases = {normalize(alias) for alias in cluster_item.aliases} - {canonical}
 
-        facts = enriched.get(canonical)
-        if facts is None:
-            metadata = ItemMetadata()
-        else:
-            metadata = ItemMetadata(
-                weight_kg=facts.weight_kg,
-                weight_kg_min=facts.weight_kg_min,
-                weight_kg_max=facts.weight_kg_max,
-                dimensions=Dimensions(
-                    length_cm=facts.length_cm,
-                    width_cm=facts.width_cm,
-                    height_cm=facts.height_cm,
-                ),
-                material=facts.material,
-                nestable=facts.nestable,
-                stackable=facts.stackable,
-                source="llm_estimate",
+        # Observations are counted only for names a row actually ends up
+        # owning. Counting a contested or already-claimed alias would add the
+        # same photos to two rows' totals.
+        owner = owners.get(canonical_key)
+        if owner is not None:
+            added = _claim_aliases(owner, aliases, owners, warnings)
+            owner.observations += sum(frequencies.get(name, 0) for name in added)
+            extra = f", +{len(added)} alias(es)" if added else ""
+            warnings.append(
+                f"duplicate cluster '{canonical}' merged into '{owner.id}'{extra}"
             )
+            continue
 
-        # Deduplicated, never containing the canonical itself (that would
-        # conflict with its own row), and never an alias another row already
-        # claimed.
-        aliases = sorted(
-            alias
-            for alias in {normalize(a) for a in cluster_item.aliases} - {canonical}
-            if collapse_key(alias) and collapse_key(alias) not in claimed
+        item = CatalogItem(
+            id=make_id(canonical),
+            canonical_label=canonical,
+            visual_class=normalize(cluster_item.visual_class) or canonical,
+            excluded=cluster_item.excluded,
+            exclusion_reason=cluster_item.reason if cluster_item.excluded else None,
+            metadata=_metadata_from(enriched.get(canonical_key)),
         )
-        claimed.add(collapse_key(canonical))
-        claimed.update(collapse_key(alias) for alias in aliases)
-
-        items.append(
-            CatalogItem(
-                id=item_id,
-                canonical_label=canonical,
-                aliases=aliases,
-                visual_class=normalize(cluster_item.visual_class) or canonical,
-                excluded=cluster_item.excluded,
-                exclusion_reason=cluster_item.reason if cluster_item.excluded else None,
-                observations=observations,
-                metadata=metadata,
-            )
+        owners[canonical_key] = item
+        added = _claim_aliases(item, aliases, owners, warnings)
+        item.observations = sum(
+            frequencies.get(name, 0) for name in (canonical, *added)
         )
+        items.append(item)
 
-    return Catalog(items)
+    # Catalog() re-checks every alias. The bookkeeping above is prevention;
+    # this is the guarantee.
+    return Catalog(items), warnings
 
 
 # --------------------------------------------------------------------------
@@ -372,19 +474,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "images", type=Path, nargs="?", help="Folder of photographs to harvest"
     )
     parser.add_argument(
-        "--out", type=Path, default=HERE / "catalog.json", help="Catalog to write"
+        "--out",
+        type=Path,
+        default=PLAYGROUND_DIR / "catalog.json",
+        help="Catalog to write",
     )
     parser.add_argument(
         "--harvest-file",
         type=Path,
-        default=HERE / "harvest.json",
+        default=PLAYGROUND_DIR / "harvest.json",
         help="Where raw label frequencies are cached",
+    )
+    parser.add_argument(
+        "--clusters-file",
+        type=Path,
+        default=PLAYGROUND_DIR / "clusters.json",
+        help="Where the clustering result is cached",
     )
     parser.add_argument(
         "--from-harvest",
         action="store_true",
-        help="Skip detection and reuse the cached harvest. Free, and what you "
-        "want while tuning the clustering or enrichment prompts.",
+        help="Skip detection; reuse the cached harvest. Redoes clustering and "
+        "enrichment.",
+    )
+    parser.add_argument(
+        "--from-clusters",
+        action="store_true",
+        help="Skip detection and clustering; reuse both caches. Redoes "
+        "enrichment only. Edit clusters.json by hand first if you like.",
     )
     parser.add_argument(
         "--runs", type=int, default=2, help="Detection passes per photo (default: 2)"
@@ -392,71 +509,91 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--min-observations",
         type=int,
-        default=2,
-        help="Drop labels seen fewer times than this before clustering "
-        "(default: 2). Use 1 to keep everything.",
+        default=1,
+        help="Drop labels seen in fewer photos than this before clustering "
+        "(default: 1, keep everything). Raise to 2 or 3 only once the photo set "
+        "is large (20+); on a small set a real item may appear in one photo.",
     )
     parser.add_argument("--no-enrich", action="store_true", help="Skip stage 3")
-    parser.add_argument(
-        "--model", default=os.getenv("DETECT_MODEL", DEFAULT_MODEL), help="Model id"
-    )
+    parser.add_argument("--model", default=default_model(), help="Model id")
     return parser.parse_args(argv)
 
 
-def resolve_api_key() -> str:
-    key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not key:
-        raise DetectionError("No API key. Set LLM_API_KEY in the project .env.")
-    return key
+def warn(message: str) -> None:
+    print(f"  ! {message}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:
-    load_dotenv(HERE.parent / ".env")
+    load_env()
     args = parse_args(argv)
+    notes: list[str] = []
 
     try:
-        client = build_client(resolve_api_key(), os.getenv("LLM_BASE_URL"))
+        client = make_client()
 
-        # ---- stage 1
-        if args.from_harvest:
-            if not args.harvest_file.is_file():
-                raise DetectionError(f"No cached harvest at {args.harvest_file}")
-            frequencies = json.loads(args.harvest_file.read_text(encoding="utf-8"))
-            print(f"Reusing {args.harvest_file} ({len(frequencies)} labels)", file=sys.stderr)
+        # ---- stage 1: harvest
+        if args.from_harvest or args.from_clusters:
+            frequencies = load_harvest(args.harvest_file)
+            print(
+                f"Reusing {args.harvest_file.name} ({len(frequencies)} labels)",
+                file=sys.stderr,
+            )
         else:
             if args.images is None:
-                raise DetectionError("Give an image folder, or pass --from-harvest.")
+                raise DetectionError(
+                    "Give an image folder, or pass --from-harvest / --from-clusters."
+                )
             images = find_images(args.images)
-            print(f"Harvesting {len(images)} images x {args.runs} runs...", file=sys.stderr)
+            print(
+                f"Harvesting {len(images)} images x {args.runs} runs...",
+                file=sys.stderr,
+            )
             frequencies = harvest(
                 images, client=client, model=args.model, runs=args.runs
             )
+            # Saved immediately: if a later stage fails, the paid part survives.
             write_json(args.harvest_file, frequencies)
-            print(f"Wrote {args.harvest_file}", file=sys.stderr)
+            print(f"Wrote {args.harvest_file.name}", file=sys.stderr)
 
         kept = {
             label: count
             for label, count in frequencies.items()
             if count >= args.min_observations
         }
-        dropped = len(frequencies) - len(kept)
         if not kept:
             raise DetectionError(
                 f"Every label was seen fewer than {args.min_observations} times. "
                 "Lower --min-observations or harvest more photos."
             )
+        dropped = len(frequencies) - len(kept)
         print(
             f"{len(kept)} labels kept, {dropped} dropped below "
-            f"{args.min_observations} observations",
+            f"{args.min_observations} observation(s)",
             file=sys.stderr,
         )
 
-        # ---- stage 2
-        print("Clustering...", file=sys.stderr)
-        clusters = cluster(kept, client=client, model=args.model)
-        print(f"{len(clusters)} canonical items", file=sys.stderr)
+        # ---- stage 2: cluster
+        if args.from_clusters:
+            clusters = load_clusters(args.clusters_file)
+            print(
+                f"Reusing {args.clusters_file.name} ({len(clusters)} clusters)",
+                file=sys.stderr,
+            )
+        else:
+            print("Clustering...", file=sys.stderr)
+            clusters = cluster(kept, client=client, model=args.model)
 
-        # ---- stage 3
+        clusters, missing = reconcile(clusters, list(kept))
+        if missing:
+            notes.append(
+                f"clustering skipped {len(missing)} label(s), restored as "
+                f"unmerged rows: {', '.join(missing[:8])}"
+                + (" ..." if len(missing) > 8 else "")
+            )
+        save_clusters(args.clusters_file, clusters)
+        print(f"{len(clusters)} clusters -> {args.clusters_file.name}", file=sys.stderr)
+
+        # ---- stage 3: enrich
         if args.no_enrich:
             enriched: dict[str, EnrichedItem] = {}
         else:
@@ -467,9 +604,19 @@ def main(argv: list[str] | None = None) -> int:
             ]
             print(f"Enriching {len(wanted)} items...", file=sys.stderr)
             enriched = enrich(wanted, client=client, model=args.model)
+            unanswered = [
+                label for label in wanted if collapse_key(label) not in enriched
+            ]
+            if unanswered:
+                notes.append(
+                    f"enrichment returned nothing for {len(unanswered)} item(s): "
+                    + ", ".join(unanswered[:8])
+                    + (" ..." if len(unanswered) > 8 else "")
+                )
 
-        # ---- stage 4
-        catalog = assemble(clusters, enriched, frequencies)
+        # ---- stage 4: assemble
+        catalog, conflicts = assemble(clusters, enriched, frequencies)
+        notes.extend(conflicts)
         catalog.save(args.out)
 
     except (DetectionError, CatalogError) as exc:
@@ -487,12 +634,16 @@ def main(argv: list[str] | None = None) -> int:
         file=sys.stderr,
     )
     if incomplete:
-        print(
-            f"  {len(incomplete)} missing weight or volume: "
+        notes.append(
+            f"{len(incomplete)} collectable item(s) missing weight or volume: "
             + ", ".join(item.canonical_label for item in incomplete[:8])
-            + (" ..." if len(incomplete) > 8 else ""),
-            file=sys.stderr,
+            + (" ..." if len(incomplete) > 8 else "")
         )
+    if notes:
+        print(file=sys.stderr)
+        print("Check these during review:", file=sys.stderr)
+        for note in notes:
+            warn(note)
     print(file=sys.stderr)
     print("NOW REVIEW IT BY HAND. The model gets granularity and exclusions", file=sys.stderr)
     print("wrong often enough that this step is not optional.", file=sys.stderr)

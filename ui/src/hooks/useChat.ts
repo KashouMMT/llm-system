@@ -13,6 +13,7 @@ export type ChatError =
 type Attempt = {
 	clientMessageId: string;
 	message: string;
+	attachmentIds: string[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,6 +126,7 @@ export const useChat = (conversationId: string | undefined) => {
 				return await sendMessage(conversationId, {
 					client_message_id: attempt.clientMessageId,
 					message: attempt.message,
+					attachment_ids: attempt.attachmentIds,
 				});
 			} catch (caught) {
 				setError(toChatError(caught));
@@ -140,16 +142,20 @@ export const useChat = (conversationId: string | undefined) => {
 	);
 
 	const send = useCallback(
-		(text: string) => {
+		(text: string, attachmentIds: string[] = []) => {
 			const message = text.trim();
 
-			if (!message) {
+			// A message-less send is only valid when it carries attachments —
+			// mirrors the server's own check, so the button just does nothing
+			// rather than round-tripping a 422.
+			if (!message && attachmentIds.length === 0) {
 				return Promise.resolve(null);
 			}
 
 			return post({
 				clientMessageId: newClientMessageId(),
 				message,
+				attachmentIds,
 			});
 		},
 		[post],

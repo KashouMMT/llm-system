@@ -2,6 +2,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from psycopg.rows import class_row
@@ -14,6 +15,7 @@ _FILE_COLUMNS = """
     conversation_id,
     message_id,
     user_id,
+    origin,
     document_type,
     filename,
     storage_key,
@@ -24,27 +26,52 @@ _FILE_COLUMNS = """
 
 
 @dataclass(frozen=True)
-class GeneratedFile:
+class FileRecord:
     """
-    One document produced by a tool call, and where its bytes live.
+    One file — agent-generated or user-uploaded — and where its bytes live.
 
     conversation_id and user_id are reachable through message_id, and are
     stored anyway: the download authorization check becomes one indexed
     read with no joins, and "every file in this conversation" is a direct
     query. Safe to denormalize only because both are immutable — a file
     never moves conversation, and a conversation never changes owner.
+
+    message_id is None for an uploaded file that has not yet been attached
+    to a message. document_type is None for an uploaded file: only a
+    generated document has one. The two track each other via the
+    files_origin_document_type_check constraint, not application code.
     """
 
     id: UUID
     conversation_id: UUID
-    message_id: int
+    message_id: int | None
     user_id: UUID
-    document_type: str
+    origin: str
+    document_type: str | None
     filename: str
     storage_key: str
     content_type: str
     size_bytes: int
     created_at: datetime
+
+
+def serialize_attachment(file: FileRecord) -> dict[str, Any]:
+    """
+    The wire shape for one attachment.
+
+    Shared by the message-list endpoint and the message.created event so
+    the two can never drift apart. storage_key is deliberately excluded —
+    a client addresses a file by id through GET /files/{id}, and where the
+    bytes actually live is not its business.
+    """
+    return {
+        "id": str(file.id),
+        "document_type": file.document_type,
+        "filename": file.filename,
+        "content_type": file.content_type,
+        "size_bytes": file.size_bytes,
+        "created_at": file.created_at,
+    }
 
 
 class FileRepository:
@@ -54,14 +81,15 @@ class FileRepository:
     async def create(
         self,
         conversation_id: UUID,
-        message_id: int,
         user_id: UUID,
-        document_type: str,
+        origin: str,
         filename: str,
         storage_key: str,
         content_type: str,
         size_bytes: int,
-    ) -> GeneratedFile:
+        message_id: int | None = None,
+        document_type: str | None = None,
+    ) -> FileRecord:
         """
         Record a file whose bytes are already written.
 
@@ -69,25 +97,32 @@ class FileRepository:
         allow a row pointing at bytes that do not exist, which is a
         download the user watches fail; this order can only leave an
         unreferenced blob, which is invisible and sweepable.
+
+        message_id and document_type default to None for an uploaded file:
+        an upload is recorded before it is attached to any message, and
+        never has a document_type. The database enforces the pairing
+        (files_origin_document_type_check) rather than this method, so a
+        caller cannot drift from it silently.
         """
         async with (
             self._pool.connection() as conn,
-            conn.cursor(row_factory=class_row(GeneratedFile)) as cur,
+            conn.cursor(row_factory=class_row(FileRecord)) as cur,
         ):
             await cur.execute(
                 f"""
-                INSERT INTO generated_files (
+                INSERT INTO files (
                     id,
                     conversation_id,
                     message_id,
                     user_id,
+                    origin,
                     document_type,
                     filename,
                     storage_key,
                     content_type,
                     size_bytes
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING {_FILE_COLUMNS}
                 """,
                 (
@@ -95,6 +130,7 @@ class FileRepository:
                     conversation_id,
                     message_id,
                     user_id,
+                    origin,
                     document_type,
                     filename,
                     storage_key,
@@ -106,8 +142,9 @@ class FileRepository:
             created = await cur.fetchone()
 
         logger.info(
-            "Generated file recorded | file=%s type=%s conversation=%s bytes=%s",
+            "File recorded | file=%s origin=%s type=%s conversation=%s bytes=%s",
             created.id,
+            origin,
             document_type,
             conversation_id,
             size_bytes,
@@ -115,7 +152,7 @@ class FileRepository:
 
         return created
 
-    async def get_by_id(self, file_id: UUID) -> GeneratedFile | None:
+    async def get_by_id(self, file_id: UUID) -> FileRecord | None:
         """
         Fetch one file row.
 
@@ -125,12 +162,12 @@ class FileRepository:
         """
         async with (
             self._pool.connection() as conn,
-            conn.cursor(row_factory=class_row(GeneratedFile)) as cur,
+            conn.cursor(row_factory=class_row(FileRecord)) as cur,
         ):
             await cur.execute(
                 f"""
                 SELECT {_FILE_COLUMNS}
-                FROM generated_files
+                FROM files
                 WHERE id = %s
                 """,
                 (file_id,),
@@ -141,7 +178,7 @@ class FileRepository:
     async def get_by_message_ids(
         self,
         message_ids: Sequence[int],
-    ) -> list[GeneratedFile]:
+    ) -> list[FileRecord]:
         """
         Every file attached to any of these messages.
 
@@ -153,12 +190,12 @@ class FileRepository:
 
         async with (
             self._pool.connection() as conn,
-            conn.cursor(row_factory=class_row(GeneratedFile)) as cur,
+            conn.cursor(row_factory=class_row(FileRecord)) as cur,
         ):
             await cur.execute(
                 f"""
                 SELECT {_FILE_COLUMNS}
-                FROM generated_files
+                FROM files
                 WHERE message_id = ANY(%s)
                 ORDER BY created_at ASC
                 """,
@@ -166,3 +203,42 @@ class FileRepository:
             )
 
             return await cur.fetchall()
+
+    async def sweep_orphaned_uploads(
+        self,
+        *,
+        older_than_hours: int = 24,
+    ) -> list[str]:
+        """
+        Delete uploaded rows that were never attached to a message and are
+        old enough that the sender is not still mid-send.
+
+        Run once at startup, alongside MessageRepository.sweep_streaming.
+        The row is deleted first and the bytes after: the reverse order can
+        leave a row pointing at bytes that no longer exist (this
+        application's one recognized inconsistency, already handled as a
+        logged 404 in GET /files/{id}), while this order can only leave an
+        unreferenced blob — invisible, harmless, and swept again next time
+        if it is somehow missed.
+
+        Returns the storage keys of the deleted rows, so the caller can
+        remove their bytes.
+        """
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                DELETE FROM files
+                WHERE origin = 'uploaded'
+                  AND message_id IS NULL
+                  AND created_at < NOW() - (%s || ' hours')::INTERVAL
+                RETURNING storage_key
+                """,
+                (older_than_hours,),
+            )
+
+            rows = await cur.fetchall()
+
+        return [row[0] for row in rows]

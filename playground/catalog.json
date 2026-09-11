@@ -1,0 +1,1116 @@
+{
+  "version": 1,
+  "items": [
+    {
+      "id": "wall",
+      "canonical_label": "wall",
+      "aliases": [],
+      "visual_class": "wall",
+      "excluded": true,
+      "exclusion_reason": "Building structure.",
+      "observations": 7,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "bag",
+      "canonical_label": "bag",
+      "aliases": [],
+      "visual_class": "bag",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 5,
+      "metadata": {
+        "weight_kg": 0.25,
+        "weight_kg_min": 0.05,
+        "weight_kg_max": 1.5,
+        "dimensions": {
+          "length_cm": 40.0,
+          "width_cm": 15.0,
+          "height_cm": 35.0
+        },
+        "volume_m3": null,
+        "material": "fabric or synthetic textile",
+        "nestable": true,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "bottle",
+      "canonical_label": "bottle",
+      "aliases": [],
+      "visual_class": "bottle",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 5,
+      "metadata": {
+        "weight_kg": 0.55,
+        "weight_kg_min": 0.1,
+        "weight_kg_max": 1.2,
+        "dimensions": {
+          "length_cm": 30.0,
+          "width_cm": 8.0,
+          "height_cm": 8.0
+        },
+        "volume_m3": null,
+        "material": "glass",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "floor",
+      "canonical_label": "floor",
+      "aliases": [],
+      "visual_class": "floor",
+      "excluded": true,
+      "exclusion_reason": "Building structure.",
+      "observations": 5,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "sink",
+      "canonical_label": "sink",
+      "aliases": [],
+      "visual_class": "sink",
+      "excluded": true,
+      "exclusion_reason": "Room fixture.",
+      "observations": 4,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "plate",
+      "canonical_label": "plate",
+      "aliases": [],
+      "visual_class": "plate",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 3,
+      "metadata": {
+        "weight_kg": 0.45,
+        "weight_kg_min": 0.15,
+        "weight_kg_max": 1.2,
+        "dimensions": {
+          "length_cm": 25.0,
+          "width_cm": 25.0,
+          "height_cm": 3.0
+        },
+        "volume_m3": null,
+        "material": "ceramic",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "table",
+      "canonical_label": "table",
+      "aliases": [
+        "desk"
+      ],
+      "visual_class": "table or desk",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 5,
+      "metadata": {
+        "weight_kg": 25.0,
+        "weight_kg_min": 5.0,
+        "weight_kg_max": 100.0,
+        "dimensions": {
+          "length_cm": 120.0,
+          "width_cm": 75.0,
+          "height_cm": 75.0
+        },
+        "volume_m3": null,
+        "material": "wood",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "countertop",
+      "canonical_label": "countertop",
+      "aliases": [],
+      "visual_class": "countertop",
+      "excluded": true,
+      "exclusion_reason": "Fixed room surface.",
+      "observations": 3,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "plastic_bag",
+      "canonical_label": "plastic bag",
+      "aliases": [],
+      "visual_class": "plastic bag",
+      "excluded": true,
+      "exclusion_reason": "Garbage",
+      "observations": 3,
+      "metadata": {
+        "weight_kg": 0.03,
+        "weight_kg_min": 0.005,
+        "weight_kg_max": 0.15,
+        "dimensions": {
+          "length_cm": 50.0,
+          "width_cm": 15.0,
+          "height_cm": 70.0
+        },
+        "volume_m3": null,
+        "material": "plastic film",
+        "nestable": true,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "faucet",
+      "canonical_label": "faucet",
+      "aliases": [],
+      "visual_class": "faucet",
+      "excluded": true,
+      "exclusion_reason": "Room fixture.",
+      "observations": 3,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "cable",
+      "canonical_label": "cable",
+      "aliases": [
+        "electrical cord"
+      ],
+      "visual_class": "cable or electrical cord",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 5,
+      "metadata": {
+        "weight_kg": 0.2,
+        "weight_kg_min": 0.02,
+        "weight_kg_max": 2.0,
+        "dimensions": {
+          "length_cm": 200.0,
+          "width_cm": 20.0,
+          "height_cm": 5.0
+        },
+        "volume_m3": null,
+        "material": "copper and plastic",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "curtain",
+      "canonical_label": "curtain",
+      "aliases": [],
+      "visual_class": "curtain",
+      "excluded": true,
+      "exclusion_reason": "Building-attached furnishing.",
+      "observations": 3,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "window",
+      "canonical_label": "window",
+      "aliases": [],
+      "visual_class": "window",
+      "excluded": true,
+      "exclusion_reason": "Building structure.",
+      "observations": 3,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "cup",
+      "canonical_label": "cup",
+      "aliases": [],
+      "visual_class": "cup",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 3,
+      "metadata": {
+        "weight_kg": 0.25,
+        "weight_kg_min": 0.05,
+        "weight_kg_max": 0.6,
+        "dimensions": {
+          "length_cm": 10.0,
+          "width_cm": 10.0,
+          "height_cm": 12.0
+        },
+        "volume_m3": null,
+        "material": "ceramic",
+        "nestable": true,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "grape",
+      "canonical_label": "grape",
+      "aliases": [],
+      "visual_class": "grape",
+      "excluded": true,
+      "exclusion_reason": "Food.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "can",
+      "canonical_label": "can",
+      "aliases": [],
+      "visual_class": "can",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.35,
+        "weight_kg_min": 0.1,
+        "weight_kg_max": 1.0,
+        "dimensions": {
+          "length_cm": 12.0,
+          "width_cm": 7.0,
+          "height_cm": 7.0
+        },
+        "volume_m3": null,
+        "material": "steel or aluminium",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "electric_kettle",
+      "canonical_label": "electric kettle",
+      "aliases": [],
+      "visual_class": "electric kettle",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 1.1,
+        "weight_kg_min": 0.6,
+        "weight_kg_max": 2.0,
+        "dimensions": {
+          "length_cm": 25.0,
+          "width_cm": 20.0,
+          "height_cm": 25.0
+        },
+        "volume_m3": null,
+        "material": "plastic and metal",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "pot",
+      "canonical_label": "pot",
+      "aliases": [],
+      "visual_class": "pot",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 1.5,
+        "weight_kg_min": 0.5,
+        "weight_kg_max": 4.0,
+        "dimensions": {
+          "length_cm": 30.0,
+          "width_cm": 30.0,
+          "height_cm": 18.0
+        },
+        "volume_m3": null,
+        "material": "stainless steel or aluminium",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "rice_cooker",
+      "canonical_label": "rice cooker",
+      "aliases": [],
+      "visual_class": "rice cooker",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 2.5,
+        "weight_kg_min": 1.2,
+        "weight_kg_max": 6.0,
+        "dimensions": {
+          "length_cm": 35.0,
+          "width_cm": 30.0,
+          "height_cm": 30.0
+        },
+        "volume_m3": null,
+        "material": "plastic and metal",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "plastic_bottle",
+      "canonical_label": "plastic bottle",
+      "aliases": [],
+      "visual_class": "plastic bottle",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.03,
+        "weight_kg_min": 0.01,
+        "weight_kg_max": 0.1,
+        "dimensions": {
+          "length_cm": 25.0,
+          "width_cm": 7.0,
+          "height_cm": 7.0
+        },
+        "volume_m3": null,
+        "material": "plastic",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "plastic_container",
+      "canonical_label": "plastic container",
+      "aliases": [],
+      "visual_class": "plastic container",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.15,
+        "weight_kg_min": 0.03,
+        "weight_kg_max": 0.8,
+        "dimensions": {
+          "length_cm": 25.0,
+          "width_cm": 18.0,
+          "height_cm": 12.0
+        },
+        "volume_m3": null,
+        "material": "plastic",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "pan",
+      "canonical_label": "pan",
+      "aliases": [],
+      "visual_class": "pan",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 1.2,
+        "weight_kg_min": 0.5,
+        "weight_kg_max": 3.5,
+        "dimensions": {
+          "length_cm": 50.0,
+          "width_cm": 28.0,
+          "height_cm": 8.0
+        },
+        "volume_m3": null,
+        "material": "aluminium or steel",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "shoe",
+      "canonical_label": "shoe",
+      "aliases": [],
+      "visual_class": "shoe",
+      "excluded": true,
+      "exclusion_reason": "Clothing.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "towel",
+      "canonical_label": "towel",
+      "aliases": [],
+      "visual_class": "towel",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.4,
+        "weight_kg_min": 0.08,
+        "weight_kg_max": 1.2,
+        "dimensions": {
+          "length_cm": 140.0,
+          "width_cm": 70.0,
+          "height_cm": 3.0
+        },
+        "volume_m3": null,
+        "material": "cotton",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "paper",
+      "canonical_label": "paper",
+      "aliases": [],
+      "visual_class": "paper",
+      "excluded": true,
+      "exclusion_reason": "Treated as rubbish rather than a collectable item.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "pillow",
+      "canonical_label": "pillow",
+      "aliases": [],
+      "visual_class": "pillow",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.8,
+        "weight_kg_min": 0.3,
+        "weight_kg_max": 1.5,
+        "dimensions": {
+          "length_cm": 60.0,
+          "width_cm": 40.0,
+          "height_cm": 15.0
+        },
+        "volume_m3": null,
+        "material": "textile and synthetic or feather filling",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "blanket",
+      "canonical_label": "blanket",
+      "aliases": [],
+      "visual_class": "blanket",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 2.0,
+        "weight_kg_min": 0.5,
+        "weight_kg_max": 4.5,
+        "dimensions": {
+          "length_cm": 220.0,
+          "width_cm": 150.0,
+          "height_cm": 2.0
+        },
+        "volume_m3": null,
+        "material": "textile",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "clothing",
+      "canonical_label": "clothing",
+      "aliases": [],
+      "visual_class": "clothing",
+      "excluded": true,
+      "exclusion_reason": "Clothing.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "bed",
+      "canonical_label": "bed",
+      "aliases": [],
+      "visual_class": "bed",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 70.0,
+        "weight_kg_min": 25.0,
+        "weight_kg_max": 150.0,
+        "dimensions": {
+          "length_cm": 200.0,
+          "width_cm": 160.0,
+          "height_cm": 100.0
+        },
+        "volume_m3": null,
+        "material": "wood and metal",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "headphone",
+      "canonical_label": "headphone",
+      "aliases": [],
+      "visual_class": "headphone",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.3,
+        "weight_kg_min": 0.15,
+        "weight_kg_max": 0.6,
+        "dimensions": {
+          "length_cm": 20.0,
+          "width_cm": 18.0,
+          "height_cm": 8.0
+        },
+        "volume_m3": null,
+        "material": "plastic and metal",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "keyboard",
+      "canonical_label": "keyboard",
+      "aliases": [],
+      "visual_class": "keyboard",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.7,
+        "weight_kg_min": 0.4,
+        "weight_kg_max": 1.5,
+        "dimensions": {
+          "length_cm": 45.0,
+          "width_cm": 15.0,
+          "height_cm": 3.0
+        },
+        "volume_m3": null,
+        "material": "plastic",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "mouse",
+      "canonical_label": "mouse",
+      "aliases": [],
+      "visual_class": "mouse",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.1,
+        "weight_kg_min": 0.06,
+        "weight_kg_max": 0.2,
+        "dimensions": {
+          "length_cm": 12.0,
+          "width_cm": 7.0,
+          "height_cm": 4.0
+        },
+        "volume_m3": null,
+        "material": "plastic",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "tissue_box",
+      "canonical_label": "tissue box",
+      "aliases": [],
+      "visual_class": "tissue box",
+      "excluded": true,
+      "exclusion_reason": "Garbage",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.25,
+        "weight_kg_min": 0.1,
+        "weight_kg_max": 0.5,
+        "dimensions": {
+          "length_cm": 24.0,
+          "width_cm": 12.0,
+          "height_cm": 8.0
+        },
+        "volume_m3": null,
+        "material": "paperboard",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "water_bottle",
+      "canonical_label": "water bottle",
+      "aliases": [],
+      "visual_class": "water bottle",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.6,
+        "weight_kg_min": 0.1,
+        "weight_kg_max": 1.5,
+        "dimensions": {
+          "length_cm": 25.0,
+          "width_cm": 8.0,
+          "height_cm": 8.0
+        },
+        "volume_m3": null,
+        "material": "plastic or stainless steel",
+        "nestable": false,
+        "stackable": false,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "bedsheet",
+      "canonical_label": "bedsheet",
+      "aliases": [],
+      "visual_class": "bedsheet",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.8,
+        "weight_kg_min": 0.3,
+        "weight_kg_max": 1.8,
+        "dimensions": {
+          "length_cm": 240.0,
+          "width_cm": 160.0,
+          "height_cm": 1.0
+        },
+        "volume_m3": null,
+        "material": "textile",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "power_strip",
+      "canonical_label": "power strip",
+      "aliases": [],
+      "visual_class": "power strip",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.5,
+        "weight_kg_min": 0.25,
+        "weight_kg_max": 1.2,
+        "dimensions": {
+          "length_cm": 35.0,
+          "width_cm": 6.0,
+          "height_cm": 4.0
+        },
+        "volume_m3": null,
+        "material": "plastic and copper",
+        "nestable": false,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "power_adapter",
+      "canonical_label": "power adapter",
+      "aliases": [],
+      "visual_class": "power adapter",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.25,
+        "weight_kg_min": 0.05,
+        "weight_kg_max": 0.8,
+        "dimensions": {
+          "length_cm": 10.0,
+          "width_cm": 7.0,
+          "height_cm": 4.0
+        },
+        "volume_m3": null,
+        "material": "plastic and electronic components",
+        "nestable": true,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "shirt",
+      "canonical_label": "shirt",
+      "aliases": [],
+      "visual_class": "shirt",
+      "excluded": true,
+      "exclusion_reason": "Clothing.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "tube",
+      "canonical_label": "tube",
+      "aliases": [],
+      "visual_class": "tube",
+      "excluded": false,
+      "exclusion_reason": null,
+      "observations": 2,
+      "metadata": {
+        "weight_kg": 0.15,
+        "weight_kg_min": 0.03,
+        "weight_kg_max": 0.5,
+        "dimensions": {
+          "length_cm": 20.0,
+          "width_cm": 5.0,
+          "height_cm": 5.0
+        },
+        "volume_m3": null,
+        "material": "plastic or laminated metal",
+        "nestable": false,
+        "stackable": true,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "llm_estimate"
+      }
+    },
+    {
+      "id": "drain",
+      "canonical_label": "drain",
+      "aliases": [],
+      "visual_class": "drain",
+      "excluded": true,
+      "exclusion_reason": "Room fixture.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    },
+    {
+      "id": "person",
+      "canonical_label": "person",
+      "aliases": [],
+      "visual_class": "person",
+      "excluded": true,
+      "exclusion_reason": "Person.",
+      "observations": 2,
+      "metadata": {
+        "weight_kg": null,
+        "weight_kg_min": null,
+        "weight_kg_max": null,
+        "dimensions": {
+          "length_cm": null,
+          "width_cm": null,
+          "height_cm": null
+        },
+        "volume_m3": null,
+        "material": null,
+        "nestable": null,
+        "stackable": null,
+        "unit_price": null,
+        "currency": null,
+        "extra": {},
+        "source": "unknown"
+      }
+    }
+  ]
+}

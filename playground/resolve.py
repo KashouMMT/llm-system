@@ -1,22 +1,48 @@
 """Map detected items onto catalog rows and attach what is known about them.
 
-This is the second grouping pass, and it is the one that finally merges
-"table" and "desk". `consensus.py` groups by `collapse_key`, which can only
-merge spelling variants; synonyms need the catalog's alias list. So detection
-groups twice, on two different axes, and this is the second.
+Two jobs:
 
-The output is deliberately three lists rather than one. "We do not want it",
-"we do not recognise it" and "here it is" are three different situations that
-demand three different responses, and flattening them into one filtered list
-destroys exactly the information a reviewer needs.
+`grouping_key(catalog)` builds the key `consensus.merge_runs` groups by, so that
+synonyms ("table", "desk") are merged *per run*, before runs are combined. That
+is the only place the merge can be done correctly — see `consensus.KeyFunction`.
+
+`resolve(items, catalog)` then attaches each merged item's catalog row and
+splits the result three ways. "We do not want it", "we do not recognise it" and
+"here it is" are three situations demanding three responses, and flattening
+them into one filtered list destroys exactly what a reviewer needs.
 """
 
 from __future__ import annotations
 
+from catalog import Catalog, CatalogItem, ItemMetadata
+from consensus import KeyFunction, StableItem, is_unstable
+from labels import collapse_key
 from pydantic import BaseModel, Field
 
-from catalog import Catalog, CatalogItem, ItemMetadata
-from consensus import StableItem
+# Volume each additional unit adds when an item nests. Six stacked chairs
+# occupy far less than six chair-shaped boxes; 0.4 is a rough approximation,
+# and far closer to the truth than ignoring nesting, which overestimates by
+# roughly 3x on the commonest items in a room.
+NESTED_UNIT_VOLUME_FACTOR = 0.4
+
+
+def grouping_key(catalog: Catalog) -> KeyFunction:
+    """A consensus key that merges every label a catalog row answers to.
+
+    Matched labels group under their catalog id; unmatched ones under their
+    collapsed spelling. The prefixes keep the two namespaces apart, so an
+    unmatched label can never collide with a catalog id that happens to be
+    spelled the same.
+    """
+
+    def key(label: str) -> str:
+        collapsed = collapse_key(label)
+        if not collapsed:
+            return ""
+        item = catalog.match(label)
+        return f"catalog:{item.id}" if item is not None else f"label:{collapsed}"
+
+    return key
 
 
 class ResolvedItem(BaseModel):
@@ -47,24 +73,17 @@ class ResolvedItem(BaseModel):
 
     @property
     def total_volume_m3(self) -> float | None:
-        """Total occupied volume, discounted when the item nests.
-
-        Six stacked chairs occupy far less than six chair-shaped boxes. The
-        0.4 factor on the additional units is a rough approximation, and it is
-        much closer to the truth than ignoring nesting entirely, which
-        overestimates by roughly 3x on the commonest items in a room.
-        """
+        """Total occupied volume, discounted when the item nests."""
         unit = self.metadata.effective_volume_m3
         if unit is None:
             return None
         if self.metadata.nestable and self.count > 1:
-            return unit * (1 + (self.count - 1) * 0.4)
+            return unit * (1 + (self.count - 1) * NESTED_UNIT_VOLUME_FACTOR)
         return unit * self.count
 
     @property
     def count_is_unstable(self) -> bool:
-        spread = self.count_max - self.count_min
-        return spread > max(1, self.count // 2)
+        return is_unstable(self.count, self.count_min, self.count_max)
 
 
 class UnmatchedItem(BaseModel):
@@ -128,13 +147,21 @@ class Resolution(BaseModel):
         ]
 
 
-def resolve(items: list[StableItem], catalog: Catalog) -> Resolution:
-    """Group detections by catalog item, splitting on what happened to each.
+def _review_order(item: ResolvedItem | UnmatchedItem) -> tuple[int, int, str]:
+    """Most agreed-on first, then most numerous, then alphabetical."""
+    return (-item.runs_seen, -item.count, item.label)
 
-    Several `StableItem`s can collapse into one `ResolvedItem` — that is the
-    point. Counts are summed across them, and the count range widens to span
-    all contributors, because a spread that came from two labels is still a
-    spread.
+
+def resolve(items: list[StableItem], catalog: Catalog) -> Resolution:
+    """Attach catalog rows to detections and split into three buckets.
+
+    Expects `items` grouped with `grouping_key(catalog)`, which already merged
+    synonyms per run. Given items grouped only by spelling instead, two labels
+    can still land on one catalog row here — and at this point it is no longer
+    knowable whether they were one object named twice or two objects. The
+    merge below takes the larger count rather than the sum: undercounting a
+    duplicate that should have been caught earlier is the safer error than
+    doubling an object.
     """
     by_catalog_id: dict[str, ResolvedItem] = {}
     unmatched: list[UnmatchedItem] = []
@@ -153,6 +180,7 @@ def resolve(items: list[StableItem], catalog: Catalog) -> Resolution:
             )
             continue
 
+        observed = item.labels or [item.label]
         existing = by_catalog_id.get(catalog_item.id)
         if existing is None:
             by_catalog_id[catalog_item.id] = ResolvedItem(
@@ -162,26 +190,25 @@ def resolve(items: list[StableItem], catalog: Catalog) -> Resolution:
                 count_max=item.count_max,
                 runs_seen=item.runs_seen,
                 total_runs=item.total_runs,
-                observed_labels=[item.label],
+                observed_labels=list(observed),
             )
             continue
 
-        # A second label for the same catalog item: "desk" arriving after
-        # "table". Counts add; the range spans both; agreement takes the
-        # stronger of the two, since either label appearing is evidence the
-        # object is there.
-        existing.count += item.count
-        existing.count_min += item.count_min
-        existing.count_max += item.count_max
+        existing.count = max(existing.count, item.count)
+        existing.count_min = max(existing.count_min, item.count_min)
+        existing.count_max = max(existing.count_max, item.count_max)
         existing.runs_seen = max(existing.runs_seen, item.runs_seen)
-        existing.observed_labels.append(item.label)
+        existing.observed_labels.extend(
+            label for label in observed if label not in existing.observed_labels
+        )
 
     resolved = list(by_catalog_id.values())
-    matched = [item for item in resolved if not item.catalog_item.excluded]
-    excluded = [item for item in resolved if item.catalog_item.excluded]
-
-    matched.sort(key=lambda item: (-item.runs_seen, -item.count, item.label))
-    excluded.sort(key=lambda item: (-item.runs_seen, -item.count, item.label))
-    unmatched.sort(key=lambda item: (-item.runs_seen, -item.count, item.label))
+    matched = sorted(
+        (item for item in resolved if not item.catalog_item.excluded), key=_review_order
+    )
+    excluded = sorted(
+        (item for item in resolved if item.catalog_item.excluded), key=_review_order
+    )
+    unmatched.sort(key=_review_order)
 
     return Resolution(matched=matched, excluded=excluded, unmatched=unmatched)

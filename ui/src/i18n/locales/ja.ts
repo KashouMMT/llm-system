@@ -65,6 +65,12 @@ export const ja: Messages = {
 		inputPlaceholderNoConv: "先に会話を選択してください",
 		send: "送信",
 		sending: "送信中…",
+		attach: "ファイルを添付",
+		attachmentUploading: "アップロード中…",
+		attachmentError: "アップロードに失敗しました。",
+		attachmentRemove: "添付を削除",
+		attachmentTooMany: "添付は1メッセージあたり最大10件までです。",
+		attachmentTooLarge: "添付ファイルの合計サイズが100MBを超えます。",
 	},
 	error: {
 		notFoundTitle: "ページが見つかりません",

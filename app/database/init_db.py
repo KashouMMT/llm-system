@@ -167,56 +167,66 @@ def create_tables() -> None:
             )
             
             # ---------------------------------------------------------
-            # Generated documents
+            # Files: both agent-generated documents and user uploads
             # ---------------------------------------------------------
+            # message_id is nullable because an upload exists before the
+            # message it will be attached to; document_type is nullable
+            # because only a generated file has one. The two nullable
+            # columns are kept in lockstep by files_origin_document_type_check
+            # rather than by application code, so no writer can forget it.
             cur.execute(
                 """
-                CREATE TABLE IF NOT EXISTS generated_files (
+                CREATE TABLE IF NOT EXISTS files (
                     id UUID PRIMARY KEY,
                     conversation_id UUID NOT NULL,
-                    message_id BIGINT NOT NULL,
+                    message_id BIGINT,
                     user_id UUID NOT NULL,
-                    document_type TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    document_type TEXT,
                     filename TEXT NOT NULL,
                     storage_key TEXT NOT NULL UNIQUE,
                     content_type TEXT NOT NULL,
                     size_bytes BIGINT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    
-                    CONSTRAINT generated_files_document_type_check
-                        CHECK (document_type IN (
+
+                    CONSTRAINT files_origin_check
+                        CHECK (origin IN ('generated', 'uploaded')),
+                    CONSTRAINT files_document_type_check
+                        CHECK (document_type IS NULL OR document_type IN (
                             'rirekisho',
                             'shokumu_keirekisho'
                         )),
-                    CONSTRAINT generated_files_size_check
+                    CONSTRAINT files_origin_document_type_check
+                        CHECK ((origin = 'generated') = (document_type IS NOT NULL)),
+                    CONSTRAINT files_size_check
                         CHECK (size_bytes >= 0),
-                    CONSTRAINT fk_generated_files_conversation
+                    CONSTRAINT fk_files_conversation
                         FOREIGN KEY (conversation_id)
                         REFERENCES conversations(id)
                         ON DELETE CASCADE,
-                    CONSTRAINT fk_generated_files_message
+                    CONSTRAINT fk_files_message
                         FOREIGN KEY (message_id)
                         REFERENCES messages(id)
                         ON DELETE CASCADE,
-                    CONSTRAINT fk_generated_files_user
+                    CONSTRAINT fk_files_user
                         FOREIGN KEY (user_id)
                         REFERENCES users(id)
                         ON DELETE CASCADE
                 )
-            """    
-            )
-            
-            cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_generated_files_message_id
-                ON generated_files(message_id)
             """
             )
 
             cur.execute(
                 """
-                CREATE INDEX IF NOT EXISTS idx_generated_files_conversation_id
-                ON generated_files(conversation_id)
+                CREATE INDEX IF NOT EXISTS idx_files_message_id
+                ON files(message_id)
+            """
+            )
+
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_files_conversation_id
+                ON files(conversation_id)
             """
             )
 

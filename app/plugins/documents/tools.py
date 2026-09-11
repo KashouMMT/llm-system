@@ -144,6 +144,7 @@ def make_document_tools(
                 conversation_id=conversation_id,
                 message_id=assistant_message_id,
                 user_id=conversation.user_id,
+                origin="generated",
                 document_type=document_type,
                 filename=filename,
                 storage_key=storage_key,

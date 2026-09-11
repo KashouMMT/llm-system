@@ -43,7 +43,9 @@ Configure via a `.env` file. The database needs either `DATABASE_URL` **or** `DB
 | `MAX_SUMMARY_CHARS` | `6000` | Hard ceiling on the stored durable summary. The merge prompt is asked to stay under 75% of this; the cap only catches a model that ignored it, since a summary that grows without limit costs more context than the transcript it replaced |
 | `MAX_USER_INPUT_CHARS` | `4000` | Max characters accepted in a single user message |
 | `TITLE_MAX_CHARS` | `80` | Upper bound on a conversation title, for both the auto-generated name and the `PATCH /conversations/{id}` rename endpoint |
-| `FILE_STORAGE_DIR` | `app/generated_files` | Where `LocalFileStorage` writes generated documents. Relative to the working directory, like `app/logs` — the process must be started from the repository root either way |
+| `FILE_STORAGE_DIR` | `app/generated_files` | Where `LocalFileStorage` writes generated documents and uploads. Relative to the working directory, like `app/logs` — the process must be started from the repository root either way |
+| `UPLOAD_MAX_BYTES` | `20971520` (20 MB) | Cap on one attachment's body, enforced while streaming `POST /conversations/{id}/uploads` — a request over the cap is rejected with `413` before the whole body is buffered. Matches nginx's `client_max_body_size` in [deploy/nginx/llm-system.conf](deploy/nginx/llm-system.conf) |
+| `MAX_ATTACHMENT_BATCH_BYTES` | `104857600` (100 MB) | Cap on the combined size of the `attachment_ids` one `POST /conversations/{id}/messages` attaches — `422` over the limit. The frontend already refuses to queue a batch this large; this is the same rule enforced against a direct API call |
 | `ENABLED_TOOL_PLUGINS` | *(empty)* | Comma-separated allowlist of plugin folder names under `app/plugins/`. Empty means load every plugin folder that is present |
 | `TOOL_PLUGINS_STRICT` | `false` | Fail startup if any tool plugin fails to load, instead of logging and skipping it |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
@@ -190,7 +192,7 @@ Dates are stored as 西暦 and converted only when rendered. The application-wid
 **Connection configuration** (`app/config/settings.py`). The database is addressed one of two ways. If `DATABASE_URL` is set, it is the source of truth — the full libpq connection string, so it can carry `?sslmode=require` and anything else a managed Postgres needs — and `DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER` / `DB_PASSWORD` are parsed back out of it with `psycopg.conninfo.conninfo_to_dict` (a few callers need a part on its own: `create_db_if_not_exist` needs the database name to test for and create it). If `DATABASE_URL` is not set, it is assembled from those `DB_*` parts, with the password percent-encoded. Either way both `DATABASE_URL` and every `DB_*` name end up populated and consistent, so a caller uses whichever it needs — the async pool and the LangGraph checkpointer take the URL, `get_connection` takes the URL, and `create_db_if_not_exist` takes the URL with `dbname` overridden to `postgres` so it can reach the server before the target database exists. A `DATABASE_URL` with no database name fails at startup.
 
 **Persistence** — two separate stores:
-- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `users`, `sessions` (opaque session tokens, stored as SHA-256 hashes), `conversations` (each owned by a user, with a lifecycle `status`), `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log), `generated_files` (document metadata and its storage key, cascading from conversation, message and user; the bytes themselves live in `FileStorage`, not in the database), `app_settings` (sparse key/value store of persisted runtime-setting overrides). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
+- Application data (PostgreSQL, `app/database/`, `app/repositories/`): `users`, `sessions` (opaque session tokens, stored as SHA-256 hashes), `conversations` (each owned by a user, with a lifecycle `status`), `messages`, `conversation_summary_state` (current summary + watermark), `conversation_summaries` (historical chunk log), `files` (both agent-generated documents and user uploads, distinguished by `origin`; metadata and a storage key, cascading from conversation, message and user — `message_id` is nullable because an upload exists before the message it attaches to; the bytes themselves live in `FileStorage`, not in the database), `app_settings` (sparse key/value store of persisted runtime-setting overrides). Tables are created on startup if missing; `app/database/migrations.py` applies versioned schema changes to tables that already exist (tracked in `schema_migrations`), since `CREATE TABLE IF NOT EXISTS` cannot. Every repository (`app/repositories/`) is async and reads/writes through one shared `psycopg_pool.AsyncConnectionPool`, returning typed dataclasses (`psycopg.rows.class_row`) rather than positional tuples.
 - LangGraph checkpoint state: managed separately by `AsyncPostgresSaver` (`app/agent/checkpointer.py`) for graph replay/resumption. It opens its own connection independent of the application pool.
 
 **Realtime** (`app/runtime/event_bus.py`, `app/runtime/conversation_lock.py`):
@@ -244,13 +246,20 @@ Every route except `GET /health`, `POST /auth/login`, and `POST /auth/register` 
 | `GET` | `/conversations` | List the caller's conversations (each includes a lifecycle `status`: `active` / `held` / `closed`) |
 | `GET` | `/conversations/{id}/messages` | Get a conversation's transcript (includes `status` per message: `streaming` / `complete` / `interrupted` / `cancelled` / `failed`) |
 | `POST` | `/conversations/{id}/messages` | Open a turn and start generating in the background. Body: `{"client_message_id": UUID, "message": str}`. Returns `202` with `{user_message_id, assistant_message_id}` immediately — the response is not in this call, only over `GET /events`. `client_message_id` is an idempotency key: a retried send with the same key returns the original ids (`200`) rather than generating a second answer. A second concurrent send on the same conversation while one is in flight gets `409` with the in-flight `assistant_message_id`, so the caller can subscribe to it instead. A send into a conversation an admin has put on hold gets `423` |
+| `POST` | `/conversations/{id}/uploads?filename={name}` | Store one attachment, before it is attached to any message. Raw body (not multipart), streamed and capped at `UPLOAD_MAX_BYTES` — `413` if exceeded. `filename` is a percent-encoded query parameter, since it may be Japanese and headers are latin-1. `Content-Type` is never trusted: the actual type is read from the bytes (png/jpeg/pdf/docx/utf-8 text only; anything else, or an image that fails to decode, is `415`). Returns `201` with `{id, filename, content_type, size_bytes}` |
 | `GET` | `/events?conversation_id={id}` | Server-sent events (`text/event-stream`) for one conversation. Any number of clients may subscribe and all receive the same stream, which is what keeps multiple tabs on the same conversation consistent |
-| `GET` | `/files/{file_id}` | Download a generated document as an attachment. Scoped to the owning user (admins may read any); someone else's file is reported as `404`, not `403`, so an id they cannot see is never confirmed to exist. A row whose bytes are missing is logged at `ERROR` — that is our inconsistency, not a bad request — but still answered `404` |
+| `GET` | `/files/{file_id}` | Download a generated document or an uploaded attachment. Scoped to the owning user (admins may read any); someone else's file is reported as `404`, not `403`, so an id they cannot see is never confirmed to exist. A row whose bytes are missing is logged at `ERROR` — that is our inconsistency, not a bad request — but still answered `404` |
 | `GET` | `/settings` | Every runtime-adjustable setting with its live value, whether it persists, and its environment default |
 | `PATCH` | `/settings` | Apply a batch of setting changes (`{key: value}`). **Admin only.** `422` on an unknown key or invalid value |
 | `DELETE` | `/settings/{key}` | Reset one setting to its environment default, dropping any persisted override. **Admin only** |
 
 CORS is restricted to `CSRF_TRUSTED_ORIGINS` (default `http://localhost:5173`, the Vite dev server for `ui/`), with `allow_credentials=True` so the browser sends the session cookie. The same list drives the CSRF middleware's `Origin` check, so the two cannot drift apart.
+
+## Deployment
+
+`deploy/` holds everything for running this in a server environment: the backend `Dockerfile`, a local `docker-compose.yml` and a production `docker-compose.prod.yml`, and the host `nginx/llm-system.conf` that serves the built SPA and reverse-proxies the API routes to the container on a single origin. `.github/workflows/deploy.yml` is a CI/CD pipeline that builds and pushes the image, ships the SPA and nginx config, and releases over SSH on a push to the `deploy` branch (or a manual run against `main`).
+
+The current target is a single EC2 instance with an external (RDS) PostgreSQL, reached by the instance's public IP over plain HTTP — a throwaway environment for client evaluation. **[deploy/README.md](deploy/README.md)** is the runbook: topology, the server-side `.env` deltas, release and rollback, the one-time secret setup, and the accepted risks (SSH open to the world, no TLS) that are deliberate for this environment and must not be "fixed" without moving the whole deployment off a bare IP first.
 
 ## Folder Structure
 
@@ -340,7 +349,7 @@ llm-system/
 │   │       └── summary_merge_prompt.txt
 │   ├── repositories/                             # Functions for executing SQL against tables.
 │   │   ├── conversation_repository.py            # Conversation CRUD + lifecycle status; owned by a user
-│   │   ├── file_repository.py                    # generated_files rows: document metadata + storage key
+│   │   ├── file_repository.py                    # files rows: generated documents and uploads, by origin
 │   │   ├── message_repository.py                 # Transcript rows: opens a turn (both messages), source of truth for history
 │   │   ├── session_repository.py                 # Session rows: hashed token -> user, with expiry
 │   │   ├── settings_repository.py                # Persisted overrides for runtime-adjustable settings (app_settings)
@@ -404,8 +413,18 @@ llm-system/
 │           └── images/
 ├── documentation/                                # Reference material, including the client-approved samples
 │   └── other/                                    # Real 履歴書 (.xlsx) and 職務経歴書 (.docx) the layouts were built from
-├── deploy/                                       # Deployment artifacts (nothing built yet)
-│   └── TODO.md                                   # Tasks for containerizing backend + frontend; likely home for CI/CD config
+├── deploy/                                       # Deployment: image, compose files, nginx site, runbook
+│   ├── README.md                                 # Deploy runbook: topology, CI/CD pipeline, release/rollback, accepted risks
+│   ├── Dockerfile                                # Backend image (python -m app.main --api, non-root)
+│   ├── docker-compose.yml                        # Local: builds the image, DB via host.docker.internal
+│   ├── docker-compose.prod.yml                   # Production: pulls the image, DB is RDS via DATABASE_URL
+│   ├── nginx/
+│   │   └── llm-system.conf                       # Host nginx site: serves the SPA, proxies API paths to the container
+│   └── TODO.md                                   # Earlier deployment task list (superseded by README.md's backlog)
+├── .github/
+│   └── workflows/
+│       └── deploy.yml                            # CI/CD: build + push image, ship SPA + nginx conf, release over SSH
+├── .dockerignore                                 # Excludes ui/, .git/, docs from the image build context
 ├── LICENSE
 ├── THIRD-PARTY-NOTICES
 ├── README.md

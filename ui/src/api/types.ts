@@ -50,7 +50,9 @@ export type RenameConversationRequest = {
 
 export type SendMessageRequest = {
 	client_message_id: string;
+	// May be empty only when attachment_ids is non-empty.
 	message: string;
+	attachment_ids?: string[];
 };
 
 export type SendMessageResponse = {
@@ -78,6 +80,10 @@ export type MessageCreatedPayload = {
 	created_at: string;
 	// Present on the user row only — the id this client generated.
 	client_message_id?: string;
+	// Present on the user row only — whatever was attached to the send,
+	// already resolved to full attachment records. Absent on the
+	// assistant row, which cannot carry attachments at creation time.
+	attachments?: Attachment[];
 	// Present on the assistant row only.
 	reply_to_message_id?: number;
 };
@@ -104,22 +110,34 @@ export type ConversationUpdatedPayload = {
 	conversation_id: string;
 };
 
-/** Mirrors the generated_files.document_type CHECK constraint. */
+/** Mirrors the files.document_type CHECK constraint. */
 export type DocumentType = "rirekisho" | "shokumu_keirekisho";
 
 /**
- * A file produced by a tool call during a turn.
+ * A file attached to a message — either rendered by a tool call, or
+ * uploaded by the user and attached when the message was sent.
  *
  * The storage key is deliberately not exposed — a file is addressed by id
  * through GET /files/{id}, which is where the ownership check lives.
+ *
+ * document_type is null for an upload: only a generated document has one,
+ * mirroring the files.document_type CHECK constraint.
  */
 export type Attachment = {
 	id: string;
-	document_type: DocumentType;
+	document_type: DocumentType | null;
 	filename: string;
 	content_type: string;
 	size_bytes: number;
 	created_at: string;
+};
+
+/** The response body of POST /conversations/{id}/uploads. */
+export type UploadedAttachment = {
+	id: string;
+	filename: string;
+	content_type: string;
+	size_bytes: number;
 };
 
 export const EVENT_MESSAGE_CREATED = "message.created";

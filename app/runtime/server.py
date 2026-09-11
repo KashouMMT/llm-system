@@ -7,10 +7,10 @@ from urllib.parse import quote
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.authentication.authorization import is_admin
 from app.authentication.csrf import (
@@ -27,14 +27,23 @@ from app.config.settings import (
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
     TITLE_MAX_CHARS,
+    UPLOAD_MAX_BYTES,
 )
 from app.llm.system_prompt import load_first_message
 from app.plugins.documents.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
+from app.repositories.file_repository import serialize_attachment
 from app.repositories.message_repository import TurnLookup
 from app.runtime.application import Application
 from app.runtime.event_bus import EVENT_CONVERSATION_UPDATED, Event
 from app.services.chat_service import ConversationHeldError
+from app.utils.detect import (
+    EXTENSION_BY_CONTENT_TYPE,
+    IMAGE_JPEG,
+    IMAGE_PNG,
+    is_valid_image,
+    sniff_content_type,
+)
 from app.utils.logger import logger
 
 SSE_HEADERS = {
@@ -49,7 +58,20 @@ SSE_HEADERS = {
 class SendMessageRequest(BaseModel):
     # Client-generated so a retried send is recognisable as the same send.
     client_message_id: UUID
-    message: str = Field(min_length=1, max_length=MAX_USER_INPUT_CHARS)
+    # min_length=0: a message-less send is valid when it carries
+    # attachments, so emptiness is checked below, against both fields
+    # together, rather than on this field alone.
+    message: str = Field(min_length=0, max_length=MAX_USER_INPUT_CHARS)
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def _require_message_or_attachment(self) -> "SendMessageRequest":
+        if not self.message.strip() and not self.attachment_ids:
+            raise ValueError(
+                "message must not be empty when attachment_ids is empty."
+            )
+
+        return self
 
 
 # A deliberately loose check: a non-empty local part, an "@", and a
@@ -354,14 +376,7 @@ def create_api(application: Application) -> FastAPI:
 
         for file in files:
             attachments.setdefault(file.message_id, []).append(
-                {
-                    "id": str(file.id),
-                    "document_type": file.document_type,
-                    "filename": file.filename,
-                    "content_type": file.content_type,
-                    "size_bytes": file.size_bytes,
-                    "created_at": file.created_at,
-                }
+                serialize_attachment(file)
             )
 
         return [
@@ -419,6 +434,7 @@ def create_api(application: Application) -> FastAPI:
                 user=user,
                 user_input=request.message,
                 client_message_id=request.client_message_id,
+                attachment_ids=request.attachment_ids,
             )
 
         except psycopg.errors.UniqueViolation:
@@ -465,6 +481,93 @@ def create_api(application: Application) -> FastAPI:
         return {
             "user_message_id": turn.user_message_id,
             "assistant_message_id": turn.assistant_message_id,
+        }
+
+    # ---- uploads -------------------------------------------------------
+
+    @app.post(
+        "/conversations/{conversation_id}/uploads",
+        status_code=201,
+    )
+    async def upload_file(
+        request: Request,
+        conversation: Annotated[Conversation, Depends(require_conversation)],
+        user: Annotated[User, Depends(current_user)],
+        filename: str = Query(..., min_length=1, max_length=255),
+    ):
+        """
+        Store one attachment, unassociated with any message yet.
+
+        Content-Type is deliberately never consulted: the caller's header
+        is a claim, not a proof, and the CSRF gate already refuses
+        text/plain and the form encodings — a client sends something
+        content-neutral (application/octet-stream) and the type actually
+        used is whatever sniff_content_type finds in the bytes.
+
+        filename arrives as a query parameter rather than a header because
+        it may be Japanese, and HTTP header values are latin-1 — a query
+        parameter carries UTF-8 through percent-encoding without that
+        restriction, and FastAPI decodes it back before this function ever
+        sees it.
+        """
+        body = bytearray()
+
+        async for chunk in request.stream():
+            body.extend(chunk)
+
+            if len(body) > UPLOAD_MAX_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload exceeds the {UPLOAD_MAX_BYTES}-byte limit.",
+                )
+
+        data = bytes(body)
+
+        if not data:
+            raise HTTPException(status_code=422, detail="Upload body is empty.")
+
+        content_type = sniff_content_type(data)
+
+        if content_type is None:
+            raise HTTPException(
+                status_code=415,
+                detail="Unsupported file type.",
+            )
+
+        if content_type in (IMAGE_PNG, IMAGE_JPEG) and not is_valid_image(data):
+            raise HTTPException(
+                status_code=415,
+                detail="Image file is corrupt or unreadable.",
+            )
+
+        storage_key = await application.file_storage.write(
+            data,
+            extension=EXTENSION_BY_CONTENT_TYPE[content_type],
+        )
+
+        record = await application.file_repository.create(
+            conversation_id=conversation.id,
+            user_id=user.id,
+            origin="uploaded",
+            filename=filename,
+            storage_key=storage_key,
+            content_type=content_type,
+            size_bytes=len(data),
+        )
+
+        logger.info(
+            "File uploaded | file=%s conversation=%s type=%s bytes=%s",
+            record.id,
+            conversation.id,
+            content_type,
+            len(data),
+        )
+
+        return {
+            "id": str(record.id),
+            "filename": record.filename,
+            "content_type": record.content_type,
+            "size_bytes": record.size_bytes,
         }
 
     # ---- files -------------------------------------------------------
