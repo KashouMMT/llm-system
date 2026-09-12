@@ -103,6 +103,15 @@ jobs:
                     ui/dist/. \
                     ${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}:/var/www/llm-system/
 
+            - name: Ship the holding page
+              run: |
+                  ssh -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
+                    ${{ vars.EC2_USER }}@${{ vars.EC2_HOST }} \
+                    "mkdir -p /var/www/career-lamp-holding"
+                  scp -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
+                    deploy/holding/index.html \
+                    ${{ vars.EC2_USER }}@${{ vars.EC2_HOST }}:/var/www/career-lamp-holding/index.html
+
             - name: Ship the nginx config
               run: |
                   scp -i ~/.ssh/id_deploy -o BatchMode=yes -o ConnectTimeout=15 \
