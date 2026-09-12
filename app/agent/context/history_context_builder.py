@@ -1,13 +1,25 @@
 from collections.abc import Sequence
 from uuid import UUID
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from app.config.runtime_settings import RuntimeSettingsHolder
 from app.repositories.file_repository import FileRecord, FileRepository
 from app.repositories.message_repository import MessageRepository
-from app.utils.attachment_manifest import format_attachment_manifest_line
+from app.utils.attachment_manifest import (
+    format_attachment_manifest_line,
+    format_earlier_attachments,
+)
 from app.utils.logger import logger
+
+# How many attachments from outside the history window are listed. Each is
+# one manifest line, roughly 40 tokens, paid on every turn; past this the
+# block says how many it left out instead of growing without bound.
+MAX_EARLIER_ATTACHMENTS = 30
+
+# messages.id is BIGINT. Used as the boundary when there is neither a
+# visible history row nor a current message to measure "earlier" against.
+_MAX_MESSAGE_ID = 2**63 - 1
 
 
 class HistoryContextBuilder:
@@ -70,6 +82,16 @@ class HistoryContextBuilder:
 
         history_messages: list[BaseMessage] = []
 
+        earlier_attachments = await self._earlier_attachments(
+            conversation_id,
+            before_message_id=(
+                rows[0].id if rows else before_message_id or _MAX_MESSAGE_ID
+            ),
+        )
+
+        if earlier_attachments is not None:
+            history_messages.append(earlier_attachments)
+
         for message in rows:
             if message.role == "user":
                 history_messages.append(
@@ -91,6 +113,33 @@ class HistoryContextBuilder:
         )
 
         return history_messages
+
+    async def _earlier_attachments(
+        self,
+        conversation_id: UUID,
+        *,
+        before_message_id: int,
+    ) -> SystemMessage | None:
+        """
+        List uploads whose messages are older than the first one shown.
+
+        The boundary is the first visible row rather than the summary
+        watermark, so it also covers messages trimmed off the front of an
+        oversized backlog — anything the model cannot see verbatim, for
+        whatever reason, is listed here instead.
+        """
+        files, total = await self.file_repository.get_uploads_before(
+            conversation_id,
+            before_message_id,
+            limit=MAX_EARLIER_ATTACHMENTS,
+        )
+
+        if not files:
+            return None
+
+        return SystemMessage(
+            content=format_earlier_attachments(files, omitted=total - len(files))
+        )
 
     async def _files_by_message_id(
         self,
@@ -115,7 +164,7 @@ class HistoryContextBuilder:
         Append a manifest line per attachment as plain text.
 
         Only ever text here — an image's bytes were sent once, on the turn
-        it arrived (ChatService._build_human_message); every later replay
+        it arrived (ChatService._build_turn_input); every later replay
         of this message says so instead of re-sending them.
         """
         if not files:

@@ -40,7 +40,7 @@ from app.services.summarization_service import SummarizationService
 from app.storage.base import FileStorage
 from app.utils import conversation_log
 from app.utils.attachment_manifest import format_attachment_manifest_line
-from app.utils.detect import IMAGE_JPEG, IMAGE_PNG
+from app.utils.detect import IMAGE_CONTENT_TYPES
 from app.utils.images import downscale_image
 from app.utils.logger import logger
 
@@ -50,8 +50,6 @@ TERMINAL_EVENTS = {
     "cancelled": EVENT_MESSAGE_CANCELLED,
     "failed": EVENT_MESSAGE_FAILED,
 }
-
-_IMAGE_CONTENT_TYPES = {IMAGE_PNG, IMAGE_JPEG}
 
 # Long side, in pixels, an image is downscaled to before being sent to a
 # vision model. 2048 is generous for anything a phone camera or a screen
@@ -291,16 +289,25 @@ class ChatService:
                 conversation_id,
             )
 
-    async def _build_human_message(
+    async def _build_turn_input(
         self,
         conversation_id: UUID,
         user_message_id: int,
         user_input: str,
-    ) -> HumanMessage:
+    ) -> tuple[HumanMessage, list[dict[str, Any]]]:
         """
-        The current turn's HumanMessage — plain text if nothing is
-        attached, or content blocks (text + a manifest line per
-        attachment + image blocks) if there is.
+        The current turn's HumanMessage, and the image blocks that go with
+        it — returned separately, never combined here.
+
+        The HumanMessage is always plain text: the user's input plus one
+        manifest line per attachment. It becomes LangGraph state, and state
+        is written to the Postgres checkpointer on every graph step and
+        never deleted — a base64 image inside it was stored once per step,
+        for as many turns as compaction kept the message, forever. The
+        image blocks instead travel in the run config, which the
+        checkpointer does not persist (it copies only scalar config values
+        into checkpoint metadata, never a list), and the agent node joins
+        them to the message only when it builds the model's input.
 
         This is the only turn that ever carries image bytes.
         HistoryContextBuilder re-describes the same attachments as
@@ -311,7 +318,7 @@ class ChatService:
         files = await self.file_repository.get_by_message_ids([user_message_id])
 
         if not files:
-            return HumanMessage(content=user_input)
+            return HumanMessage(content=user_input), []
 
         vision_enabled = LLM_SUPPORTS_VISION
         manifest_lines: list[str] = []
@@ -320,7 +327,7 @@ class ChatService:
         for file in files:
             image_prepared = False
 
-            if file.content_type in _IMAGE_CONTENT_TYPES and vision_enabled:
+            if file.content_type in IMAGE_CONTENT_TYPES and vision_enabled:
                 block = await self._build_image_block(conversation_id, file)
 
                 if block is not None:
@@ -338,12 +345,7 @@ class ChatService:
 
         text_lines = ([user_input] if user_input else []) + manifest_lines
 
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": "\n".join(text_lines)},
-            *image_blocks,
-        ]
-
-        return HumanMessage(content=content)
+        return HumanMessage(content="\n".join(text_lines)), image_blocks
 
     async def _build_image_block(
         self,
@@ -412,7 +414,7 @@ class ChatService:
         status = "failed"
 
         try:
-            human_message = await self._build_human_message(
+            human_message, image_blocks = await self._build_turn_input(
                 conversation_id=conversation_id,
                 user_message_id=user_message_id,
                 user_input=user_input,
@@ -423,6 +425,7 @@ class ChatService:
                 thread_id=str(conversation_id),
                 current_user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
+                current_turn_image_blocks=image_blocks,
             ):
                 if metadata.get("langgraph_node") != "agent":
                     continue

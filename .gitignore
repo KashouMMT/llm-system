@@ -41,6 +41,7 @@ note_2.txt
 .claude/
 CLAUDE.local.md
 images/*
+test_files/*
 
 # Generated documents
 app/generated_files/

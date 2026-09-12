@@ -70,6 +70,9 @@ export const en = {
 		attachmentRemove: "Remove attachment",
 		attachmentTooMany: "Up to 10 attachments per message.",
 		attachmentTooLarge: "Would exceed the 100 MB total attachment limit.",
+		attachmentFileTooLarge: "This file is over the 20 MB limit.",
+		attachmentUnsupported:
+			"Unsupported file. Send an image (PNG, JPEG, WebP), a PDF, or a text file (UTF-8 or Shift_JIS).",
 	},
 	error: {
 		notFoundTitle: "Page not found",

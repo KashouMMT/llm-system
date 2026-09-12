@@ -71,6 +71,9 @@ export const ja: Messages = {
 		attachmentRemove: "添付を削除",
 		attachmentTooMany: "添付は1メッセージあたり最大10件までです。",
 		attachmentTooLarge: "添付ファイルの合計サイズが100MBを超えます。",
+		attachmentFileTooLarge: "ファイルサイズが上限の20MBを超えています。",
+		attachmentUnsupported:
+			"対応していないファイルです。画像（PNG・JPEG・WebP）、PDF、またはテキストファイル（UTF-8・Shift_JIS）を送信してください。",
 	},
 	error: {
 		notFoundTitle: "ページが見つかりません",

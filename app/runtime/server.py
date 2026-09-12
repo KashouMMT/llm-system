@@ -39,11 +39,11 @@ from app.runtime.event_bus import EVENT_CONVERSATION_UPDATED, Event
 from app.services.chat_service import ConversationHeldError
 from app.utils.detect import (
     EXTENSION_BY_CONTENT_TYPE,
-    IMAGE_JPEG,
-    IMAGE_PNG,
+    IMAGE_CONTENT_TYPES,
     is_valid_image,
     sniff_content_type,
 )
+from app.utils.filenames import clean_filename
 from app.utils.logger import logger
 
 SSE_HEADERS = {
@@ -534,7 +534,7 @@ def create_api(application: Application) -> FastAPI:
                 detail="Unsupported file type.",
             )
 
-        if content_type in (IMAGE_PNG, IMAGE_JPEG) and not is_valid_image(data):
+        if content_type in IMAGE_CONTENT_TYPES and not is_valid_image(data):
             raise HTTPException(
                 status_code=415,
                 detail="Image file is corrupt or unreadable.",
@@ -549,7 +549,9 @@ def create_api(application: Application) -> FastAPI:
             conversation_id=conversation.id,
             user_id=user.id,
             origin="uploaded",
-            filename=filename,
+            # Stored clean, so the manifest line, the download header and
+            # the UI all show the same safe name. See app/utils/filenames.
+            filename=clean_filename(filename),
             storage_key=storage_key,
             content_type=content_type,
             size_bytes=len(data),

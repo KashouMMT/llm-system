@@ -1,10 +1,16 @@
 import json
 import time
 from collections.abc import Callable, Sequence
+from typing import Any
 from uuid import UUID
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessageChunk, SystemMessage
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 
@@ -16,6 +22,45 @@ from app.utils import conversation_log
 from app.utils.logger import logger
 
 AgentNode = Callable[[AgentState, RunnableConfig], dict]
+
+
+def _with_current_turn_images(
+    messages: Sequence[BaseMessage],
+    image_blocks: Sequence[dict[str, Any]],
+) -> list[BaseMessage]:
+    """
+    The current turn's messages, with this turn's images joined onto the
+    user's message.
+
+    Built fresh for each model call and never returned into state: the
+    HumanMessage in state stays plain text, so the checkpointer stores its
+    text and not the images (see ChatService._build_turn_input). Every
+    model call in the turn's tool loop gets the images again, which is
+    what the model would have seen had they been in state.
+    """
+    if not image_blocks or not messages:
+        return list(messages)
+
+    first, *rest = messages
+
+    if not isinstance(first, HumanMessage) or not isinstance(first.content, str):
+        # Not a shape ChatService produces. Sending the text without the
+        # images is recoverable; failing the turn is not — but it is logged,
+        # because images the model never saw is exactly what must not pass
+        # unnoticed.
+        logger.error(
+            "Could not attach %s image(s): current turn does not start with "
+            "a text HumanMessage",
+            len(image_blocks),
+        )
+        return list(messages)
+
+    with_images = HumanMessage(
+        content=[{"type": "text", "text": first.content}, *image_blocks],
+        id=first.id,
+    )
+
+    return [with_images, *rest]
 
 
 def create_agent_node(
@@ -53,8 +98,9 @@ def create_agent_node(
                 "The prepare_context node must run before the agent node."
             )
 
-        current_turn_messages = get_current_turn_messages(
-            state["messages"],
+        current_turn_messages = _with_current_turn_images(
+            get_current_turn_messages(state["messages"]),
+            config["configurable"].get("current_turn_image_blocks") or [],
         )
 
         logger.debug(

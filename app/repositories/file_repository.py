@@ -211,6 +211,59 @@ class FileRepository:
 
             return await cur.fetchall()
 
+    async def get_uploads_before(
+        self,
+        conversation_id: UUID,
+        before_message_id: int,
+        *,
+        limit: int,
+    ) -> tuple[list[FileRecord], int]:
+        """
+        Uploads attached to this conversation's messages older than
+        before_message_id: the newest `limit` of them, oldest first, plus
+        how many exist in total.
+
+        The total is returned rather than silently truncated, so the caller
+        can say how many it left out. Two statements on one connection —
+        a window-function count would put an extra column on every row,
+        which class_row(FileRecord) cannot absorb.
+        """
+        async with self._pool.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM files
+                    WHERE conversation_id = %s
+                      AND origin = 'uploaded'
+                      AND message_id < %s
+                    """,
+                    (conversation_id, before_message_id),
+                )
+
+                (total,) = await cur.fetchone()
+
+            if total == 0:
+                return [], 0
+
+            async with conn.cursor(row_factory=class_row(FileRecord)) as cur:
+                await cur.execute(
+                    f"""
+                    SELECT {_FILE_COLUMNS}
+                    FROM files
+                    WHERE conversation_id = %s
+                      AND origin = 'uploaded'
+                      AND message_id < %s
+                    ORDER BY message_id DESC, created_at DESC
+                    LIMIT %s
+                    """,
+                    (conversation_id, before_message_id, limit),
+                )
+
+                newest_first = await cur.fetchall()
+
+        return list(reversed(newest_first)), total
+
     async def sweep_orphaned_uploads(
         self,
         *,

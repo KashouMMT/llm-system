@@ -8,7 +8,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message, MessageStatus } from "../api/types";
-import type { Attachments } from "../hooks/useAttachments";
+import { ACCEPTED_FILE_TYPES, type Attachments } from "../hooks/useAttachments";
 import type { ChatError, useChat } from "../hooks/useChat";
 import type {
 	ConversationStream,
@@ -392,6 +392,7 @@ const Chat = ({
 						type="file"
 						multiple
 						hidden
+						accept={ACCEPTED_FILE_TYPES}
 						onChange={handleFilesPicked}
 					/>
 

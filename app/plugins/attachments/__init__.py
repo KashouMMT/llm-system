@@ -14,5 +14,5 @@ def _build(context: ToolContext) -> list[BaseTool]:
 PLUGIN = ToolPlugin(
     name="attachments",
     factory=_build,
-    description="read_attachment — extracted text of an uploaded pdf/docx/text file, paginated",
+    description="read_attachment — extracted text of an uploaded pdf or text file, paginated",
 )

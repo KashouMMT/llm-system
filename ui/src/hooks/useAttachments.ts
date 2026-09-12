@@ -1,3 +1,4 @@
+import type { TFunction } from "i18next";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -11,6 +12,26 @@ export const MAX_ATTACHMENT_TOTAL_BYTES = 100 * 1024 * 1024;
 // app/runtime/server.py. Enforced here too, or a batch under the size cap
 // but over 10 files would upload fine and only fail once Send is pressed.
 export const MAX_ATTACHMENT_COUNT = 10;
+
+// Mirrors UPLOAD_MAX_BYTES's default in app/config/settings.py. Checked
+// here so an oversized file is refused at once instead of after uploading
+// 20 MB only to be told 413; the server's limit is still the real one.
+export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+// What the file picker offers. A convenience only — the server decides
+// the type from the bytes and ignores extensions entirely — so this lists
+// the common extensions for each supported type, and the picker's "All
+// files" option can still send anything else to be judged by the server.
+export const ACCEPTED_FILE_TYPES = [
+	"image/png",
+	"image/jpeg",
+	"image/webp",
+	"application/pdf",
+	".txt",
+	".md",
+	".csv",
+	".json",
+].join(",");
 
 export type AttachmentSlot = {
 	// Client-local, so a slot can be identified and removed before the
@@ -30,12 +51,24 @@ function newLocalId(): string {
 		: `${Date.now()}-${Math.random()}`;
 }
 
-function describeUploadError(caught: unknown): string {
-	if (caught instanceof ApiError && typeof caught.detail === "string") {
-		return caught.detail;
+/**
+ * Maps a failed upload to interface text by status rather than showing
+ * the server's `detail`, which is English — the two statuses a user can
+ * cause and fix themselves get their own message; everything else is the
+ * generic one.
+ */
+function describeUploadError(caught: unknown, t: TFunction): string {
+	if (caught instanceof ApiError) {
+		if (caught.status === 413) {
+			return t("chat.attachmentFileTooLarge");
+		}
+
+		if (caught.status === 415) {
+			return t("chat.attachmentUnsupported");
+		}
 	}
 
-	return "Upload failed.";
+	return t("chat.attachmentError");
 }
 
 /**
@@ -94,6 +127,17 @@ export const useAttachments = (conversationId: string | undefined) => {
 					continue;
 				}
 
+				if (file.size > MAX_UPLOAD_BYTES) {
+					added.push({
+						localId,
+						file,
+						status: "error",
+						id: null,
+						errorMessage: t("chat.attachmentFileTooLarge"),
+					});
+					continue;
+				}
+
 				if (totalBytes + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
 					added.push({
 						localId,
@@ -128,7 +172,7 @@ export const useAttachments = (conversationId: string | undefined) => {
 					.catch((caught) => {
 						updateSlot(localId, {
 							status: "error",
-							errorMessage: describeUploadError(caught),
+							errorMessage: describeUploadError(caught, t),
 						});
 					});
 			}

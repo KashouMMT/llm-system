@@ -1,5 +1,6 @@
 import time
 from collections.abc import AsyncIterator, Sequence
+from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
@@ -164,6 +165,7 @@ class AgentGraph:
         thread_id: str,
         current_user_message_id: int | None = None,
         assistant_message_id: int | None = None,
+        current_turn_image_blocks: Sequence[dict[str, Any]] = (),
     ) -> AsyncIterator[tuple[BaseMessage, dict]]:
         start = time.perf_counter()
 
@@ -184,6 +186,14 @@ class AgentGraph:
                 # produces a file attaches it here, so the identity comes
                 # from the server rather than from the model.
                 "assistant_message_id": assistant_message_id,
+                # Base64 image content blocks for this turn's attachments.
+                # Here rather than in the HumanMessage because messages are
+                # checkpointed on every step and never deleted; config is
+                # not, as long as this stays a list — the checkpointer
+                # copies str/int/float/bool config values into checkpoint
+                # metadata, and a base64 string would be stored after all.
+                # The agent node joins these to the message it sends.
+                "current_turn_image_blocks": list(current_turn_image_blocks),
             }
         }
 

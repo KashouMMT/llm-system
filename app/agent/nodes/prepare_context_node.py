@@ -14,27 +14,6 @@ from app.utils.logger import logger
 PrepareContextNode = Callable[[AgentState, RunnableConfig], Awaitable[dict]]
 
 
-def _extract_text(content: str | list) -> str:
-    """
-    The plain-text portion of a HumanMessage's content.
-
-    Plain text when there are no attachments; content blocks — a list with
-    one text block plus a manifest line per attachment, and image blocks
-    when vision is on — when there are (see
-    ChatService._build_human_message). Only the text matters here: this
-    feeds a debug log and ConversationContextBuilder's not-yet-built RAG
-    extension point, neither of which needs the image blocks.
-    """
-    if isinstance(content, str):
-        return content
-
-    for block in content:
-        if isinstance(block, dict) and block.get("type") == "text":
-            return block.get("text", "")
-
-    return ""
-
-
 def create_prepare_context_node(
     conversation_context_builder: ConversationContextBuilder,
 ) -> PrepareContextNode:
@@ -50,7 +29,7 @@ def create_prepare_context_node(
 
         thread_id = config["configurable"]["thread_id"]
         conversation_id = UUID(thread_id)
-        
+
         current_user_message_id = config["configurable"].get(
             "current_user_message_id",
         )
@@ -66,9 +45,20 @@ def create_prepare_context_node(
                 "The current turn must begin with a HumanMessage."
             )
 
+        # Always text, attachments included: an attachment is a manifest
+        # line in the text, and image bytes never enter state — they travel
+        # in the run config and are joined on by the agent node (see
+        # ChatService._build_turn_input). A list here means that invariant
+        # broke, and images would be written to the checkpointer again.
+        if not isinstance(current_user_message.content, str):
+            raise TypeError(
+                "The current user message must be plain text; image blocks "
+                "belong in config['configurable']['current_turn_image_blocks']."
+            )
+
         prepared_context = await conversation_context_builder.build(
             conversation_id=conversation_id,
-            user_query=_extract_text(current_user_message.content),
+            user_query=current_user_message.content,
             before_message_id=current_user_message_id,
         )
 
