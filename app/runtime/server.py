@@ -21,12 +21,14 @@ from app.authentication.csrf import (
 from app.authentication.dependencies import make_current_user, make_require_admin
 from app.authentication.models import User
 from app.config.settings import (
+    ALLOW_REGISTRATION,
     COOKIE_SAMESITE,
     COOKIE_SECURE,
     CSRF_TRUSTED_ORIGINS,
     MAX_USER_INPUT_CHARS,
     SESSION_COOKIE_NAME,
     TITLE_MAX_CHARS,
+    UPLOAD_DAILY_BYTES_PER_USER,
     UPLOAD_MAX_BYTES,
 )
 from app.llm.system_prompt import load_first_message
@@ -163,7 +165,7 @@ def create_api(application: Application) -> FastAPI:
         try:
             async with application.pool.connection() as conn:
                 await conn.execute("SELECT 1")
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("Health check failed")
 
             return JSONResponse(
@@ -213,6 +215,12 @@ def create_api(application: Application) -> FastAPI:
 
     @app.post("/auth/register", status_code=201)
     async def register(body: RegisterRequest):
+        if not ALLOW_REGISTRATION:
+            raise HTTPException(
+                status_code=403,
+                detail="Registration is closed on this deployment.",
+            )
+
         user = await application.auth_service.register(
             body.email,
             body.password,
@@ -469,14 +477,18 @@ def create_api(application: Application) -> FastAPI:
 
             raise
 
-        application.spawn(
-            application.chat_service.generate(
-                conversation_id=conversation_id,
-                user_message_id=turn.user_message_id,
-                assistant_message_id=turn.assistant_message_id,
-                user_input=request.message,
+        # A slash command already ran and finalized itself inside
+        # begin_turn — it never reaches the LLM, so generate() must not
+        # be spawned for it.
+        if not turn.is_command:
+            application.spawn(
+                application.chat_service.generate(
+                    conversation_id=conversation_id,
+                    user_message_id=turn.user_message_id,
+                    assistant_message_id=turn.assistant_message_id,
+                    user_input=request.message,
+                )
             )
-        )
 
         return {
             "user_message_id": turn.user_message_id,
@@ -538,6 +550,20 @@ def create_api(application: Application) -> FastAPI:
             raise HTTPException(
                 status_code=415,
                 detail="Image file is corrupt or unreadable.",
+            )
+
+        uploaded_today = await application.file_repository.sum_uploaded_bytes_since(
+            user.id,
+            hours=24,
+        )
+
+        if uploaded_today + len(data) > UPLOAD_DAILY_BYTES_PER_USER:
+            raise HTTPException(
+                status_code=429,
+                detail=(
+                    "Daily upload limit of "
+                    f"{UPLOAD_DAILY_BYTES_PER_USER} bytes exceeded."
+                ),
             )
 
         storage_key = await application.file_storage.write(

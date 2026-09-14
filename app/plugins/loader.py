@@ -20,7 +20,7 @@ from pathlib import Path
 
 from langchain_core.tools import BaseTool
 
-from app.plugins.contracts import ToolContext, ToolPlugin
+from app.plugins.contracts import PluginCommand, ToolContext, ToolPlugin
 from app.utils.logger import logger
 
 PLUGINS_DIR = Path(__file__).resolve().parent
@@ -203,3 +203,45 @@ def load_tools(
         )
 
     return tools
+
+
+def load_commands(*, enabled: Collection[str] = ()) -> dict[str, PluginCommand]:
+    """
+    Every slash command namespace, from every plugin that loaded.
+
+    Collected the same way load_tools collects tools: one pass over the
+    same plugin discovery, respecting the same ENABLED_TOOL_PLUGINS
+    allowlist automatically — a plugin left out of that list contributes
+    neither tools nor commands. No `strict` parameter: a plugin that fails
+    to import already failed inside load_tools's own _discover call, and
+    TOOL_PLUGINS_STRICT already turned that into a startup failure there
+    when set; here it just yields no commands from that plugin, the same
+    outcome load_tools reaches when not strict.
+
+    Two plugins naming the same namespace is never survivable, exactly
+    like a duplicate tool name — an ambiguous `/foo` is not something a
+    user can route around.
+    """
+    plugins, _failed = _discover(enabled)
+
+    commands: dict[str, PluginCommand] = {}
+    provider_of: dict[str, str] = {}
+
+    for plugin in plugins:
+        for command in plugin.commands:
+            if command.namespace in provider_of:
+                raise ValueError(
+                    f"Duplicate command namespace '/{command.namespace}': "
+                    f"provided by both plugin '{provider_of[command.namespace]}' "
+                    f"and plugin '{plugin.name}'. Namespaces must be unique."
+                )
+
+            provider_of[command.namespace] = plugin.name
+            commands[command.namespace] = command
+
+    logger.info(
+        "Slash commands ready | namespaces=%s",
+        sorted(commands),
+    )
+
+    return commands

@@ -70,6 +70,7 @@ deltas:
 | `COOKIE_SECURE` | `false` — there is no TLS on a bare IP. |
 | `LOG_LEVEL` | `INFO` |
 | `CONVERSATION_LOG` | `false` |
+| `ALLOW_REGISTRATION` | `false` once the accounts this deployment needs exist — `POST /auth/register` is public with no invite flow, so left open on a reachable IP/domain it lets anyone create an account and start filling disk via uploads |
 
 No `DB_*` split parts — `DATABASE_URL` wins whenever it is set.
 

@@ -66,6 +66,10 @@ function describeUploadError(caught: unknown, t: TFunction): string {
 		if (caught.status === 415) {
 			return t("chat.attachmentUnsupported");
 		}
+
+		if (caught.status === 429) {
+			return t("chat.attachmentQuotaExceeded");
+		}
 	}
 
 	return t("chat.attachmentError");

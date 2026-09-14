@@ -74,6 +74,8 @@ export const ja: Messages = {
 		attachmentFileTooLarge: "ファイルサイズが上限の20MBを超えています。",
 		attachmentUnsupported:
 			"対応していないファイルです。画像（PNG・JPEG・WebP）、PDF、またはテキストファイル（UTF-8・Shift_JIS）を送信してください。",
+		attachmentQuotaExceeded:
+			"本日のアップロード上限に達しました。明日もう一度お試しください。",
 	},
 	error: {
 		notFoundTitle: "ページが見つかりません",

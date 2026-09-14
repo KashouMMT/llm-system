@@ -1,9 +1,10 @@
 import asyncio
 import base64
 import contextlib
+import re
 import time
 import uuid
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from app.config.settings import (
     MAX_ATTACHMENT_BATCH_BYTES,
     MAX_USER_INPUT_CHARS,
 )
+from app.plugins.contracts import CommandContext, PluginCommand
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import (
     FileRecord,
@@ -43,6 +45,13 @@ from app.utils.attachment_manifest import format_attachment_manifest_line
 from app.utils.detect import IMAGE_CONTENT_TYPES
 from app.utils.images import downscale_image
 from app.utils.logger import logger
+
+# A command is deterministic and never reaches the LLM: the first
+# whitespace-separated token of the (already-stripped) user input must
+# match this exactly, or the message is an ordinary turn. Deliberately
+# narrow — a message that merely contains a slash elsewhere must never be
+# hijacked.
+_COMMAND_TOKEN_PATTERN = re.compile(r"^/[a-z][a-z0-9-]*$")
 
 # Terminal status -> the event that announces it.
 TERMINAL_EVENTS = {
@@ -72,15 +81,21 @@ class ConversationHeldError(Exception):
 
 
 class TurnIds:
-    __slots__ = ("user_message_id", "assistant_message_id")  # noqa: RUF023
+    __slots__ = ("user_message_id", "assistant_message_id", "is_command")  # noqa: RUF023
 
     def __init__(
         self,
         user_message_id: int,
         assistant_message_id: int,
+        is_command: bool = False,
     ) -> None:
         self.user_message_id = user_message_id
         self.assistant_message_id = assistant_message_id
+        # True when begin_turn already routed this turn to a slash-command
+        # handler and finalized it itself. The caller (server.py, cli.py)
+        # must not also spawn ChatService.generate for it — a command
+        # never reaches the LLM.
+        self.is_command = is_command
 
 
 class ChatService:
@@ -107,6 +122,7 @@ class ChatService:
         event_bus: EventBus,
         conversation_lock: ConversationLock,
         spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task],
+        commands: Mapping[str, PluginCommand] | None = None,
     ) -> None:
         self.agent_graph = agent_graph
         self.conversation_repository = conversation_repository
@@ -117,6 +133,10 @@ class ChatService:
         self.title_service = title_service
         self.event_bus = event_bus
         self.conversation_lock = conversation_lock
+        # Namespace -> PluginCommand, collected at startup by
+        # app.plugins.load_commands. Empty is a legitimate deployment
+        # (no plugin registers a command), not a misconfiguration.
+        self.commands = commands or {}
 
         # Detached work (finalization, summarization) is registered with the
         # application-wide spawner, so shutdown has a single registry to drain.
@@ -267,9 +287,100 @@ class ChatService:
         # cheap and the first turn is not a special case here.
         self._spawn(self._run_title_generation(conversation_id, user_input))
 
+        first_token = user_input.split(maxsplit=1)[0] if user_input else ""
+
+        if _COMMAND_TOKEN_PATTERN.match(first_token):
+            namespace = first_token[1:]
+            rest = user_input[len(first_token) :].strip()
+            rest_parts = rest.split(maxsplit=1) if rest else []
+            subcommand = rest_parts[0] if rest_parts else ""
+            argument = rest_parts[1] if len(rest_parts) > 1 else ""
+
+            # A command never reaches the LLM: begin_turn runs and
+            # finalizes it itself, in the background so this call still
+            # returns immediately like a normal turn. The caller must not
+            # also call generate() for it — see TurnIds.is_command.
+            self._spawn(
+                self._run_command(
+                    conversation_id=conversation_id,
+                    user=user,
+                    user_message_id=user_message_id,
+                    assistant_message_id=assistant_message_id,
+                    namespace=namespace,
+                    subcommand=subcommand,
+                    argument=argument,
+                )
+            )
+
+            return TurnIds(
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                is_command=True,
+            )
+
         return TurnIds(
             user_message_id=user_message_id,
             assistant_message_id=assistant_message_id,
+        )
+
+    async def _run_command(
+        self,
+        conversation_id: UUID,
+        user: User,
+        user_message_id: int,
+        assistant_message_id: int,
+        namespace: str,
+        subcommand: str,
+        argument: str,
+    ) -> None:
+        """
+        Run one slash command and finalize the turn through the same path
+        an LLM generation uses — _finalize owns the lock release, the
+        terminal event, conversation-log writing and summarization
+        scheduling either way, so a command turn and an LLM turn look
+        identical from every consumer downstream of this call.
+        """
+        command = self.commands.get(namespace)
+
+        if command is None:
+            content = self._unknown_command_message(namespace)
+            status = "complete"
+        else:
+            context = CommandContext(
+                conversation_id=conversation_id,
+                user=user,
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                subcommand=subcommand,
+                argument=argument,
+            )
+
+            try:
+                content = await command.handler(context)
+                status = "complete"
+
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "Command failed | namespace=%s conversation=%s",
+                    namespace,
+                    conversation_id,
+                )
+                content = f"The `/{namespace}` command failed: {exc}"
+                status = "failed"
+
+        await self._finalize(
+            conversation_id=conversation_id,
+            assistant_message_id=assistant_message_id,
+            content=content,
+            status=status,
+        )
+
+    def _unknown_command_message(self, namespace: str) -> str:
+        known = ", ".join(f"`/{name}`" for name in sorted(self.commands))
+
+        return (
+            f"Unknown command: `/{namespace}`.\n\n"
+            + (f"Available commands: {known}" if known else "No commands are registered.")
         )
 
     async def _run_title_generation(

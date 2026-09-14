@@ -4,12 +4,21 @@
 > chat session is cleared, reading this alone should be enough to resume with
 > the same understanding and direction. It depends on no conversation history.
 >
-> **Status:** image pipeline built and running. Catalog stage written, not yet
-> run. Video and detector work not started.
+> **Status (2026-09-14):** the image pipeline is built and runs end to end —
+> detection, consensus, catalog match, resolve, metadata, totals. A catalog was
+> built once from the 8 photos in `images/catalog/` and **is stale**: 41 rows,
+> produced before `--min-observations` defaulted to 1, so real items seen in a
+> single photo (office chair, monitor, cushion, computer tower) are missing. It
+> must be rebuilt with `--from-harvest` and reviewed by hand before anything is
+> built on top of it. Review UI, multi-image rooms, detector and video: not
+> started.
 >
-> **Relationship to this repository:** none structurally. This is a separate
-> product that happens to be prototyped in `playground/`. Long term it becomes
-> either its own system or a tool the existing agent can call.
+> **Relationship to this repository: decided, and it has changed.** This is no
+> longer a separate product prototyped alongside the app. It becomes a plugin
+> inside it — `app/plugins/recycling/` — reached through slash commands in the
+> same chat interface. There is **one deployment**, not two; the plugin is left
+> out of `ENABLED_TOOL_PLUGINS` on the deploy branch, so the production job-
+> application service never loads it. See §12.
 >
 > **Revision note:** the requirement changed after the first draft. Price is no
 > longer the primary output — see §1.
@@ -239,9 +248,10 @@ llm-system/
     ├── resolve.py                # grouping_key() + StableItem[] -> matched/excluded/unmatched
     ├── estimate.py               # CLI: the product. image -> items + metadata + totals
     ├── run.py                    # earliest ad-hoc runner; superseded by detect.py
-    ├── harvest.json              # generated: raw label frequencies (cache)
-    ├── clusters.json             # generated: clustering result (cache, hand-editable)
-    └── catalog.json              # generated: the catalog. REVIEW BY HAND.
+    ├── harvest.json              # generated: raw label frequencies (cache). Present.
+    ├── clusters.json             # generated: clustering result (cache, hand-editable).
+    │                             # NOT present — the last build predates this stage.
+    └── catalog.json              # generated: the catalog. REVIEW BY HAND. Present but STALE.
 ```
 
 **The one rule every file follows: nothing detected is ever dropped without the
@@ -337,21 +347,35 @@ cannot bootstrap its own vocabulary. The catalog produces that vocabulary
 | Counting | Weak | **Strong** |
 | Video at frame rate | No | Yes |
 
-**Its justification is latency and boxes, not accuracy.** 300 frames at ~15s per
-LLM call is over an hour serially; YOLO does it in seconds. Boxes are needed for
-tracking, evidence thumbnails and the live overlay. It is *worse* at naming.
+**Its justification was latency and boxes, not accuracy.** Both have since been
+re-examined, and neither survives — see §11a. A detector is no longer planned.
+The comparison above is kept because it is still true, and because the escape
+hatch below depends on understanding it.
 
 Integration is already seamed: `consensus.py` calls one function. Inject an
 alternative detector with the same output shape and nothing else changes.
 
-Note also that `consensus.py` is the video module in disguise — its job is
-merging repeated observations of one scene. Swap "runs" for "frames" and it
-works unmodified.
+**Licensing — settle this before any detector work starts.** Ultralytics ships
+YOLO under AGPL-3.0. AGPL is GPL plus a network clause: with ordinary GPL you
+owe source only when you distribute a binary, and a SaaS never distributes one,
+which is the loophole AGPL was written to close. Anyone *using the service over
+a network* can demand the complete corresponding source of the combined work,
+under the same licence. A closed-source SaaS therefore has three honest options:
+buy Ultralytics' commercial licence, open-source the product, or use a detector
+under a permissive licence (OWLv2 and similar Apache-2.0 open-vocabulary models
+are the usual substitute — verify the licence of both the code *and* the weights
+for whichever is chosen, since they are often licensed separately).
 
-**Licensing:** Ultralytics is AGPL-3.0. Fine for prototyping; a closed-source
-SaaS product needs a commercial licence. Raise with Katsu-san before starting
-detector work. Wrap it behind `Detector.detect(image) -> list[Box]` so it is
-imported in exactly one file.
+**Evaluating it locally is fine.** AGPL obligations are triggered by conveying
+the software or by letting *other people* use it over a network. Running it on
+your own machine to measure whether it is any good triggers nothing. The line is
+crossed when it is deployed somewhere the client can reach — a demo on
+`career-lamp.com` counts. So: benchmark it locally, keep it behind the detector
+interface, and decide the licence question before it goes anywhere public.
+
+Raise it with Katsu-san before starting. Wrap whatever is chosen behind
+`Detector.detect(image) -> list[Box]` so it is imported in exactly one file —
+that seam is also what makes a licence-driven swap cheap.
 
 **Environment risk:** the project runs Python 3.14.2. PyTorch and Ultralytics
 wheels lag new Python releases. Check `pip index versions torch` before
@@ -359,21 +383,166 @@ committing time; the CV stage may need its own 3.12 environment.
 
 ---
 
-## 12. Plan
+## 11a. Video without a detector — the current decision
+
+**Decided 2026-09-14. This reverses "YOLO-World is phase 4".**
+
+### Why latency stopped mattering
+
+The product scans a room and an employee reviews the result afterwards
+(answer #6: real-time is not required). There is no frame-rate budget. The only
+number that counts is how long **one video** takes to process in the background,
+and minutes are acceptable. That was YOLO's whole justification.
+
+| YOLO gives | Needed? |
+|---|---|
+| Milliseconds per frame | No. This is a background job |
+| Boxes for a live overlay | No. Cosmetic, last phase |
+| Boxes for evidence thumbnails in review | Nice; the whole frame works as evidence |
+| Boxes for tracking across frames | This is the only real one — answered below |
+
+### The actual hard problem: per-frame counts are not additive
+
+`consensus.py` merges N looks at **one image** by taking the median. Frames from
+a camera sweep are not that — they are different views of different parts of one
+room, and neither obvious rule works:
+
+| Rule | Frame A: 1 TV, frame B: 1 TV | Fails when |
+|---|---|---|
+| Median across frames | 1 TV | The camera panned to a *second* TV — undercount |
+| Sum across frames | 2 TVs | One TV appears in 40 frames — 40 TVs |
+
+This is exactly the client's "do not tag the same item twice" constraint, and it
+is a spatial-reasoning problem, not a detection problem. Tracking with boxes is
+the classical answer. It is no longer the chosen one.
+
+### Chosen approach: let the model see the frames together
+
+```
+video
+  -> OpenCV: decode, sample keyframes, drop near-duplicates by visual difference
+  -> batch 8-16 frames into ONE vision call:
+     "these are views of one room; list distinct items and counts,
+      do not count the same object twice"
+  -> repeat N times -> merge_runs() unchanged
+  -> catalog match -> resolve -> review
+```
+
+`gpt-5.6-luna` holds 1,050,000 tokens of context; a dozen images is roughly
+20,000. The model can hold the whole room at once and deduplicate as reasoning —
+the job tracking was going to do — with no boxes, no track ids, no ReID, and no
+AGPL dependency. A two-minute sweep is perhaps 30 keyframes and three consensus
+runs: pennies in tokens, a couple of minutes wall-clock with calls issued
+concurrently. `merge_runs` is untouched; only the per-run detection call changes
+from one image to several.
+
+OpenCV (Apache-2.0) decodes and samples. That is the only new dependency.
+
+### What is unproven, and the experiment that settles it
+
+Whether the model reliably recognises "that is the same sofa from another
+angle". Nothing else in this plan is in doubt. **Test before building:** take
+4–6 photos of one room from different positions, send them in a single call, and
+see whether it answers "1 sofa" or "3 sofas". `images/room/` currently holds one
+photo; five more is ten minutes of work and settles the biggest open question in
+the video phase.
+
+**Preliminary result (2026-09-14), via `playground/probe_multiview.py`
+(phase 0.3):** 2 photos of one desk setup from different angles, 3 runs.
+Every object visible in both photos — laptop, monitor, keyboard, headset,
+router, glass mug, toilet paper roll — was reported with its true physical
+count (1 each), not doubled from appearing in two images. The two office
+chairs also stayed at 2 across all three runs. This is the failure mode the
+experiment exists to catch, and it did not happen.
+
+Noise that did show up (`curtain`: 4/4/1, `power adapter` appearing/
+disappearing between runs) is a labelling-granularity problem — what counts
+as "one curtain" — not a duplication-across-views problem, and is the kind
+of thing `consensus.py`'s cross-run merge already exists to smooth over.
+
+**A separate risk `cable: 8/8/8` exposes: agreement is not correctness.**
+`count_is_unstable` is a variance check across runs — it has nothing to say
+about three independent runs converging on the same wrong number. Nobody
+counted eight cables; the model settled on a plausible-sounding figure for
+something it cannot actually delineate, and did so consistently enough that
+the one metric built to flag disagreement stays silent. This isn't specific
+to cables — it applies to any cluttered, hard-to-delineate category. The
+practical fix already exists and doesn't require touching the metric:
+catalog-exclude clutter categories (cables, curtains) so the question never
+reaches a human, rather than trying to make consensus detect its own blind
+spot.
+
+**Not yet settled — undercounting.** Only 2 angles were tested, both heavily
+overlapping, so this proved "doesn't double-count" and nothing about the
+opposite failure: two *different* similar-looking objects in non-overlapping
+views getting merged into one. The next probe to run: two photos of
+different corners of a room, each containing a similar item (two matching
+chairs on opposite sides, say), and check the result says 2, not 1.
+
+**Two readings of that probe worth keeping.** First, the naming chaos it shows
+(`desk`/`table`, `mouse pad`/`mousepad`/`gaming mat`, `bucket`/`storage bin`/
+`plastic container`) is an artefact of the probe, not of the approach: the probe
+prints raw labels, while the product path passes `grouping_key(catalog)` into
+`detect_stable` and merges those per run. Judge naming on `estimate.py`'s output,
+never on the probe's. Second, the same three labels for one group of objects
+(2 buckets + 1 basin = 3 containers = 3 "plastic containers") is the §10 finding
+again at room scale — perception stable, naming unstable — which is more evidence
+for the alias list being the highest-value component, not against it.
+
+**Improvement to make when this becomes real code:** have the multi-image call
+return, per item, which views it was seen in (`seen_in: [1, 3]`). It costs a
+schema field and it buys two things — the model is forced to commit to an
+identity claim per object rather than emitting one merged number, and the review
+UI gets a citation ("this chair came from frames 1 and 3") without any bounding
+boxes.
+
+### Fallbacks, cheapest first, if deduplication proves weak
+
+1. Guided capture — instruct the customer to sweep once, slowly, stopping at
+   each wall (client question #6 asks whether the app may do this).
+2. Segment the sweep and sum across non-overlapping segments, accepting
+   boundary overlap as a review item.
+3. Only then boxes and tracking — by which point the accuracy gap being bought
+   is known, and the licence question in §11 has to be answered.
+
+---
+
+## 12. How this becomes part of the app
+
+Decided 2026-09-14, after the host application gained file uploads.
+
+| Question | Decision | Why |
+|---|---|---|
+| Separate repo or plugin? | **Plugin**, `app/plugins/recycling/` | The agent loop, auth, storage, SSE streaming and the React UI already exist. Rebuilding them for one feature is the expensive path. |
+| One deployment or two? | **One.** The plugin is omitted from `ENABLED_TOOL_PLUGINS` on the deploy branch | The production service is the job-application product; it must never load recycling. `ENABLED_TOOL_PLUGINS` is an allowlist that already exists, so this costs no code. **Caveat: it is an allowlist, so it must name every plugin that should load** — `clock,documents,attachments`. Forgetting `attachments` silently disables file reading. |
+| Entry point: agent tool or slash command? | **Slash command**, `/recycle scan`, `/recycle train`, `/recycle catalog` | A command never enters the tool schemas, so the recycling feature cannot confuse the `anna` persona even when both are loaded. It also costs no LLM call to start, and cannot be invoked by mistake. |
+| How does the result reach the screen? | The command **writes the assistant message itself**, as Markdown the frontend already renders | Deterministic. A model asked to reproduce a 40-row table can drop a row or alter a number, and this project's one rule is that nothing detected disappears without the reviewer seeing it. |
+| Where does the catalog live? | Postgres, per tenant | `catalog.json` inside a container is destroyed on every deploy, and SaaS tenancy was a locked decision (§4). |
+| Which model does the scan call? | **The app's own model by default** — deployment already runs `MODEL_NAME=gpt-5.6-luna` with `LLM_SUPPORTS_VISION=true`, which is the same model the playground calls. An optional `RECYCLING_VISION_MODEL` overrides it | No second key, no second configuration to keep in sync. The override exists only for the day the chat model is downgraded for cost and the scan still needs vision. |
+| Which SDK does it call through? | The raw `openai` SDK the playground already uses, given the app's credentials | `vision.py` moves across unchanged, and its Pydantic structured-output call is the part most likely to break in a rewrite. The cost is two LLM paths in one process — acceptable while the plugin is young, worth revisiting if it outlives the prototype. |
+
+### Plan
 
 | Phase | Work | Status |
 |---|---|---|
 | 0 | Detection, consensus, exclusions | **Done** |
-| 1 | Catalog build + resolve + metadata | **Written, not yet run** |
-| 2 | Review UI — table, thumbnails, edit count, add missing, name unmatched | Next |
-| 3 | Multi-image estimate (a whole room, not one photo) | |
-| 4 | YOLO-World detector behind the same interface | |
-| 5 | Video: frames -> consensus, guided capture | |
-| 6 | Live overlay (cosmetic) | |
+| 1 | Catalog build + resolve + metadata | **Built; catalog stale, rebuild + review outstanding** |
+| 1.5 | Host app: file uploads, image and document reading | **Done** — shipped and tested in the main app |
+| 2 | Slash-command registry: a plugin declares a namespace, `ChatService` routes a leading `/` before the LLM runs | Next |
+| 3 | `/recycle scan` over uploaded images: pipeline moved into the plugin, run in a worker thread, Markdown table written back | |
+| 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | |
+| 5 | Review UI — table, thumbnails, edit count, add missing, name unmatched. Needs a plugin manifest endpoint so the frontend knows the plugin is loaded | |
+| 6 | Multi-image estimate (a whole room, not one photo) | |
+| 7 | Video: OpenCV keyframe sampling -> multi-frame vision call -> existing consensus (§11a). No detector | |
+| 8 | Guided capture, if deduplication needs help | |
+| 9 | Open-vocabulary detector — **only** if 7 and 8 prove insufficient (§11, §11a) | Dropped from the plan |
+| 10 | Live overlay (cosmetic) | |
 
-Phase 2 is the demo. Phase 3 matters more than it sounds: a room is several
+Phase 5 is the demo, and it is also the mandatory human review, so it is not
+optional polish. Phase 6 matters more than it sounds: a room is several
 photographs, and deduplicating across them is the first real instance of the
-double-counting problem.
+double-counting problem — solve it there, on stills, where it is cheap to test,
+and phase 7 becomes "decode the video into those stills".
 
 ---
 
@@ -381,7 +550,7 @@ double-counting problem.
 
 | # | Question | Why |
 |---|---|---|
-| 1 | **Send 50 sample rows of the real catalog** | Decides whether text matching works at all. Highest-value ask. |
+| 1 | **Send 50 sample rows of the real catalog** | Still open, still the highest-value ask. It decides whether text matching works at all: our whole recognition path is "the model names a thing, the name resolves to a catalog row". If their rows are plain nouns that works; if they are product codes or in-house jargon, nothing a vision model says will ever match one, and the project needs a mapping layer we have not planned. 50 rows is a spreadsheet export, not a photo shoot. |
 | 2 | Excel or relational database? How often does it change? | One-off import or a sync job |
 | 3 | Which metadata fields do they actually need? | Weight and volume are assumed; material and price may not matter |
 | 4 | Are dimensions needed per unit, or only totals? | Affects how much precision to chase |

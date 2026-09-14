@@ -239,6 +239,7 @@ async def run_cli(
             continue
 
         generation = None
+        turn = None
 
         try:
             async with application.event_bus.subscribe(
@@ -251,20 +252,24 @@ async def run_cli(
                     client_message_id=uuid4(),
                 )
 
-                generation = application.spawn(
-                    application.chat_service.generate(
-                        conversation_id=conversation_id,
-                        user_message_id=turn.user_message_id,
-                        assistant_message_id=turn.assistant_message_id,
-                        user_input=user_input,
+                # A slash command already ran and finalized itself inside
+                # begin_turn — it never reaches the LLM, so generate() must
+                # not be spawned for it, and generation stays None.
+                if not turn.is_command:
+                    generation = application.spawn(
+                        application.chat_service.generate(
+                            conversation_id=conversation_id,
+                            user_message_id=turn.user_message_id,
+                            assistant_message_id=turn.assistant_message_id,
+                            user_input=user_input,
+                        )
                     )
-                )
 
                 while True:
                     event = await subscription.next_event(timeout=1.0)
 
                     if event is None:
-                        if generation.done():
+                        if generation is not None and generation.done():
                             break
                         continue
 
@@ -285,10 +290,12 @@ async def run_cli(
                 print()
 
         except Exception:  # noqa: BLE001
-            # Only ours to release if generation never started. Once it
-            # has, _finalize owns the lock — releasing here would let a
-            # second run start on the same checkpoint thread.
-            if generation is None:
+            # Only ours to release if nothing else has claimed the lock
+            # yet. Once generate() is spawned, or begin_turn routed to a
+            # command (which finalizes itself internally), _finalize owns
+            # the lock — releasing here would let a second run start on
+            # the same checkpoint thread.
+            if generation is None and not (turn is not None and turn.is_command):
                 application.conversation_lock.release(conversation_id)
 
             logger.warning("Chat request failed; returning to prompt")

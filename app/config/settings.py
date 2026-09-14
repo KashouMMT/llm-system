@@ -227,6 +227,12 @@ SSE_QUEUE_MAXSIZE = get_positive_int("SSE_QUEUE_MAXSIZE", 256)
 AUTH_BOOTSTRAP_EMAIL = os.getenv("AUTH_BOOTSTRAP_EMAIL", "").strip()
 AUTH_BOOTSTRAP_PASSWORD = os.getenv("AUTH_BOOTSTRAP_PASSWORD", "")
 
+# True preserves today's behaviour: POST /auth/register is public. A live
+# deployment with no invite flow yet should set this false once its own
+# accounts exist, so a public domain doesn't accumulate unvetted sign-ups —
+# existing sessions and logins are unaffected either way.
+ALLOW_REGISTRATION = get_bool("ALLOW_REGISTRATION", True)
+
 # Absolute session lifetime. No sliding expiry — that is a write on every
 # request. 720h = 30 days.
 SESSION_TTL_HOURS = get_positive_int("SESSION_TTL_HOURS", 720)
@@ -288,6 +294,18 @@ FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
 # one — a request nginx would already have rejected should not reach here
 # expecting a different answer.
 UPLOAD_MAX_BYTES = get_positive_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024)
+
+# Cap on how many bytes one user may upload in a rolling 24 hours, across
+# every conversation. Enforced against files.origin='uploaded' rows only —
+# agent-generated documents don't count, since the user didn't choose to
+# spend disk on those. This is an abuse brake against a public deployment
+# with no per-user disk quota otherwise, not a precise metering feature: the
+# request that crosses the cap is still accepted (the check runs after its
+# body is already read), so a user can land slightly over on that one call.
+UPLOAD_DAILY_BYTES_PER_USER = get_positive_int(
+    "UPLOAD_DAILY_BYTES_PER_USER",
+    200 * 1024 * 1024,
+)
 
 # Cap on the combined size of the attachment_ids one send attaches. The
 # frontend already refuses to queue a batch this large, but that is a UX

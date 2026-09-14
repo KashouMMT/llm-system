@@ -78,6 +78,17 @@ MIGRATIONS: list[Migration] = [
             """,
         ),
     ),
+    (
+        3,
+        "index for per-user daily upload quota",
+        (
+            """
+            CREATE INDEX IF NOT EXISTS idx_files_user_uploaded_created
+            ON files (user_id, created_at)
+            WHERE origin = 'uploaded'
+            """,
+        ),
+    ),
 ]
 
 

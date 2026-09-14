@@ -37,7 +37,7 @@ from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
-from app.plugins import ToolContext, load_tools
+from app.plugins import PluginCommand, ToolContext, load_commands, load_tools
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
@@ -170,6 +170,7 @@ class Application:
         self.summarization_service: SummarizationService | None = None
         self.title_service: ConversationTitleService | None = None
         self.chat_service: ChatService | None = None
+        self.commands: dict[str, PluginCommand] = {}
 
     async def initialize(self) -> None:
         """
@@ -290,6 +291,10 @@ class Application:
                 strict=TOOL_PLUGINS_STRICT,
             )
 
+            logger.info("Loading slash commands")
+            self.commands = load_commands(enabled=ENABLED_TOOL_PLUGINS)
+            logger.info("Slash commands loaded | namespaces=%s", sorted(self.commands))
+
             logger.info("Creating AgentGraph")
             self.agent_graph = AgentGraph(
                 llm=self.llm,
@@ -331,6 +336,7 @@ class Application:
                 event_bus=self.event_bus,
                 conversation_lock=self.conversation_lock,
                 spawn=self.spawn,
+                commands=self.commands,
             )
             logger.info("ChatService initialized")
 

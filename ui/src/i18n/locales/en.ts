@@ -73,6 +73,8 @@ export const en = {
 		attachmentFileTooLarge: "This file is over the 20 MB limit.",
 		attachmentUnsupported:
 			"Unsupported file. Send an image (PNG, JPEG, WebP), a PDF, or a text file (UTF-8 or Shift_JIS).",
+		attachmentQuotaExceeded:
+			"You've reached today's upload limit. Try again tomorrow.",
 	},
 	error: {
 		notFoundTitle: "Page not found",

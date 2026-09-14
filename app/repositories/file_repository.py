@@ -264,6 +264,39 @@ class FileRepository:
 
         return list(reversed(newest_first)), total
 
+    async def sum_uploaded_bytes_since(
+        self,
+        user_id: UUID,
+        *,
+        hours: int = 24,
+    ) -> int:
+        """
+        Total bytes this user has uploaded in the last `hours` hours.
+
+        Backs the per-user daily upload quota (UPLOAD_DAILY_BYTES_PER_USER).
+        origin='uploaded' excludes agent-generated documents, which the user
+        did not choose to spend disk on — matches the partial index
+        idx_files_user_uploaded_created, which this query is built to use.
+        """
+        async with (
+            self._pool.connection() as conn,
+            conn.cursor() as cur,
+        ):
+            await cur.execute(
+                """
+                SELECT COALESCE(SUM(size_bytes), 0)
+                FROM files
+                WHERE user_id = %s
+                  AND origin = 'uploaded'
+                  AND created_at > NOW() - (%s || ' hours')::INTERVAL
+                """,
+                (user_id, hours),
+            )
+
+            (total,) = await cur.fetchone()
+
+        return total
+
     async def sweep_orphaned_uploads(
         self,
         *,
