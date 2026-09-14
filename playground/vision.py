@@ -89,6 +89,31 @@ Rules:
 - Do NOT report anything that is not on the list.
 """
 
+_MULTI_VIEW_PROMPT = """\
+The images that follow are multiple photographs of ONE room, taken from
+different positions or angles. They are views of the same physical space, not
+separate rooms.
+
+List every distinct physical object visible across all of the images
+combined, with a total count for each.
+
+Rules:
+- If the same physical object appears in more than one photo (e.g. a sofa
+  visible in image 1 and again in image 2 from another angle), count it
+  ONCE, not once per photo. Do NOT count the same physical object twice.
+- Use simple lowercase singular common nouns ("laptop", not "Dell XPS 13
+  laptop").
+- Group identical objects into ONE entry with a count. Six identical chairs
+  is one entry with count 6, not six entries.
+- Group objects of the same kind even if they differ in colour or size.
+- Do NOT identify brands or models. A 2K TV and a 4K TV are both "tv".
+- Do NOT assess condition or damage.
+- Include structural parts of the room (door, wall, window, floor, ceiling)
+  if you see them. The caller filters those out; that is not your job.
+- If you are unsure what something is, still list it with your best guess
+  and a low confidence rather than omitting it.
+"""
+
 
 def build_client(api_key: str, base_url: str | None = None) -> OpenAI:
     """Build the API client. Separated so tests can inject a fake."""
@@ -182,6 +207,53 @@ def detect_items(
                     ],
                 }
             ],
+            response_format=DetectionResult,
+            **optional,
+        )
+    except Exception as exc:  # the SDK raises a family of errors; all are fatal here
+        raise DetectionError(f"Model call failed: {exc}") from exc
+
+    parsed = completion.choices[0].message.parsed
+    if parsed is None:
+        raise DetectionError(
+            "The model returned no parseable result "
+            f"(finish_reason={completion.choices[0].finish_reason})."
+        )
+    return parsed
+
+
+def detect_items_multi(
+    image_paths: list[Path],
+    *,
+    client: OpenAI,
+    model: str,
+    temperature: float | None = None,
+) -> DetectionResult:
+    """Detect objects across several images of ONE scene, in a single call.
+
+    Unlike `detect_items`, which looks at one image, this sends every image
+    together and asks the model to deduplicate objects that recur across
+    views — the open question behind §11a's video decision: can the model
+    tell "the same sofa from another angle" from "a second sofa"? Existing
+    single-image callers (detect.py, estimate.py, build_catalog.py) are
+    unaffected; this is an addition, not a change to `detect_items`.
+    """
+    data_urls = [encode_image(path) for path in image_paths]
+
+    content: list[dict[str, object]] = [
+        {"type": "text", "text": _MULTI_VIEW_PROMPT}
+    ]
+    for data_url in data_urls:
+        content.append({"type": "image_url", "image_url": {"url": data_url}})
+
+    optional: dict[str, object] = {}
+    if temperature is not None:
+        optional["temperature"] = temperature
+
+    try:
+        completion = client.chat.completions.parse(
+            model=model,
+            messages=[{"role": "user", "content": content}],
             response_format=DetectionResult,
             **optional,
         )
