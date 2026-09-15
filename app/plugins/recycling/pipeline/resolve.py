@@ -14,10 +14,15 @@ them into one filtered list destroys exactly what a reviewer needs.
 
 from __future__ import annotations
 
-from catalog import Catalog, CatalogItem, ItemMetadata
-from consensus import KeyFunction, StableItem, is_unstable
-from labels import collapse_key
 from pydantic import BaseModel, Field
+
+from app.plugins.recycling.pipeline.catalog import Catalog, CatalogItem, ItemMetadata
+from app.plugins.recycling.pipeline.consensus import (
+    KeyFunction,
+    StableItem,
+    is_unstable,
+)
+from app.plugins.recycling.pipeline.labels import collapse_key
 
 # Volume each additional unit adds when an item nests. Six stacked chairs
 # occupy far less than six chair-shaped boxes; 0.4 is a rough approximation,

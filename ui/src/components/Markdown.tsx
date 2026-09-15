@@ -4,6 +4,7 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
 import MermaidDiagram from "./MermaidDiagram";
+import TableScroll from "./TableScroll";
 
 type MarkdownProps = {
 	children: string;
@@ -54,6 +55,18 @@ const Markdown = ({ children, isStreaming = false }: MarkdownProps) => {
 					}
 
 					return <pre>{preChildren}</pre>;
+				},
+				// A GFM table can run wider than the chat column (many
+				// columns, long cell text) and taller than the viewport.
+				// TableScroll gives it a horizontal scrollbar both below
+				// the table and mirrored above it, so long tables don't
+				// force scrolling down first to find the way to pan across.
+				table({ children: tableChildren }) {
+					return (
+						<TableScroll>
+							<table>{tableChildren}</table>
+						</TableScroll>
+					);
 				},
 			}}
 		>

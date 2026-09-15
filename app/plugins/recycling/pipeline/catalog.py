@@ -26,8 +26,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Literal
 
-from labels import collapse_key, normalize
 from pydantic import BaseModel, Field
+
+from app.plugins.recycling.pipeline.labels import collapse_key, normalize
 
 # Where a metadata value came from, so a reviewer knows what to distrust.
 # An LLM estimate of a washing machine's weight is a reasonable starting point;
@@ -191,9 +192,7 @@ class Catalog:
         if not path.is_file():
             raise CatalogError(f"No catalog at {path}. Build one first.")
         try:
-            payload = CatalogFile.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
+            payload = CatalogFile.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise CatalogError(f"Could not read {path}: {exc}") from exc
         return cls(payload.items, version=payload.version)

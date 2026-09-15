@@ -2,6 +2,7 @@ import asyncio
 import base64
 import contextlib
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable, Coroutine, Mapping, Sequence
@@ -198,7 +199,12 @@ class ChatService:
             user_content=user_input,
             client_message_id=client_message_id,
             user_id=user.id,
-            max_attachment_batch_bytes=MAX_ATTACHMENT_BATCH_BYTES,
+            # No combined-size cap for admin/root; sys.maxsize keeps
+            # create_turn's check a plain int comparison instead of a
+            # special "unlimited" case.
+            max_attachment_batch_bytes=(
+                sys.maxsize if is_admin(user) else MAX_ATTACHMENT_BATCH_BYTES
+            ),
             attachment_ids=attachment_ids,
         )
 

@@ -231,68 +231,69 @@ Two grouping passes on two different axes, and both are needed:
 
 ## 8. Files
 
+**Revised 2026-09-14 — the pipeline moved, then the prototype was deleted.**
+`labels.py`, `vision.py`, `consensus.py`, `catalog.py`, `resolve.py`, and
+the harvest/cluster/enrich/assemble logic that used to live inline in
+`build_catalog.py` moved unchanged into `app/plugins/recycling/pipeline/`
+(`vision.py` gained bytes-based entry points alongside its original
+`Path`-based ones; nothing else changed). The standalone `playground/`
+folder this all started in — its CLIs (`detect.py`, `estimate.py`,
+`build_catalog.py`, `run.py`) and the phase-0.3 dedup probe
+(`probe_multiview.py`) — has since been **deleted entirely**, on purpose:
+the point of building this as a plugin was always to reach the agentic
+loop (§12), not to keep a standalone tool usable, and once the logic had a
+home inside the app the CLI-only path stopped earning its keep. There is
+now no way to exercise any part of the pipeline without running the full
+app and going through `/recycle` in a real conversation — see §9.
+
 ```
 llm-system/
-├── requirements.txt              # + openai, pydantic, pillow
+├── requirements.txt              # + openai, pydantic, pillow (no new deps for the plugin)
 ├── images/                       # test photographs
-└── playground/
-    ├── config.py                 # .env location, default model, API client — one place
-    ├── labels.py                 # normalize() display / collapse_key() matching
-    ├── vision.py                 # one image -> one LLM call -> DetectedItem[]
-    ├── consensus.py              # N runs -> StableItem[]; merge_runs() is pure, keyable
-    ├── exclusions.py             # text-file exclusion list (detect.py only)
-    ├── exclusions.txt            # seeded from real output; feeds catalog build
-    ├── detect.py                 # CLI: raw detection. Harvesting and debugging.
-    ├── catalog.py                # CatalogItem / ItemMetadata / Catalog + match()
-    ├── build_catalog.py          # CLI: photos -> harvest -> cluster -> enrich -> catalog.json
-    ├── resolve.py                # grouping_key() + StableItem[] -> matched/excluded/unmatched
-    ├── estimate.py               # CLI: the product. image -> items + metadata + totals
-    ├── run.py                    # earliest ad-hoc runner; superseded by detect.py
-    ├── harvest.json              # generated: raw label frequencies (cache). Present.
-    ├── clusters.json             # generated: clustering result (cache, hand-editable).
-    │                             # NOT present — the last build predates this stage.
-    └── catalog.json              # generated: the catalog. REVIEW BY HAND. Present but STALE.
+└── app/plugins/recycling/        # the plugin — see README.md's "Tool plugins" section, and its own README.md
+    ├── __init__.py               # PLUGIN — builds one openai client, registers /recycle
+    ├── commands.py               # scan_image / scan_video (stub) / build_catalog / show_catalog
+    ├── runner.py                 # async concurrent runs (asyncio.to_thread) — the event loop that serves SSE must never block on this
+    ├── catalog.json              # the catalog. REVIEW BY HAND after any build_catalog run — the model gets granularity and exclusions wrong often enough that this is not optional
+    └── pipeline/
+        ├── vision.py             ├── consensus.py            ├── labels.py
+        ├── catalog.py            ├── resolve.py               └── build.py
 ```
 
 **The one rule every file follows: nothing detected is ever dropped without the
 reviewer seeing it.** Low-agreement items, unmatched labels, labels the
 clustering model forgot, unanswered enrichment and contested aliases are all
 reported. Five early bugs were violations of this rule; check it first when
-reviewing any change.
+reviewing any change. `/recycle scan_image` and `build_catalog` also attach
+the full structured result as a file on the assistant message —
+`read_attachment` reads it back later — so a follow-up question still has
+everything even after the conversation is summarized past what the Markdown
+reply itself preserves.
 
-**Synonyms are merged per run, inside consensus.** `estimate.py` passes
-`grouping_key(catalog)` to `detect_stable`, so "table" in two runs and "desk" in
-the third is one table. Merging later, after runs are combined, cannot tell one
-object named twice from two objects, and double counts.
-
-Two CLIs on purpose. `detect.py` reports whatever the model said and is the
-harvesting and debugging tool. `estimate.py` is the product path and requires a
-catalog.
+**Synonyms are merged per run, inside consensus.** `grouping_key(catalog)`
+is passed into the merge, so "table" in two runs and "desk" in the third is
+one table. Merging later, after runs are combined, cannot tell one object
+named twice from two objects, and double counts. `runner.scan`/
+`runner.harvest` follow the same rule, just concurrently, and
+`/recycle scan_image` additionally deduplicates *across several attached
+photos of one room* in a single call (`detect_items_bytes`) when more than
+one image is attached.
 
 ---
 
 ## 9. How to run it
 
+There is no CLI anymore. Start the app and use `/recycle` in a real
+conversation:
+
 ```bash
-# 1. raw detection, no catalog needed
-cd playground
-python detect.py ..\images\table.jpg --runs 3
+python -m app.main --api
+```
 
-# 2. build a catalog from a folder of photos  (the slow, paid step)
-python build_catalog.py ..\images\catalog --runs 2
-
-# 3. iterate without re-paying for detection
-python build_catalog.py --from-harvest     # redo clustering + enrichment
-python build_catalog.py --from-clusters    # redo enrichment only (edit clusters.json first if you like)
-
-# --min-observations defaults to 1. Raise to 2-3 only with 20+ photos:
-# on a small set a real item may appear in a single photo.
-
-# 4. REVIEW catalog.json BY HAND  <- not optional
-
-# 5. the product
-python estimate.py ..\images\table.jpg
-python estimate.py ..\images\table.jpg --json
+```
+/recycle build_catalog          # attach photos to this message first (the slow, paid step)
+/recycle show_catalog           # review what got built — REVIEW BY HAND, not optional
+/recycle scan_image             # attach photos to this message; the product path
 ```
 
 ---
@@ -518,8 +519,8 @@ Decided 2026-09-14, after the host application gained file uploads.
 | Entry point: agent tool or slash command? | **Slash command**, `/recycle scan`, `/recycle train`, `/recycle catalog` | A command never enters the tool schemas, so the recycling feature cannot confuse the `anna` persona even when both are loaded. It also costs no LLM call to start, and cannot be invoked by mistake. |
 | How does the result reach the screen? | The command **writes the assistant message itself**, as Markdown the frontend already renders | Deterministic. A model asked to reproduce a 40-row table can drop a row or alter a number, and this project's one rule is that nothing detected disappears without the reviewer seeing it. |
 | Where does the catalog live? | Postgres, per tenant | `catalog.json` inside a container is destroyed on every deploy, and SaaS tenancy was a locked decision (§4). |
-| Which model does the scan call? | **The app's own model by default** — deployment already runs `MODEL_NAME=gpt-5.6-luna` with `LLM_SUPPORTS_VISION=true`, which is the same model the playground calls. An optional `RECYCLING_VISION_MODEL` overrides it | No second key, no second configuration to keep in sync. The override exists only for the day the chat model is downgraded for cost and the scan still needs vision. |
-| Which SDK does it call through? | The raw `openai` SDK the playground already uses, given the app's credentials | `vision.py` moves across unchanged, and its Pydantic structured-output call is the part most likely to break in a rewrite. The cost is two LLM paths in one process — acceptable while the plugin is young, worth revisiting if it outlives the prototype. |
+| Which model does the scan call? | **The app's own model by default** — deployment already runs `MODEL_NAME=gpt-5.6-luna` with `LLM_SUPPORTS_VISION=true`, the same model `vision.py` was originally written against. An optional `RECYCLING_VISION_MODEL` overrides it | No second key, no second configuration to keep in sync. The override exists only for the day the chat model is downgraded for cost and the scan still needs vision. |
+| Which SDK does it call through? | The raw `openai` SDK `vision.py` was originally written against, given the app's credentials (`ToolContext.llm`) | Its Pydantic structured-output call is the part most likely to break in a LangChain rewrite, and it moved across unchanged. The cost is two LLM paths in one process — acceptable while the plugin is young, worth revisiting if it outlives the prototype. |
 
 ### Plan
 
@@ -528,12 +529,12 @@ Decided 2026-09-14, after the host application gained file uploads.
 | 0 | Detection, consensus, exclusions | **Done** |
 | 1 | Catalog build + resolve + metadata | **Built; catalog stale, rebuild + review outstanding** |
 | 1.5 | Host app: file uploads, image and document reading | **Done** — shipped and tested in the main app |
-| 2 | Slash-command registry: a plugin declares a namespace, `ChatService` routes a leading `/` before the LLM runs | Next |
-| 3 | `/recycle scan` over uploaded images: pipeline moved into the plugin, run in a worker thread, Markdown table written back | |
-| 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | |
-| 5 | Review UI — table, thumbnails, edit count, add missing, name unmatched. Needs a plugin manifest endpoint so the frontend knows the plugin is loaded | |
-| 6 | Multi-image estimate (a whole room, not one photo) | |
-| 7 | Video: OpenCV keyframe sampling -> multi-frame vision call -> existing consensus (§11a). No detector | |
+| 2 | Slash-command registry: a plugin declares a namespace, `ChatService` routes a leading `/` before the LLM runs | **Done** — generalized to every plugin (`app/plugins/contracts.py`'s `PluginCommand`/`command_factory`), not recycling-specific; proven live with `/clock time` |
+| 3 | `/recycle scan_image` over attached images: pipeline moved into the plugin, run concurrently (`runner.py`, `asyncio.to_thread`), Markdown table + attached JSON written back | **Done** — also folds in phase 6 (see below); `/recycle scan_video` registered as a stub, `/recycle build_catalog` and `/recycle show_catalog` also built (not originally scoped this early, brought forward) |
+| 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | `/recycle build_catalog`/`show_catalog` exist against the plugin's own `catalog.json`; the Postgres move itself has not started |
+| 5 | Review UI — table, thumbnails, edit count, add missing, name unmatched. Needs a plugin manifest endpoint so the frontend knows the plugin is loaded | Next planned: a `.tsx` settings/review page for `/recycle`, replacing chat-driven catalog editing before it was ever built (an `edit_catalog` command was scoped and deliberately dropped in favour of this) |
+| 6 | Multi-image estimate (a whole room, not one photo) | **Folded into phase 3** — `/recycle scan_image` accepts several attached photos and deduplicates across views in one call (`detect_items_bytes`), since the §11a preliminary result already validated the approach |
+| 7 | Video: OpenCV keyframe sampling -> multi-frame vision call -> existing consensus (§11a). No detector | Not started. `/recycle scan_video` is registered and answers "not implemented yet" — OpenCV is still the one dependency phases 0-2's "no new dependencies" rule was deferring |
 | 8 | Guided capture, if deduplication needs help | |
 | 9 | Open-vocabulary detector — **only** if 7 and 8 prove insufficient (§11, §11a) | Dropped from the plan |
 | 10 | Live overlay (cosmetic) | |

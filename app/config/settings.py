@@ -339,6 +339,15 @@ TOOL_PLUGINS_STRICT = get_bool("TOOL_PLUGINS_STRICT", False)
 # which is what non-reasoning models and other OpenAI-compatible hosts want.
 REASONING_EFFORT = os.getenv("REASONING_EFFORT", "").strip()
 
+# RECYCLING PLUGIN
+# Overrides which model /recycle scan and /recycle build_catalog call for
+# vision. Unset by default: the plugin uses the app's own MODEL_NAME and
+# credentials (ToolContext.llm), since the deployment already runs a
+# vision-capable model and a second configuration to keep in sync buys
+# nothing. This exists for the day the chat model is downgraded for cost
+# while the scan still needs vision.
+RECYCLING_VISION_MODEL = os.getenv("RECYCLING_VISION_MODEL", "").strip()
+
 # Writes every root-user turn — the user's text, the assistant's reply, and
 # each tool call's arguments — to app/logs/{date}_conversation.log. Deliberately
 # separate from LOG_LEVEL: this decides whether conversation *content* is

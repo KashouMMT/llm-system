@@ -11,12 +11,36 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from app.authentication.models import User
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
+
+
+@dataclass(frozen=True)
+class LLMAccess:
+    """
+    The app's own model, as facts rather than a client — provider, where to
+    reach it, the credential, and which model id.
+
+    Data only, deliberately never a "build me a client" factory: the moment
+    a plugin can construct arbitrary clients, nothing in the app knows what
+    models it is calling or what they cost. A plugin that wants a raw SDK
+    client (recycling does — see the TODO's reasoning for the recycling
+    plugin) builds exactly one, once, in its own factory closure, from
+    these fields. A plugin that wants LangChain's interface instead takes
+    ToolContext.chat_model.
+
+    Never log a ToolContext — the api_key lives here.
+    """
+
+    provider: str
+    base_url: str
+    api_key: str
+    model: str
 
 
 @dataclass(frozen=True)
@@ -36,11 +60,18 @@ class ToolContext:
     registry keyed by string or type: a registry trades a type error at
     startup for a KeyError at the moment a tool is called, which is the
     worst possible time to discover a wiring mistake.
+
+    chat_model and llm exist so any plugin can call the app's own model —
+    the LangChain client the agent already uses, or the raw facts behind
+    it — without a second configuration to keep in sync. Never log this
+    object: llm.api_key is a live credential.
     """
 
     file_storage: FileStorage
     file_repository: FileRepository
     conversation_repository: ConversationRepository
+    chat_model: BaseChatModel
+    llm: LLMAccess
 
 
 @dataclass(frozen=True)
@@ -98,11 +129,16 @@ class ToolPlugin:
     folder. It is never sent to the model; what the model reads is each
     tool's own name and description.
 
-    `commands` is optional and independent of `factory`/tools — a plugin
-    may offer either, both, or neither.
+    `command_factory` is optional and independent of `factory`/tools — a
+    plugin may offer either, both, or neither. Same shape as `factory`,
+    called once at startup with the same ToolContext, for the same reason:
+    a command handler that needs storage or the app's model access still
+    gets it through a bound closure, never a module global.
     """
 
     name: str
     factory: Callable[[ToolContext], Sequence[BaseTool]]
     description: str = ""
-    commands: Sequence[PluginCommand] = ()
+    command_factory: Callable[[ToolContext], Sequence[PluginCommand]] = (
+        lambda _context: ()
+    )

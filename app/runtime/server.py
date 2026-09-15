@@ -64,7 +64,10 @@ class SendMessageRequest(BaseModel):
     # attachments, so emptiness is checked below, against both fields
     # together, rather than on this field alone.
     message: str = Field(min_length=0, max_length=MAX_USER_INPUT_CHARS)
-    attachment_ids: list[UUID] = Field(default_factory=list, max_length=10)
+    # Hard outer bound for everyone. Pydantic validates the body before the
+    # handler knows the caller's role, so the real per-role limit (10 for
+    # everyone but admin/root) is enforced in send_message below instead.
+    attachment_ids: list[UUID] = Field(default_factory=list, max_length=500)
 
     @model_validator(mode="after")
     def _require_message_or_attachment(self) -> "SendMessageRequest":
@@ -416,6 +419,12 @@ def create_api(application: Application) -> FastAPI:
         """
         conversation_id = conversation.id
 
+        if not is_admin(user) and len(request.attachment_ids) > 10:
+            raise HTTPException(
+                status_code=422,
+                detail="A message may attach at most 10 files.",
+            )
+
         existing = await application.message_repository.get_turn_by_client_message_id(
             request.client_message_id,
         )
@@ -552,19 +561,23 @@ def create_api(application: Application) -> FastAPI:
                 detail="Image file is corrupt or unreadable.",
             )
 
-        uploaded_today = await application.file_repository.sum_uploaded_bytes_since(
-            user.id,
-            hours=24,
-        )
-
-        if uploaded_today + len(data) > UPLOAD_DAILY_BYTES_PER_USER:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Daily upload limit of "
-                    f"{UPLOAD_DAILY_BYTES_PER_USER} bytes exceeded."
-                ),
+        # Admin/root are exempt from the daily quota (UPLOAD_MAX_BYTES above
+        # still applies to every role) — skip the query entirely rather than
+        # compute a number that won't be checked.
+        if not is_admin(user):
+            uploaded_today = await application.file_repository.sum_uploaded_bytes_since(
+                user.id,
+                hours=24,
             )
+
+            if uploaded_today + len(data) > UPLOAD_DAILY_BYTES_PER_USER:
+                raise HTTPException(
+                    status_code=429,
+                    detail=(
+                        "Daily upload limit of "
+                        f"{UPLOAD_DAILY_BYTES_PER_USER} bytes exceeded."
+                    ),
+                )
 
         storage_key = await application.file_storage.write(
             data,

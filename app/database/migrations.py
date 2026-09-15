@@ -89,6 +89,23 @@ MIGRATIONS: list[Migration] = [
             """,
         ),
     ),
+    (
+        4,
+        "recycle_scan document_type",
+        (
+            """
+            ALTER TABLE files DROP CONSTRAINT IF EXISTS files_document_type_check
+            """,
+            """
+            ALTER TABLE files ADD CONSTRAINT files_document_type_check
+                CHECK (document_type IS NULL OR document_type IN (
+                    'rirekisho',
+                    'shokumu_keirekisho',
+                    'recycle_scan'
+                ))
+            """,
+        ),
+    ),
 ]
 
 

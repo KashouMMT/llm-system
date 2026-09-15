@@ -29,7 +29,10 @@ from app.config.settings import (
     AUTH_BOOTSTRAP_PASSWORD,
     ENABLED_TOOL_PLUGINS,
     FILE_STORAGE_DIR,
+    LLM_API_KEY,
+    LLM_BASE_URL,
     LLM_PROVIDER,
+    MODEL_NAME,
     SESSION_TTL_HOURS,
     TOOL_PLUGINS_STRICT,
 )
@@ -37,7 +40,7 @@ from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
-from app.plugins import PluginCommand, ToolContext, load_commands, load_tools
+from app.plugins import LLMAccess, PluginCommand, ToolContext, load_commands, load_tools
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
@@ -281,18 +284,26 @@ class Application:
             logger.info("Conversation context builder initialized")
 
             logger.info("Loading tool plugins")
-            tools = load_tools(
-                ToolContext(
-                    file_storage=self.file_storage,
-                    file_repository=self.file_repository,
-                    conversation_repository=self.conversation_repository,
+            tool_context = ToolContext(
+                file_storage=self.file_storage,
+                file_repository=self.file_repository,
+                conversation_repository=self.conversation_repository,
+                chat_model=self.llm,
+                llm=LLMAccess(
+                    provider=LLM_PROVIDER,
+                    base_url=LLM_BASE_URL,
+                    api_key=LLM_API_KEY,
+                    model=MODEL_NAME,
                 ),
+            )
+            tools = load_tools(
+                tool_context,
                 enabled=ENABLED_TOOL_PLUGINS,
                 strict=TOOL_PLUGINS_STRICT,
             )
 
             logger.info("Loading slash commands")
-            self.commands = load_commands(enabled=ENABLED_TOOL_PLUGINS)
+            self.commands = load_commands(tool_context, enabled=ENABLED_TOOL_PLUGINS)
             logger.info("Slash commands loaded | namespaces=%s", sorted(self.commands))
 
             logger.info("Creating AgentGraph")

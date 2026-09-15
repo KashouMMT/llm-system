@@ -1,51 +1,57 @@
-"""Build a catalog from photographs, with no reference images and no data entry.
+"""Catalog construction: harvest -> cluster -> enrich -> assemble -> merge.
 
-    python build_catalog.py ..\\images\\catalog
-    python build_catalog.py --from-harvest      # redo clustering + enrichment
-    python build_catalog.py --from-clusters     # redo enrichment only
+Both playground/build_catalog.py's original CLI logic and the recycling
+plugin's /recycle build_catalog call into this module, so there is exactly
+one copy of the clustering and enrichment prompts and logic to keep
+correct.
 
-Four stages, each caching its output so an expensive stage is never repeated
-by accident:
+Five stages, each caching its output so an expensive stage is never
+repeated by accident:
 
-    1. HARVEST    every photo -> raw labels + how often each was seen   harvest.json
-    2. CLUSTER    raw labels  -> canonical items with aliases           clusters.json
+    1. HARVEST    every photo -> raw labels + how often each was seen
+    2. CLUSTER    raw labels  -> canonical items with aliases
     3. ENRICH     canonical items -> weight, dimensions, material
-    4. ASSEMBLE   everything -> catalog.json
+    4. ASSEMBLE   everything -> a Catalog, built fresh from this run alone
+    5. MERGE      that fresh Catalog -> folded into whatever catalog
+                  already existed (merge_into_catalog) — optional; a
+                  one-off build (or the CLI) can skip it and just save
+                  what assemble() produced
 
 Nobody photographs a reference item and nobody fills in a spreadsheet. The
-catalog is assembled from what the detector already said, then reviewed by a
-human once. That review is the only manual step and it is not optional: the
-model produces inconsistent granularity and occasionally invents a category.
+catalog is assembled from what the detector already said, then reviewed by
+a human once. That review is the only manual step and it is not optional:
+the model produces inconsistent granularity and occasionally invents a
+category.
 
-Every stage reports what it could not place rather than dropping it. A label
-the clustering model forgot comes back as its own row; an enrichment answer
-that cannot be matched is reported; a duplicate cluster is folded into the row
-that owns its name. The reviewer sees all of it in the closing summary.
+Every stage reports what it could not place rather than dropping it. A
+label the clustering model forgot comes back as its own row; an enrichment
+answer that cannot be matched is reported; a duplicate cluster is folded
+into the row that owns its name; a merge conflict is reported rather than
+silently resolved.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
-from catalog import (
+from openai import OpenAI
+from pydantic import BaseModel, Field
+
+from app.plugins.recycling.pipeline.catalog import (
     Catalog,
-    CatalogError,
     CatalogItem,
     Dimensions,
     ItemMetadata,
     make_id,
     write_json,
 )
-from config import PLAYGROUND_DIR, default_model, load_env, make_client
-from consensus import detect_stable
-from labels import collapse_key, normalize
-from openai import OpenAI
-from pydantic import BaseModel, Field
-from vision import SUPPORTED_SUFFIXES, DetectionError
+from app.plugins.recycling.pipeline.consensus import detect_stable
+from app.plugins.recycling.pipeline.labels import collapse_key, normalize
+from app.plugins.recycling.pipeline.vision import DetectionError
 
 # Enrichment is batched: one call per chunk of items. Small enough that a long
 # reply cannot be truncated, large enough that the model sees related items
@@ -170,23 +176,15 @@ Items:
 # --------------------------------------------------------------------------
 
 
-def find_images(folder: Path) -> list[Path]:
-    if not folder.is_dir():
-        raise DetectionError(f"Not a folder: {folder}")
-    images = sorted(
-        path
-        for path in folder.iterdir()
-        if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-    )
-    if not images:
-        raise DetectionError(f"No images in {folder}")
-    return images
-
-
 def harvest(
     images: list[Path], *, client: OpenAI, model: str, runs: int
 ) -> dict[str, int]:
     """Detect over every image and count how many photos each label appeared in.
+
+    Path-based, sequential: the playground CLI's harvesting path. The
+    plugin's own concurrent, bytes-based harvest lives in
+    app.plugins.recycling.runner, since it needs asyncio and never a
+    filesystem Path.
 
     Counts *label occurrences*, not object counts: six chairs in one photo is
     one observation of "chair". The question this answers is "is this label
@@ -309,10 +307,6 @@ def enrich(
     model is told to copy each name back verbatim and occasionally changes a
     space to a hyphen anyway. Keying on the collapsed form means that costs
     nothing.
-
-    Weight and size are things a language model genuinely knows, because they
-    are stable physical facts about kinds of object. Price is not, which is why
-    it is absent from the schema entirely rather than merely discouraged.
     """
     enriched: dict[str, EnrichedItem] = {}
 
@@ -464,191 +458,113 @@ def assemble(
 
 
 # --------------------------------------------------------------------------
-# CLI
+# Stage 5 (optional): merge into whatever catalog already exists
 # --------------------------------------------------------------------------
 
 
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "images", type=Path, nargs="?", help="Folder of photographs to harvest"
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=PLAYGROUND_DIR / "catalog.json",
-        help="Catalog to write",
-    )
-    parser.add_argument(
-        "--harvest-file",
-        type=Path,
-        default=PLAYGROUND_DIR / "harvest.json",
-        help="Where raw label frequencies are cached",
-    )
-    parser.add_argument(
-        "--clusters-file",
-        type=Path,
-        default=PLAYGROUND_DIR / "clusters.json",
-        help="Where the clustering result is cached",
-    )
-    parser.add_argument(
-        "--from-harvest",
-        action="store_true",
-        help="Skip detection; reuse the cached harvest. Redoes clustering and "
-        "enrichment.",
-    )
-    parser.add_argument(
-        "--from-clusters",
-        action="store_true",
-        help="Skip detection and clustering; reuse both caches. Redoes "
-        "enrichment only. Edit clusters.json by hand first if you like.",
-    )
-    parser.add_argument(
-        "--runs", type=int, default=2, help="Detection passes per photo (default: 2)"
-    )
-    parser.add_argument(
-        "--min-observations",
-        type=int,
-        default=1,
-        help="Drop labels seen in fewer photos than this before clustering "
-        "(default: 1, keep everything). Raise to 2 or 3 only once the photo set "
-        "is large (20+); on a small set a real item may appear in one photo.",
-    )
-    parser.add_argument("--no-enrich", action="store_true", help="Skip stage 3")
-    parser.add_argument("--model", default=default_model(), help="Model id")
-    return parser.parse_args(argv)
+@dataclass(frozen=True)
+class MergeResult:
+    """What happened when a freshly assembled Catalog was folded into one
+    that already existed. Three disjoint lists of canonical labels, not
+    free-text notes, so a caller can report exact counts without parsing
+    strings. A plain dataclass, not a BaseModel: Catalog itself is
+    deliberately not a Pydantic model (it carries a derived index with no
+    business being serialised), and this just carries one alongside it.
+    """
+
+    catalog: Catalog
+    added: list[str]
+    kept_existing: list[str]
+    replaced: list[str]
 
 
-def warn(message: str) -> None:
-    print(f"  ! {message}", file=sys.stderr)
+def merge_into_catalog(
+    existing: Catalog, new: Catalog, *, force: bool
+) -> MergeResult:
+    """
+    Fold a freshly assembled Catalog into one that already exists.
 
+    An item `existing` already has and this build never touched is always
+    carried over unchanged — nothing is ever removed by a build. The two
+    modes differ only in what happens when `new` produces an item that
+    matches something `existing` already has:
 
-def main(argv: list[str] | None = None) -> int:
-    load_env()
-    args = parse_args(argv)
-    notes: list[str] = []
+    force=False (the default `/recycle build_catalog`): the existing row
+    wins outright, untouched. A rescanned item that already exists
+    contributes nothing, which is what makes repeated builds safe to run
+    without slowly eroding hand-reviewed catalog data.
 
-    try:
-        client = make_client()
+    force=True (`/recycle build_catalog_force`): the new row wins — its
+    canonical label, visual class, excluded/exclusion_reason and metadata
+    replace the existing ones, since the newer scan is being deliberately
+    prioritized. But the existing row's `id` is kept, so nothing that
+    already references that id breaks; aliases are the union of both
+    (a name learned in an earlier build is never forgotten just because
+    this scan didn't happen to reproduce it); and `observations` is
+    summed, since it represents lifetime evidence a label is real, not
+    something a newer build should reset to zero.
 
-        # ---- stage 1: harvest
-        if args.from_harvest or args.from_clusters:
-            frequencies = load_harvest(args.harvest_file)
-            print(
-                f"Reusing {args.harvest_file.name} ({len(frequencies)} labels)",
-                file=sys.stderr,
-            )
-        else:
-            if args.images is None:
-                raise DetectionError(
-                    "Give an image folder, or pass --from-harvest / --from-clusters."
-                )
-            images = find_images(args.images)
-            print(
-                f"Harvesting {len(images)} images x {args.runs} runs...",
-                file=sys.stderr,
-            )
-            frequencies = harvest(
-                images, client=client, model=args.model, runs=args.runs
-            )
-            # Saved immediately: if a later stage fails, the paid part survives.
-            write_json(args.harvest_file, frequencies)
-            print(f"Wrote {args.harvest_file.name}", file=sys.stderr)
+    A match is tried against the new item's canonical label first, then
+    its aliases — clustering only ever sees the current scan's own
+    harvested labels, so it has no way to know the existing catalog's
+    aliases, and a new cluster's canonical label failing to textually
+    match an existing row is not proof they are different objects.
 
-        kept = {
-            label: count
-            for label, count in frequencies.items()
-            if count >= args.min_observations
-        }
-        if not kept:
-            raise DetectionError(
-                f"Every label was seen fewer than {args.min_observations} times. "
-                "Lower --min-observations or harvest more photos."
-            )
-        dropped = len(frequencies) - len(kept)
-        print(
-            f"{len(kept)} labels kept, {dropped} dropped below "
-            f"{args.min_observations} observation(s)",
-            file=sys.stderr,
+    Catalog()'s own constructor re-validates every alias at the end, the
+    same guarantee assemble() relies on — a genuine conflict (rare, since
+    ids are preserved rather than regenerated) surfaces as CatalogError
+    rather than silently picking a winner.
+    """
+    merged: dict[str, CatalogItem] = {item.id: item for item in existing.items}
+    added: list[str] = []
+    kept_existing: list[str] = []
+    replaced: list[str] = []
+
+    for new_item in new.items:
+        existing_match = existing.match(new_item.canonical_label)
+        if existing_match is None:
+            for alias in new_item.aliases:
+                existing_match = existing.match(alias)
+                if existing_match is not None:
+                    break
+
+        if existing_match is None:
+            if new_item.id in merged:
+                # The new item's own generated id collides with an
+                # unrelated existing row it didn't otherwise match — rare,
+                # since ids are derived from the label itself, but two
+                # different objects can normalize to the same id. Treat it
+                # like any other "already there" case rather than silently
+                # overwriting a row this new item was never actually about.
+                kept_existing.append(new_item.canonical_label)
+                continue
+            merged[new_item.id] = new_item
+            added.append(new_item.canonical_label)
+            continue
+
+        if not force:
+            kept_existing.append(new_item.canonical_label)
+            continue
+
+        combined_aliases = sorted(
+            {existing_match.canonical_label, *existing_match.aliases, *new_item.aliases}
+            - {new_item.canonical_label}
         )
-
-        # ---- stage 2: cluster
-        if args.from_clusters:
-            clusters = load_clusters(args.clusters_file)
-            print(
-                f"Reusing {args.clusters_file.name} ({len(clusters)} clusters)",
-                file=sys.stderr,
-            )
-        else:
-            print("Clustering...", file=sys.stderr)
-            clusters = cluster(kept, client=client, model=args.model)
-
-        clusters, missing = reconcile(clusters, list(kept))
-        if missing:
-            notes.append(
-                f"clustering skipped {len(missing)} label(s), restored as "
-                f"unmerged rows: {', '.join(missing[:8])}"
-                + (" ..." if len(missing) > 8 else "")
-            )
-        save_clusters(args.clusters_file, clusters)
-        print(f"{len(clusters)} clusters -> {args.clusters_file.name}", file=sys.stderr)
-
-        # ---- stage 3: enrich
-        if args.no_enrich:
-            enriched: dict[str, EnrichedItem] = {}
-        else:
-            wanted = [
-                normalize(item.canonical_label)
-                for item in clusters
-                if not item.excluded
-            ]
-            print(f"Enriching {len(wanted)} items...", file=sys.stderr)
-            enriched = enrich(wanted, client=client, model=args.model)
-            unanswered = [
-                label for label in wanted if collapse_key(label) not in enriched
-            ]
-            if unanswered:
-                notes.append(
-                    f"enrichment returned nothing for {len(unanswered)} item(s): "
-                    + ", ".join(unanswered[:8])
-                    + (" ..." if len(unanswered) > 8 else "")
-                )
-
-        # ---- stage 4: assemble
-        catalog, conflicts = assemble(clusters, enriched, frequencies)
-        notes.extend(conflicts)
-        catalog.save(args.out)
-
-    except (DetectionError, CatalogError) as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
-
-    included = [item for item in catalog if not item.excluded]
-    incomplete = catalog.incomplete()
-
-    print(file=sys.stderr)
-    print(f"Wrote {args.out}", file=sys.stderr)
-    print(
-        f"  {len(catalog)} items: {len(included)} collectable, "
-        f"{len(catalog) - len(included)} excluded",
-        file=sys.stderr,
-    )
-    if incomplete:
-        notes.append(
-            f"{len(incomplete)} collectable item(s) missing weight or volume: "
-            + ", ".join(item.canonical_label for item in incomplete[:8])
-            + (" ..." if len(incomplete) > 8 else "")
+        merged[existing_match.id] = CatalogItem(
+            id=existing_match.id,
+            canonical_label=new_item.canonical_label,
+            aliases=combined_aliases,
+            visual_class=new_item.visual_class,
+            excluded=new_item.excluded,
+            exclusion_reason=new_item.exclusion_reason,
+            observations=existing_match.observations + new_item.observations,
+            metadata=new_item.metadata,
         )
-    if notes:
-        print(file=sys.stderr)
-        print("Check these during review:", file=sys.stderr)
-        for note in notes:
-            warn(note)
-    print(file=sys.stderr)
-    print("NOW REVIEW IT BY HAND. The model gets granularity and exclusions", file=sys.stderr)
-    print("wrong often enough that this step is not optional.", file=sys.stderr)
-    return 0
+        replaced.append(new_item.canonical_label)
 
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+    return MergeResult(
+        catalog=Catalog(list(merged.values())),
+        added=added,
+        kept_existing=kept_existing,
+        replaced=replaced,
+    )

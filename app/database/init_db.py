@@ -194,7 +194,8 @@ def create_tables() -> None:
                     CONSTRAINT files_document_type_check
                         CHECK (document_type IS NULL OR document_type IN (
                             'rirekisho',
-                            'shokumu_keirekisho'
+                            'shokumu_keirekisho',
+                            'recycle_scan'
                         )),
                     CONSTRAINT files_origin_document_type_check
                         CHECK ((origin = 'generated') = (document_type IS NOT NULL)),

@@ -3,15 +3,20 @@ import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError, uploadFile } from "../api/client";
+import { useAuth } from "../auth/AuthContext";
 
 // A batch cap, enforced here so a pick of many files fails before any
 // upload starts rather than after wasting bandwidth on some of them.
+// Mirrors MAX_ATTACHMENT_BATCH_BYTES in app/config/settings.py — admin/root
+// carry no cap there, so this is skipped for them below.
 export const MAX_ATTACHMENT_TOTAL_BYTES = 100 * 1024 * 1024;
 
 // Mirrors SendMessageRequest.attachment_ids's max_length in
-// app/runtime/server.py. Enforced here too, or a batch under the size cap
-// but over 10 files would upload fine and only fail once Send is pressed.
+// app/runtime/server.py: 10 per message, 500 for admin/root. Enforced here
+// too, or a batch under the size cap but over the count would upload fine
+// and only fail once Send is pressed.
 export const MAX_ATTACHMENT_COUNT = 10;
+export const MAX_ATTACHMENT_COUNT_ADMIN = 500;
 
 // Mirrors UPLOAD_MAX_BYTES's default in app/config/settings.py. Checked
 // here so an oversized file is refused at once instead of after uploading
@@ -87,7 +92,20 @@ function describeUploadError(caught: unknown, t: TFunction): string {
  */
 export const useAttachments = (conversationId: string | undefined) => {
 	const { t } = useTranslation();
+	const auth = useAuth();
 	const [slots, setSlots] = useState<AttachmentSlot[]>([]);
+
+	// Mirrors is_admin(user) in app/authentication/authorization.py — admin
+	// and root get the relaxed count/total-size limits enforced server-side.
+	const isAdmin =
+		auth.status === "authenticated" &&
+		(auth.user.role === "admin" || auth.user.role === "root");
+	const maxAttachmentCount = isAdmin
+		? MAX_ATTACHMENT_COUNT_ADMIN
+		: MAX_ATTACHMENT_COUNT;
+	const maxAttachmentTotalBytes = isAdmin
+		? Infinity
+		: MAX_ATTACHMENT_TOTAL_BYTES;
 
 	const updateSlot = useCallback(
 		(localId: string, patch: Partial<AttachmentSlot>) => {
@@ -120,13 +138,15 @@ export const useAttachments = (conversationId: string | undefined) => {
 			for (const file of Array.from(files)) {
 				const localId = newLocalId();
 
-				if (count >= MAX_ATTACHMENT_COUNT) {
+				if (count >= maxAttachmentCount) {
 					added.push({
 						localId,
 						file,
 						status: "error",
 						id: null,
-						errorMessage: t("chat.attachmentTooMany"),
+						errorMessage: t("chat.attachmentTooMany", {
+							limit: maxAttachmentCount,
+						}),
 					});
 					continue;
 				}
@@ -142,13 +162,15 @@ export const useAttachments = (conversationId: string | undefined) => {
 					continue;
 				}
 
-				if (totalBytes + file.size > MAX_ATTACHMENT_TOTAL_BYTES) {
+				if (totalBytes + file.size > maxAttachmentTotalBytes) {
 					added.push({
 						localId,
 						file,
 						status: "error",
 						id: null,
-						errorMessage: t("chat.attachmentTooLarge"),
+						errorMessage: t("chat.attachmentTooLarge", {
+							limit: Math.round(maxAttachmentTotalBytes / (1024 * 1024)),
+						}),
 					});
 					continue;
 				}
@@ -181,7 +203,14 @@ export const useAttachments = (conversationId: string | undefined) => {
 					});
 			}
 		},
-		[conversationId, slots, t, updateSlot],
+		[
+			conversationId,
+			slots,
+			t,
+			updateSlot,
+			maxAttachmentCount,
+			maxAttachmentTotalBytes,
+		],
 	);
 
 	const removeSlot = useCallback((localId: string) => {
@@ -195,6 +224,8 @@ export const useAttachments = (conversationId: string | undefined) => {
 		addFiles,
 		removeSlot,
 		clear,
+		// Gates the composer's admin-only folder-upload control.
+		isAdmin,
 		// What sendMessage actually needs — only fully uploaded slots.
 		attachedIds: slots
 			.filter((slot) => slot.status === "done" && slot.id !== null)

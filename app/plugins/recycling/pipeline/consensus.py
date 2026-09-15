@@ -26,10 +26,15 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
-from labels import collapse_key, normalize
 from openai import OpenAI
 from pydantic import BaseModel, Field
-from vision import DetectedItem, DetectionError, detect_items
+
+from app.plugins.recycling.pipeline.labels import collapse_key, normalize
+from app.plugins.recycling.pipeline.vision import (
+    DetectedItem,
+    DetectionError,
+    detect_items,
+)
 
 # Maps a raw label to the key its observations are grouped under.
 #

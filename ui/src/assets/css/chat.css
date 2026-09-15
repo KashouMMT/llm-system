@@ -67,6 +67,49 @@
 	padding: 0.1em 0.3em;
 }
 
+.message-content .table-scroll-group {
+	margin: 0.5rem 0;
+}
+
+.message-content .table-scroll-top {
+	overflow-x: auto;
+	overflow-y: hidden;
+	/* Just tall enough to show the horizontal scrollbar track and
+	   nothing else — the spacer div inside it has no visible content. */
+	height: 14px;
+}
+
+.message-content .table-scroll-top > div {
+	height: 1px;
+}
+
+.message-content .table-scroll {
+	overflow-x: auto;
+}
+
+.message-content table {
+	border-collapse: collapse;
+	width: 100%;
+}
+
+.message-content th,
+.message-content td {
+	border: 1px solid var(--border);
+	padding: 0.4rem 0.6rem;
+	text-align: left;
+	/* Overrides .message-content's overflow-wrap: anywhere, which was
+	   splitting words like "Excluded" mid-letter to force every column
+	   into the bubble. nowrap lets each cell claim its natural width
+	   instead, so the table (not the words in it) is what overflows —
+	   .table-scroll is what turns that into a horizontal scrollbar. */
+	overflow-wrap: normal;
+	white-space: nowrap;
+}
+
+.message-content th {
+	background-color: var(--bg-subtle);
+}
+
 /* Syntax highlighting — weight/italic/opacity only, no new colors, to
    match the app's existing monochrome palette. Swap in real colors here
    later if you want a livelier code block. */

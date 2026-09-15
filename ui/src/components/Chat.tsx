@@ -59,6 +59,7 @@ const Chat = ({
 
 	const [input, setInput] = useState("");
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const folderInputRef = useRef<HTMLInputElement>(null);
 
 	// Built from `t` per render rather than as module constants, so they
 	// follow a language switch. Cheap: a handful of lookups.
@@ -405,6 +406,32 @@ const Chat = ({
 					>
 						<i className="bi bi-paperclip" aria-hidden="true" />
 					</button>
+
+					{attachments.isAdmin && (
+						<>
+							<input
+								ref={folderInputRef}
+								type="file"
+								multiple
+								hidden
+								// @ts-expect-error -- non-standard attributes; no
+								// React typing exists for a directory picker.
+								webkitdirectory=""
+								directory=""
+								onChange={handleFilesPicked}
+							/>
+
+							<button
+								type="button"
+								className="btn btn-outline-secondary attachment-button"
+								aria-label={t("chat.attachFolder")}
+								disabled={!conversationId}
+								onClick={() => folderInputRef.current?.click()}
+							>
+								<i className="bi bi-folder-fill" aria-hidden="true" />
+							</button>
+						</>
+					)}
 
 					<textarea
 						className="form-control"

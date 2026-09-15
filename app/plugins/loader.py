@@ -205,18 +205,29 @@ def load_tools(
     return tools
 
 
-def load_commands(*, enabled: Collection[str] = ()) -> dict[str, PluginCommand]:
+def load_commands(
+    context: ToolContext,
+    *,
+    enabled: Collection[str] = (),
+) -> dict[str, PluginCommand]:
     """
     Every slash command namespace, from every plugin that loaded.
 
     Collected the same way load_tools collects tools: one pass over the
     same plugin discovery, respecting the same ENABLED_TOOL_PLUGINS
     allowlist automatically — a plugin left out of that list contributes
-    neither tools nor commands. No `strict` parameter: a plugin that fails
-    to import already failed inside load_tools's own _discover call, and
-    TOOL_PLUGINS_STRICT already turned that into a startup failure there
-    when set; here it just yields no commands from that plugin, the same
-    outcome load_tools reaches when not strict.
+    neither tools nor commands. Each plugin's command_factory is called
+    with the same ToolContext load_tools hands to its factory, for the
+    same reason: a command handler that needs storage or the app's model
+    access gets it through a bound closure, never a module global.
+
+    No `strict` parameter: a plugin that fails to import already failed
+    inside load_tools's own _discover call, and TOOL_PLUGINS_STRICT already
+    turned that into a startup failure there when set; here it just yields
+    no commands from that plugin, the same outcome load_tools reaches when
+    not strict. A command_factory that raises is treated the same way — a
+    broken plugin's commands must not be able to take startup down when its
+    tools alone would not have either.
 
     Two plugins naming the same namespace is never survivable, exactly
     like a duplicate tool name — an ambiguous `/foo` is not something a
@@ -228,7 +239,15 @@ def load_commands(*, enabled: Collection[str] = ()) -> dict[str, PluginCommand]:
     provider_of: dict[str, str] = {}
 
     for plugin in plugins:
-        for command in plugin.commands:
+        try:
+            provided = list(plugin.command_factory(context))
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Plugin command_factory failed | plugin=%s", plugin.name
+            )
+            continue
+
+        for command in provided:
             if command.namespace in provider_of:
                 raise ValueError(
                     f"Duplicate command namespace '/{command.namespace}': "
