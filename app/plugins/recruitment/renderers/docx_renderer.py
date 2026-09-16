@@ -15,7 +15,7 @@ from pathlib import Path
 
 from docxtpl import DocxTemplate
 
-from app.plugins.documents.schemas_shokumu import JobEntry, ShokumuKeirekisho
+from app.plugins.recruitment.schemas_shokumu import JobEntry, ShokumuKeirekisho
 from app.utils.jst import today_in_japan
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"

@@ -2,7 +2,7 @@
 What time it is in Japan.
 
 Separated from the document date formatting in
-app/plugins/documents/dates.py because this is a fact about the
+app/plugins/recruitment/dates.py because this is a fact about the
 application — the clock tool needs it, and any future subsystem
 timestamping something for a Japanese user will too — while 和暦 and
 満年齢 are facts about how a 履歴書 is printed. Keeping both in one

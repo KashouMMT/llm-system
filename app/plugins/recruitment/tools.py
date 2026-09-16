@@ -7,54 +7,17 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
-from app.plugins.documents.renderers.base import Renderer
-from app.plugins.documents.renderers.docx_renderer import DocxRenderer
-from app.plugins.documents.renderers.xlsx_renderer import XlsxRenderer
-from app.plugins.documents.schemas_rirekisho import Rirekisho
-from app.plugins.documents.schemas_shokumu import ShokumuKeirekisho
+from app.plugins.recruitment import prompts
+from app.plugins.recruitment.renderers.base import Renderer
+from app.plugins.recruitment.renderers.docx_renderer import DocxRenderer
+from app.plugins.recruitment.renderers.xlsx_renderer import XlsxRenderer
+from app.plugins.recruitment.schemas_rirekisho import Rirekisho
+from app.plugins.recruitment.schemas_shokumu import ShokumuKeirekisho
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
 from app.utils.jst import JST
 from app.utils.logger import logger
-
-# These strings are sent to the model on every single call as part of the
-# tool schema, alongside every field description in the corresponding
-# schema. They are prompt text, not documentation — which is also why they
-# live here rather than in anna.txt, where they would be paid for even on
-# turns that have nothing to do with documents.
-_RIREKISHO_DESCRIPTION = """\
-Generate a 履歴書 (rirekisho) file the user can download.
-
-Call this ONLY when all of the following are true:
-- The user has explicitly asked for their 履歴書 to be created.
-- You have confirmed every required field with the user in conversation.
-- You are not guessing, inferring, or filling in any value yourself.
-
-Do NOT call this to draft, preview, or discuss a 履歴書 — write that as a
-normal reply instead. This tool produces a finished file, so calling it
-early produces a document with wrong information in it.
-
-If a required field is missing, do not call this tool. Ask the user for the
-missing information first.
-"""
-
-_SHOKUMU_KEIREKISHO_DESCRIPTION = """\
-Generate a 職務経歴書 (shokumu keirekisho, detailed work history) file the
-user can download.
-
-Call this ONLY when all of the following are true:
-- The user has explicitly asked for their 職務経歴書 to be created.
-- You have confirmed every required field with the user in conversation.
-- You are not guessing, inferring, or filling in any value yourself.
-
-Do NOT call this to draft, preview, or discuss a 職務経歴書 — write that as
-a normal reply instead. This tool produces a finished file, so calling it
-early produces a document with wrong information in it.
-
-If a required field is missing, do not call this tool. Ask the user for the
-missing information first.
-"""
 
 
 def make_document_tools(
@@ -162,21 +125,9 @@ def make_document_tools(
                 time.perf_counter() - start,
             )
 
-            # Everything here is read by the model and may end up quoted in
-            # its reply. The link ban is not decoration: told only that a
-            # file "is attached", the model will build a plausible download
-            # path around the filename — a first test run produced
-            # "sandbox:/mnt/data/...", a convention from its training data
-            # that points nowhere in this application. The real download
-            # comes from the message attachment, so any link it writes is
-            # broken by construction.
-            return (
-                f"{display_name} generated successfully as {filename}. "
-                "The download is attached to this message automatically and "
-                "the user can already see it. Tell them it is ready, in one "
-                "or two sentences. Never write a link, URL, file path, or "
-                "download button of your own — any link you write will be "
-                "broken. Do not repeat the document's contents."
+            return prompts.GENERATED.format(
+                display_name=display_name,
+                filename=filename,
             )
 
         return StructuredTool.from_function(
@@ -189,7 +140,7 @@ def make_document_tools(
     return [
         _make_generate_tool(
             name="generate_rirekisho",
-            description=_RIREKISHO_DESCRIPTION,
+            description=prompts.RIREKISHO_DESCRIPTION,
             schema_cls=Rirekisho,
             renderer=XlsxRenderer(),
             document_type="rirekisho",
@@ -198,7 +149,7 @@ def make_document_tools(
         ),
         _make_generate_tool(
             name="generate_shokumu_keirekisho",
-            description=_SHOKUMU_KEIREKISHO_DESCRIPTION,
+            description=prompts.SHOKUMU_KEIREKISHO_DESCRIPTION,
             schema_cls=ShokumuKeirekisho,
             renderer=DocxRenderer(),
             document_type="shokumu_keirekisho",

@@ -1,13 +1,18 @@
 """
 The contract between the application and a tool plugin.
 
-Two small frozen dataclasses, deliberately: a plugin should be able to
+Small frozen dataclasses, deliberately: a plugin should be able to
 declare itself without importing anything from the runtime, and the
 runtime should be able to load a plugin without knowing what it does.
+
+The one helper here, load_plugin_prompt, exists because every plugin that
+contributes to the system prompt would otherwise write the same four
+lines of file reading.
 """
 
 from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -18,6 +23,49 @@ from app.authentication.models import User
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
+from app.utils.logger import logger
+
+# The conventional name for a plugin's system-prompt contribution, read
+# by load_plugin_prompt from beside the plugin's __init__.py.
+PLUGIN_PROMPT_FILE = "plugin_prompt.txt"
+
+
+def load_plugin_prompt(
+    package_file: str,
+    filename: str = PLUGIN_PROMPT_FILE,
+) -> str:
+    """
+    Read a plugin's system-prompt contribution from a file beside its
+    __init__.py. Call it as load_plugin_prompt(__file__).
+
+    A plugin's model-facing text lives in one of two places and the split
+    is deliberate:
+
+    - `plugin_prompt.txt`, returned by this function and injected into the
+      system prompt, so it is paid for on **every** turn. Only what a tool
+      schema structurally cannot carry belongs here: how several tools fit
+      together, lifecycle facts (what does and does not survive a turn),
+      and when *not* to call something.
+    - `prompts.py` inside the plugin, which holds the text the plugin says
+      at runtime — tool descriptions, remedies, messages returned to the
+      model. Paid for only when that tool is described or called.
+
+    A missing or unreadable file is logged and returns "" rather than
+    raising. The plugin's tools still work without its prompt; failing the
+    whole plugin over a text file would be a worse trade than a loud log.
+    """
+    path = Path(package_file).resolve().parent / filename
+
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        logger.error(
+            "Plugin prompt unreadable | path=%s error=%s",
+            path,
+            error,
+        )
+
+        return ""
 
 
 @dataclass(frozen=True)
@@ -129,6 +177,13 @@ class ToolPlugin:
     folder. It is never sent to the model; what the model reads is each
     tool's own name and description.
 
+    `system_prompt` is the opposite: text appended to the persona's system
+    prompt for as long as this plugin is loaded, so the agent knows how
+    the plugin's tools fit together rather than only what each one does.
+    Usually `load_plugin_prompt(__file__)`. It rides on every request, so
+    a plugin that has nothing a tool description cannot already say should
+    leave it empty — which is the default, and the common case.
+
     `command_factory` is optional and independent of `factory`/tools — a
     plugin may offer either, both, or neither. Same shape as `factory`,
     called once at startup with the same ToolContext, for the same reason:
@@ -139,6 +194,7 @@ class ToolPlugin:
     name: str
     factory: Callable[[ToolContext], Sequence[BaseTool]]
     description: str = ""
+    system_prompt: str = ""
     command_factory: Callable[[ToolContext], Sequence[PluginCommand]] = (
         lambda _context: ()
     )

@@ -74,6 +74,7 @@ class AgentGraph:
         tools: Sequence[BaseTool],
         checkpointer: AsyncPostgresSaver,
         conversation_context_builder: ConversationContextBuilder,
+        plugin_prompts: str = "",
     ) -> None:
         self.llm = llm
         self.settings = settings
@@ -81,11 +82,18 @@ class AgentGraph:
         self.tools = tools
         self.checkpointer = checkpointer
         self.conversation_context_builder = conversation_context_builder
+        # Travels with `tools` rather than being read from a module
+        # global: it is the loaded plugins' own contribution to the system
+        # prompt, and it has to describe the same plugin set this graph
+        # was built with.
+        self.plugin_prompts = plugin_prompts
 
         logger.debug(
-            "Initializing AgentGraph | tools=%s provider=%s",
+            "Initializing AgentGraph | tools=%s provider=%s "
+            "plugin_prompt_characters=%s",
             [tool.name for tool in tools],
             provider,
+            len(plugin_prompts),
         )
 
         self.graph = self._build_graph()
@@ -104,6 +112,7 @@ class AgentGraph:
             settings=self.settings,
             provider=self.provider,
             tools=self.tools,
+            plugin_prompts=self.plugin_prompts,
         )
 
         tool_node = ToolNode(self.tools, handle_tool_errors=_report_tool_error)

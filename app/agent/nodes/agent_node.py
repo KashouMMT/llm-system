@@ -68,6 +68,7 @@ def create_agent_node(
     settings: RuntimeSettingsHolder,
     provider: str,
     tools: Sequence[BaseTool],
+    plugin_prompts: str = "",
 ) -> AgentNode:
     """
     Create the LLM decision node.
@@ -78,6 +79,10 @@ def create_agent_node(
     Sampling parameters and the persona are read per invocation rather
     than captured here, so a settings change reaches the next turn
     without rebuilding the graph.
+
+    `plugin_prompts` is captured here instead, alongside `tools`, because
+    it describes the same thing those tools do and changes only when they
+    do — which is to say only by restarting the process.
     """
     llm_with_tools = llm.bind_tools(tools)
 
@@ -115,7 +120,10 @@ def create_agent_node(
         # must not apply to half an answer.
         current_settings = settings.current
 
-        system_prompt = load_system_prompt(current_settings.system_prompt_name)
+        system_prompt = load_system_prompt(
+            current_settings.system_prompt_name,
+            plugin_prompts,
+        )
 
         model = bind_sampling(
             llm_with_tools,

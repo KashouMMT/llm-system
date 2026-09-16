@@ -1,17 +1,34 @@
-# documents
+# recruitment
 
-The largest plugin: the whole 履歴書 (rirekisho) / 職務経歴書 (shokumu
-keirekisho) generation vertical — schemas, layout, rendering, templates,
-and the one-off scripts that built those templates. Two tools,
+The largest plugin: the whole recruitment vertical — interviewing a job
+seeker, validating what they gave, and producing 履歴書 (rirekisho) and
+職務経歴書 (shokumu keirekisho) — with its schemas, layout, rendering,
+templates, and the one-off scripts that built those templates. Two tools,
 `generate_rirekisho` and `generate_shokumu_keirekisho`, are the only thing
 the model calls; everything else in this folder exists to make those two
 calls correct.
+
+Named for the business domain, not for the file format it emits. It was
+called `documents` until the recycling plugin made that name misleading —
+that plugin writes files too, and "documents" read as though any
+file-producing feature belonged here.
+
+**Where the domain knowledge lives.** `plugin_prompt.txt` holds what the
+model needs to know before it decides to call anything: the seven
+interview steps, the pre-generation checks, when to call each tool, and
+the blank forms. All of it used to sit in `app/prompts/anna/system_prompt.txt`,
+where it was sent even to a deployment that had named this plugin in
+`EXCLUDED_TOOL_PLUGINS`. The persona file now describes only who Anna is
+and how she behaves; what she can *do* comes from here, and disappears
+with the plugin.
 
 ## Files
 
 | File / folder | Contents |
 |---|---|
-| `__init__.py` | `PLUGIN` — exposes both tools via `make_document_tools` |
+| `__init__.py` | `PLUGIN` — exposes both tools via `make_document_tools`, injects `plugin_prompt.txt` |
+| `plugin_prompt.txt` | Injected into the system prompt while the plugin is loaded: interview steps, validation, document generation, blank forms |
+| `prompts.py` | Runtime text: the two tool descriptions and the post-generation message |
 | `tools.py` | The two tools, built from one shared closure factory (validate → render → store → record) |
 | `schemas_rirekisho.py` | `Rirekisho` and its nested types — doubles as `generate_rirekisho`'s `args_schema`, so every field description is prompt text |
 | `schemas_shokumu.py` | `ShokumuKeirekisho` — imports `YearMonth`/`KANA_PATTERN` from `schemas_rirekisho` rather than restating them |

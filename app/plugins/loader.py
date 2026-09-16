@@ -36,6 +36,14 @@ PLUGINS_DIR = Path(__file__).resolve().parent
 # than by guessing.
 TOOL_SCHEMA_TOKEN_BUDGET = 3000
 
+# Deliberately no budget constant for plugin prompts, unlike tool schemas
+# above. A tool schema's size creeps up per plugin folder without anyone
+# deciding to spend it; a plugin_prompt.txt is written by hand, one file,
+# read in full by whoever wrote it. The recruitment plugin's is
+# persona-sized on purpose. The combined size is logged at startup so it
+# can be measured, and SYSTEM_PROMPT_TOKEN_BUDGET still bounds the total
+# prompt that is actually sent.
+
 
 def _estimate_tokens(text: str) -> int:
     """
@@ -59,12 +67,26 @@ def _estimate_tool_tokens(tool: BaseTool) -> int:
     return _estimate_tokens(f"{tool.name}{tool.description}{arguments}")
 
 
-def _discover(enabled: Collection[str]) -> tuple[list[ToolPlugin], list[str]]:
+def _discover(
+    excluded: Collection[str],
+    *,
+    quiet: bool = False,
+) -> tuple[list[ToolPlugin], list[str]]:
     """
     Import every plugin package and collect its PLUGIN declaration.
 
+    `excluded` names the plugin folders to leave out; everything else
+    present is loaded. An excluded plugin is never imported at all, so its
+    module-level code does not run and its dependencies are never touched.
+
     Returns the plugins and the names that failed, so a single run
     reports everything that is broken rather than only the first thing.
+
+    `quiet` suppresses only the per-plugin "excluded" line. Startup calls
+    this more than once — tools, then commands, then prompts — and the
+    exclusion decision is the same every time, so repeating it would make
+    the startup log look like three different decisions. Import and
+    declaration failures are never quiet.
     """
     plugins: list[ToolPlugin] = []
     failed: list[str] = []
@@ -82,11 +104,13 @@ def _discover(enabled: Collection[str]) -> tuple[list[ToolPlugin], list[str]]:
         if info.name.startswith("_"):
             continue
 
-        if enabled and info.name not in enabled:
-            logger.info(
-                "Tool plugin skipped | plugin=%s reason=not_in_ENABLED_TOOL_PLUGINS",
-                info.name,
-            )
+        if info.name in excluded:
+            if not quiet:
+                logger.info(
+                    "Tool plugin skipped | plugin=%s "
+                    "reason=in_EXCLUDED_TOOL_PLUGINS",
+                    info.name,
+                )
             continue
 
         try:
@@ -120,24 +144,24 @@ def _discover(enabled: Collection[str]) -> tuple[list[ToolPlugin], list[str]]:
 def load_tools(
     context: ToolContext,
     *,
-    enabled: Collection[str] = (),
+    excluded: Collection[str] = (),
     strict: bool = False,
 ) -> list[BaseTool]:
     """
     Every tool the agent may call, from every plugin that loaded.
 
-    `enabled`, when non-empty, is an allowlist of plugin names; empty
-    means load whatever is present.
+    `excluded` is a denylist of plugin folder names; empty means load
+    whatever is present.
 
     A plugin that fails to import or whose factory raises is logged and
     skipped, so one broken plugin does not take the process down with
     it. `strict` turns that into a startup failure instead, which is the
     right setting anywhere the absence of a tool is not acceptable: the
-    user-visible symptom of a silently skipped document plugin is the
+    user-visible symptom of a silently skipped recruitment plugin is the
     assistant apologising that it cannot make a 履歴書, which reads like
     a model problem rather than a load problem.
     """
-    plugins, failed = _discover(enabled)
+    plugins, failed = _discover(excluded)
 
     tools: list[BaseTool] = []
     provider_of: dict[str, str] = {}
@@ -208,15 +232,15 @@ def load_tools(
 def load_commands(
     context: ToolContext,
     *,
-    enabled: Collection[str] = (),
+    excluded: Collection[str] = (),
 ) -> dict[str, PluginCommand]:
     """
     Every slash command namespace, from every plugin that loaded.
 
     Collected the same way load_tools collects tools: one pass over the
-    same plugin discovery, respecting the same ENABLED_TOOL_PLUGINS
-    allowlist automatically — a plugin left out of that list contributes
-    neither tools nor commands. Each plugin's command_factory is called
+    same plugin discovery, respecting the same EXCLUDED_TOOL_PLUGINS
+    denylist automatically — an excluded plugin contributes neither tools
+    nor commands, so `/recycle` is not merely refused but unknown. Each plugin's command_factory is called
     with the same ToolContext load_tools hands to its factory, for the
     same reason: a command handler that needs storage or the app's model
     access gets it through a bound closure, never a module global.
@@ -233,7 +257,7 @@ def load_commands(
     like a duplicate tool name — an ambiguous `/foo` is not something a
     user can route around.
     """
-    plugins, _failed = _discover(enabled)
+    plugins, _failed = _discover(excluded)
 
     commands: dict[str, PluginCommand] = {}
     provider_of: dict[str, str] = {}
@@ -264,3 +288,49 @@ def load_commands(
     )
 
     return commands
+
+
+def load_plugin_prompts(*, excluded: Collection[str] = ()) -> str:
+    """
+    The system-prompt contributions of every loaded plugin, joined into
+    one block for app.llm.system_prompt to append to the persona.
+
+    Collected from the same discovery pass and the same denylist as tools
+    and commands, which is the whole point: a plugin that is not loaded
+    must not be able to tell the model about tools that are not there.
+    Excluding `attachments` has to remove "call read_attachment" from the
+    prompt as well as removing the tool.
+
+    Order follows plugin name, like the tool list and for the same
+    reason — a prompt that reshuffles itself between restarts busts
+    provider-side prompt caching for no benefit.
+
+    No `strict` parameter: a plugin that could not be imported already
+    failed inside load_tools' own discovery, where TOOL_PLUGINS_STRICT
+    decided what that means. Here it simply contributes nothing.
+    """
+    plugins, _failed = _discover(excluded, quiet=True)
+
+    sections: list[str] = []
+    contributors: list[str] = []
+
+    for plugin in plugins:
+        prompt = plugin.system_prompt.strip()
+
+        if not prompt:
+            continue
+
+        sections.append(prompt)
+        contributors.append(plugin.name)
+
+    combined = "\n\n".join(sections)
+    estimated_tokens = _estimate_tokens(combined)
+
+    logger.info(
+        "Plugin prompts ready | plugins=%s characters=%s estimated_tokens=%s",
+        contributors,
+        len(combined),
+        estimated_tokens,
+    )
+
+    return combined

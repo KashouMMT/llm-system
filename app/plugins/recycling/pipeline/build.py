@@ -1,9 +1,9 @@
 """Catalog construction: harvest -> cluster -> enrich -> assemble -> merge.
 
-Both playground/build_catalog.py's original CLI logic and the recycling
-plugin's /recycle build_catalog call into this module, so there is exactly
-one copy of the clustering and enrichment prompts and logic to keep
-correct.
+/recycle build_catalog is the only caller; the standalone CLI this logic
+started as has been deleted. The clustering and enrichment instructions it
+sends live in pipeline/prompts.py, beside the detection ones, so every
+prompt this plugin issues can be read in one place.
 
 Five stages, each caching its output so an expensive stage is never
 repeated by accident:
@@ -41,6 +41,7 @@ from pathlib import Path
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
+from app.plugins.recycling.pipeline import prompts
 from app.plugins.recycling.pipeline.catalog import (
     Catalog,
     CatalogItem,
@@ -98,31 +99,6 @@ class ClusterResult(BaseModel):
     items: list[ClusteredItem]
 
 
-_CLUSTER_PROMPT = """\
-Below is every object label a vision model produced across a set of photographs,
-with how many times each appeared. Group them into canonical items.
-
-Merge two labels ONLY if they name the same physical object AND would be handled
-identically. "table" and "desk" merge. "headset" and "headphone" merge.
-"mouse" and "mouse pad" do NOT merge - they are different objects that happen to
-have similar names. "office chair" and "plastic chair" do NOT merge - same
-category, different objects.
-
-Mark `excluded` for anything that is not a collectable item:
-- structure of the building: wall, floor, ceiling, window, door, curtain
-- people and clothing
-- food, drink, and rubbish
-- surfaces and fixtures that stay with the room
-
-Every input label must appear exactly once, either as a canonical_label or in
-exactly one aliases list. Do not drop any, and do not invent labels that are not
-in the input.
-
-Observed labels:
-{labels}
-"""
-
-
 # --------------------------------------------------------------------------
 # Stage 3 schema: metadata enrichment
 # --------------------------------------------------------------------------
@@ -151,24 +127,6 @@ class EnrichedItem(BaseModel):
 
 class EnrichResult(BaseModel):
     items: list[EnrichedItem]
-
-
-_ENRICH_PROMPT = """\
-For each item below, give typical physical properties of ONE unit, as commonly
-found in a household or small warehouse.
-
-Rules:
-- Estimate from general knowledge. These are approximations and are labelled as
-  such downstream, so a reasonable estimate is far better than null.
-- Use null only when the item is so variable that any number would mislead.
-- Dimensions are the bounding box in centimetres, largest dimension first.
-- Give a min and max weight that honestly reflect how much this varies.
-- Do NOT estimate price. Price is not your job and a plausible wrong price is
-  worse than no price.
-
-Items:
-{labels}
-"""
 
 
 # --------------------------------------------------------------------------
@@ -233,7 +191,7 @@ def cluster(
         completion = client.chat.completions.parse(
             model=model,
             messages=[
-                {"role": "user", "content": _CLUSTER_PROMPT.format(labels=listing)}
+                {"role": "user", "content": prompts.CLUSTER.format(labels=listing)}
             ],
             response_format=ClusterResult,
         )
@@ -321,7 +279,7 @@ def enrich(
             completion = client.chat.completions.parse(
                 model=model,
                 messages=[
-                    {"role": "user", "content": _ENRICH_PROMPT.format(labels=listing)}
+                    {"role": "user", "content": prompts.ENRICH.format(labels=listing)}
                 ],
                 response_format=EnrichResult,
             )

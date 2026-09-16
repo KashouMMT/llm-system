@@ -19,11 +19,11 @@ from typing import Protocol
 
 from pydantic import BaseModel
 
-from app.plugins.documents.renderers.base import Renderer
-from app.plugins.documents.renderers.docx_renderer import DocxRenderer
-from app.plugins.documents.renderers.xlsx_renderer import XlsxRenderer
-from app.plugins.documents.schemas_rirekisho import Rirekisho
-from app.plugins.documents.schemas_shokumu import ShokumuKeirekisho
+from app.plugins.recruitment.renderers.base import Renderer
+from app.plugins.recruitment.renderers.docx_renderer import DocxRenderer
+from app.plugins.recruitment.renderers.xlsx_renderer import XlsxRenderer
+from app.plugins.recruitment.schemas_rirekisho import Rirekisho
+from app.plugins.recruitment.schemas_shokumu import ShokumuKeirekisho
 
 
 class BlankableSchema(Protocol):

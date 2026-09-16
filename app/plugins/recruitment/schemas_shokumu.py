@@ -2,7 +2,7 @@ from itertools import pairwise
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from app.plugins.documents.schemas_rirekisho import (
+from app.plugins.recruitment.schemas_rirekisho import (
     KANA_PATTERN,
     LicenseEntry,
     YearMonth,

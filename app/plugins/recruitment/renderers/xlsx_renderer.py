@@ -17,11 +17,11 @@ from openpyxl import load_workbook
 from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.plugins.documents.dates import age_on
-from app.plugins.documents.layouts import rirekisho_jis as layout
-from app.plugins.documents.layouts.rirekisho_jis import LayoutOverflow, Region
-from app.plugins.documents.renderers.ooxml import restore_drawings
-from app.plugins.documents.schemas_rirekisho import (
+from app.plugins.recruitment.dates import age_on
+from app.plugins.recruitment.layouts import rirekisho_jis as layout
+from app.plugins.recruitment.layouts.rirekisho_jis import LayoutOverflow, Region
+from app.plugins.recruitment.renderers.ooxml import restore_drawings
+from app.plugins.recruitment.schemas_rirekisho import (
     HistoryEntry,
     LicenseEntry,
     Rirekisho,

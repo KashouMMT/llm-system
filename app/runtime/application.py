@@ -27,7 +27,7 @@ from app.config.runtime_settings import (
 from app.config.settings import (
     AUTH_BOOTSTRAP_EMAIL,
     AUTH_BOOTSTRAP_PASSWORD,
-    ENABLED_TOOL_PLUGINS,
+    EXCLUDED_TOOL_PLUGINS,
     FILE_STORAGE_DIR,
     LLM_API_KEY,
     LLM_BASE_URL,
@@ -40,7 +40,14 @@ from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
 from app.llm.system_prompt import load_system_prompt
-from app.plugins import LLMAccess, PluginCommand, ToolContext, load_commands, load_tools
+from app.plugins import (
+    LLMAccess,
+    PluginCommand,
+    ToolContext,
+    load_commands,
+    load_plugin_prompts,
+    load_tools,
+)
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
@@ -131,6 +138,9 @@ class Application:
     def __init__(self) -> None:
         self.llm = None
         self.system_prompt: str = ""
+        # What the loaded plugins add to that prompt. Empty until
+        # initialize() has discovered them.
+        self.plugin_prompts: str = ""
 
         self.checkpointer: AsyncPostgresSaver | None = None
         self._resources: AsyncExitStack | None = None
@@ -234,7 +244,9 @@ class Application:
             logger.info("Loading system prompt")
             # Loaded once here to fail fast on a bad SYSTEM_PROMPT and to
             # log its size. The agent node reloads it per turn, so this
-            # value is not what the model actually receives.
+            # value is not what the model actually receives — plugins have
+            # not even been discovered yet at this point, so it is missing
+            # their contribution entirely (logged separately, below).
             self.system_prompt = load_system_prompt(
                 self.runtime_settings.current.system_prompt_name,
             )
@@ -298,13 +310,19 @@ class Application:
             )
             tools = load_tools(
                 tool_context,
-                enabled=ENABLED_TOOL_PLUGINS,
+                excluded=EXCLUDED_TOOL_PLUGINS,
                 strict=TOOL_PLUGINS_STRICT,
             )
 
             logger.info("Loading slash commands")
-            self.commands = load_commands(tool_context, enabled=ENABLED_TOOL_PLUGINS)
+            self.commands = load_commands(tool_context, excluded=EXCLUDED_TOOL_PLUGINS)
             logger.info("Slash commands loaded | namespaces=%s", sorted(self.commands))
+
+            logger.info("Loading plugin prompts")
+            # Collected after the tools, from the same allowlist, so a
+            # plugin can never contribute prompt text describing tools the
+            # agent was not given.
+            self.plugin_prompts = load_plugin_prompts(excluded=EXCLUDED_TOOL_PLUGINS)
 
             logger.info("Creating AgentGraph")
             self.agent_graph = AgentGraph(
@@ -314,6 +332,7 @@ class Application:
                 tools=tools,
                 checkpointer=self.checkpointer,
                 conversation_context_builder=(self.conversation_context_builder),
+                plugin_prompts=self.plugin_prompts,
             )
             logger.info("AgentGraph initialized")
 

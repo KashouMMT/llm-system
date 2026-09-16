@@ -71,8 +71,34 @@ deltas:
 | `LOG_LEVEL` | `INFO` |
 | `CONVERSATION_LOG` | `false` |
 | `ALLOW_REGISTRATION` | `false` once the accounts this deployment needs exist — `POST /auth/register` is public with no invite flow, so left open on a reachable IP/domain it lets anyone create an account and start filling disk via uploads |
+| `EXCLUDED_TOOL_PLUGINS` | **`recycling`** — see below. |
 
 No `DB_*` split parts — `DATABASE_URL` wins whenever it is set.
+
+### `EXCLUDED_TOOL_PLUGINS` is not optional here
+
+This deployment is the job-application product. `app/plugins/recycling/` is a
+separate R&D product that happens to live in the same repository, and it must
+never load here: it registers `/recycle`, calls a vision model on uploaded
+photographs, and has nothing to do with 履歴書 generation.
+
+The variable is a **denylist** — empty loads every plugin folder present. That
+is deliberate (adding a tool stays "drop a folder in and restart") but it means
+this fails *open*: leave it unset and recycling ships to production. It was an
+allowlist naming every wanted plugin, which failed closed but had to be edited
+on every deployment each time a plugin was added, and a forgotten name disabled
+a feature silently.
+
+The practical consequence: **when a new plugin folder is added to the repo,
+decide whether production should run it, and if not, add it here.** Nothing
+else will catch it. Confirm what actually loaded after a release —
+
+```bash
+docker logs llm-system-api 2>&1 | grep "Tool plugin"
+```
+
+Expect a `Tool plugin skipped | plugin=recycling reason=in_EXCLUDED_TOOL_PLUGINS`
+line and no `/recycle` namespace in the `Slash commands ready` line that follows.
 
 ## CI/CD pipeline
 

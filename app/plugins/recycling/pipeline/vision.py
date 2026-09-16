@@ -17,6 +17,8 @@ from openai import OpenAI
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from app.plugins.recycling.pipeline import prompts
+
 # Phone photos are 4000px wide and cost tokens proportional to their area, while
 # adding nothing a model needs to tell a chair from a microwave. Downscaling is
 # the single cheapest cost lever in the whole pipeline.
@@ -59,60 +61,6 @@ class DetectionResult(BaseModel):
 
 class DetectionError(RuntimeError):
     """Raised when an image cannot be read or the model returns nothing usable."""
-
-
-_OPEN_SCAN_PROMPT = """\
-List every distinct physical object visible in this image.
-
-Rules:
-- Use simple lowercase singular common nouns ("laptop", not "Dell XPS 13 laptop").
-- Group identical objects into ONE entry with a count. Six identical chairs is
-  one entry with count 6, not six entries.
-- Group objects of the same kind even if they differ in colour or size.
-- Do NOT identify brands or models. A 2K TV and a 4K TV are both "tv".
-- Do NOT assess condition or damage.
-- Include structural parts of the room (door, wall, window, floor, ceiling) if
-  you see them. The caller filters those out; that is not your job.
-- If you are unsure what something is, still list it with your best guess and a
-  low confidence rather than omitting it.
-"""
-
-_TARGETED_PROMPT = """\
-Count how many of each of these objects are visible in this image:
-
-{targets}
-
-Rules:
-- Return exactly one entry per object in the list above, in that order.
-- Use the object name exactly as written above as the label.
-- If an object is not present, return it with count 0.
-- Do NOT report anything that is not on the list.
-"""
-
-_MULTI_VIEW_PROMPT = """\
-The images that follow are multiple photographs of ONE room, taken from
-different positions or angles. They are views of the same physical space, not
-separate rooms.
-
-List every distinct physical object visible across all of the images
-combined, with a total count for each.
-
-Rules:
-- If the same physical object appears in more than one photo (e.g. a sofa
-  visible in image 1 and again in image 2 from another angle), count it
-  ONCE, not once per photo. Do NOT count the same physical object twice.
-- Use simple lowercase singular common nouns ("laptop", not "Dell XPS 13
-  laptop").
-- Group identical objects into ONE entry with a count. Six identical chairs
-  is one entry with count 6, not six entries.
-- Group objects of the same kind even if they differ in colour or size.
-- Do NOT identify brands or models. A 2K TV and a 4K TV are both "tv".
-- Do NOT assess condition or damage.
-- Include structural parts of the room (door, wall, window, floor, ceiling)
-  if you see them. The caller filters those out; that is not your job.
-- If you are unsure what something is, still list it with your best guess
-  and a low confidence rather than omitting it.
-"""
 
 
 def build_client(api_key: str, base_url: str | None = None) -> OpenAI:
@@ -250,11 +198,11 @@ def detect_items(
     data_url = encode_image(image_path)
 
     if targets:
-        instruction = _TARGETED_PROMPT.format(
+        instruction = prompts.TARGETED.format(
             targets="\n".join(f"- {name}" for name in targets)
         )
     else:
-        instruction = _OPEN_SCAN_PROMPT
+        instruction = prompts.OPEN_SCAN
 
     return _call_vision(
         [data_url], instruction, client=client, model=model, temperature=temperature
@@ -280,7 +228,11 @@ def detect_items_multi(
     data_urls = [encode_image(path) for path in image_paths]
 
     return _call_vision(
-        data_urls, _MULTI_VIEW_PROMPT, client=client, model=model, temperature=temperature
+        data_urls,
+        prompts.MULTI_VIEW,
+        client=client,
+        model=model,
+        temperature=temperature,
     )
 
 
@@ -303,7 +255,7 @@ def detect_items_bytes(
         raise DetectionError("No images given.")
 
     data_urls = [encode_image_bytes(data) for data in images]
-    instruction = _OPEN_SCAN_PROMPT if len(data_urls) == 1 else _MULTI_VIEW_PROMPT
+    instruction = prompts.OPEN_SCAN if len(data_urls) == 1 else prompts.MULTI_VIEW
 
     return _call_vision(
         data_urls, instruction, client=client, model=model, temperature=temperature

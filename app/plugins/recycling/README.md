@@ -3,7 +3,7 @@
 `/recycle` — the recyclable-item scanner. No tools at all, only slash
 commands: a scan never enters the model's tool schema, by design, so this
 plugin cannot confuse the `anna` persona even when both are loaded in the
-same deployment. **Must stay out of `ENABLED_TOOL_PLUGINS` on the deploy
+same deployment. **Must be named in `EXCLUDED_TOOL_PLUGINS` on the deploy
 branch** — the production job-application service must never load it. See
 `documentation/other/Recycling_Estimator_TODO.md`, the context-restore
 document this plugin is built from; read that before changing anything

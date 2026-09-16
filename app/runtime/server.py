@@ -32,7 +32,7 @@ from app.config.settings import (
     UPLOAD_MAX_BYTES,
 )
 from app.llm.system_prompt import load_first_message
-from app.plugins.documents.blank import BLANK_DOCUMENTS
+from app.plugins.recruitment.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.file_repository import serialize_attachment
 from app.repositories.message_repository import TurnLookup

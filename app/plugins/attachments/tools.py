@@ -9,7 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
-from app.config.settings import LLM_SUPPORTS_VISION
+from app.plugins.attachments import prompts
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
 from app.utils.attachment_manifest import READABLE_CONTENT_TYPES
@@ -20,6 +20,9 @@ from app.utils.logger import logger
 # A model-facing page size, not the file's own page count — a plain-text
 # upload has no native "page" at all, so this is applied uniformly to
 # whatever text extraction produced, regardless of format.
+#
+# The two prompt templates that quote this number take it from here, so
+# the text the model reads cannot drift from what pagination does.
 _PAGE_SIZE_CHARS = 8000
 
 # A PDF page yielding fewer non-whitespace characters than this is treated
@@ -27,42 +30,13 @@ _PAGE_SIZE_CHARS = 8000
 # page number or a stamp that some tool added as real text.
 _MIN_CHARS_PER_TEXT_PAGE = 20
 
-# What the model should ask the user for when a PDF has no text to read.
-# A screenshot only helps a model that can see it.
-_NO_TEXT_REMEDY = (
-    "Tell the user this, and ask them to send screenshots or photos of "
-    "those pages instead — you can view images."
-    if LLM_SUPPORTS_VISION
-    else "Tell the user this, and ask them to paste or type the content you "
-    "need — you cannot view images in this deployment."
-)
-
-_READ_ATTACHMENT_DESCRIPTION = """\
-Read the extracted text of a PDF or plain-text file (UTF-8 or Shift_JIS)
-that was attached to this conversation. Use the id from its
-[attachment id=...] manifest line — never a filename.
-
-Text comes back in pages of about 8,000 characters, one at a time. The
-response tells you the page number and how many pages exist; call again
-with a higher page to keep reading a long document.
-
-For an image, this returns only its metadata: images are visible to you
-only on the turn they were attached, never through this tool.
-
-An id that does not belong to this conversation, or does not exist,
-returns a not-found message rather than an error.
-"""
-
 
 class ReadAttachmentArgs(BaseModel):
-    attachment_id: str = Field(
-        description="The attachment's id, exactly as it appears in its "
-        "[attachment id=...] manifest line.",
-    )
+    attachment_id: str = Field(description=prompts.ATTACHMENT_ID_ARG)
     page: int = Field(
         default=1,
         ge=1,
-        description="Which ~8,000-character page to read, starting at 1.",
+        description=prompts.PAGE_ARG.format(page_size=_PAGE_SIZE_CHARS),
     )
 
 
@@ -138,10 +112,10 @@ def _scanned_note(extracted: _Extracted) -> str:
     if not extracted.pdf_pages_without_text:
         return ""
 
-    return (
-        f"Note: {extracted.pdf_pages_without_text} of {extracted.pdf_pages} "
-        "pages contain no text — they are probably scanned images, and their "
-        f"content is missing below. {_NO_TEXT_REMEDY}\n\n"
+    return prompts.PARTIAL_SCAN_NOTE.format(
+        pages_without_text=extracted.pdf_pages_without_text,
+        pdf_pages=extracted.pdf_pages,
+        remedy=prompts.NO_TEXT_REMEDY,
     )
 
 
@@ -172,12 +146,12 @@ def make_attachment_tools(
         try:
             file_id = UUID(attachment_id)
         except ValueError:
-            return "Attachment not found."
+            return prompts.NOT_FOUND
 
         file = await file_repository.get_by_id(file_id)
 
         if file is None or file.conversation_id != conversation_id:
-            return "Attachment not found."
+            return prompts.NOT_FOUND
 
         # Cleaned again here, not only at upload: rows written before
         # uploads were cleaned still hold whatever name they arrived with.
@@ -191,20 +165,19 @@ def make_attachment_tools(
         )
 
         if file.content_type in IMAGE_CONTENT_TYPES:
-            return (
-                f"{name} is an image ({file.content_type}, "
-                f"{file.size_bytes} bytes). Images are visible to you only "
-                "on the turn they were attached, not through this tool."
+            return prompts.IMAGE_ONLY.format(
+                name=name,
+                content_type=file.content_type,
+                size_bytes=file.size_bytes,
             )
 
         if file.content_type not in READABLE_CONTENT_TYPES:
             # An upload from before a type was dropped from the allowlist,
             # or a generated document. Answered explicitly rather than
             # falling through to a decoder that can only fail on it.
-            return (
-                f"{name} is a {file.content_type} file, which this tool "
-                "cannot read. If its content matters, ask the user to send "
-                "it as a PDF, a text file, or a screenshot."
+            return prompts.UNREADABLE_TYPE.format(
+                name=name,
+                content_type=file.content_type,
             )
 
         try:
@@ -212,10 +185,7 @@ def make_attachment_tools(
             extracted = await asyncio.to_thread(_extract, data, file.content_type)
 
         except _PasswordProtected:
-            return (
-                f"{name} is password-protected and cannot be read. Ask the "
-                "user to send a copy without the password."
-            )
+            return prompts.PASSWORD_PROTECTED.format(name=name)
 
         except Exception:  # noqa: BLE001
             # Reported to the model, not raised: an unreadable attachment is
@@ -228,7 +198,7 @@ def make_attachment_tools(
                 file.id,
             )
 
-            return f"Could not read {name}: the file could not be processed."
+            return prompts.EXTRACTION_FAILED.format(name=name)
 
         pages = _paginate(extracted.text)
 
@@ -242,13 +212,13 @@ def make_attachment_tools(
             )
 
             if extracted.pdf_pages:
-                return (
-                    f"{name} contains no text at all — it is almost certainly "
-                    f"a scanned or photographed document ({extracted.pdf_pages} "
-                    f"page(s)), which this tool cannot read. {_NO_TEXT_REMEDY}"
+                return prompts.NO_TEXT_AT_ALL.format(
+                    name=name,
+                    pdf_pages=extracted.pdf_pages,
+                    remedy=prompts.NO_TEXT_REMEDY,
                 )
 
-            return f"{name} is empty."
+            return prompts.EMPTY.format(name=name)
 
         page_index = min(page, len(pages))
 
@@ -262,17 +232,21 @@ def make_attachment_tools(
             elapsed,
         )
 
-        return (
-            f"{_scanned_note(extracted)}"
-            f"{name} — page {page_index} of {len(pages)}:\n\n"
-            f"{pages[page_index - 1]}"
+        return prompts.PAGE_RESULT.format(
+            note=_scanned_note(extracted),
+            name=name,
+            page=page_index,
+            total=len(pages),
+            text=pages[page_index - 1],
         )
 
     return [
         StructuredTool.from_function(
             coroutine=read_attachment,
             name="read_attachment",
-            description=_READ_ATTACHMENT_DESCRIPTION,
+            description=prompts.READ_ATTACHMENT_DESCRIPTION.format(
+                page_size=_PAGE_SIZE_CHARS,
+            ),
             args_schema=ReadAttachmentArgs,
         )
     ]

@@ -4,21 +4,36 @@
 > chat session is cleared, reading this alone should be enough to resume with
 > the same understanding and direction. It depends on no conversation history.
 >
-> **Status (2026-09-14):** the image pipeline is built and runs end to end —
-> detection, consensus, catalog match, resolve, metadata, totals. A catalog was
-> built once from the 8 photos in `images/catalog/` and **is stale**: 41 rows,
-> produced before `--min-observations` defaulted to 1, so real items seen in a
-> single photo (office chair, monitor, cushion, computer tower) are missing. It
-> must be rebuilt with `--from-harvest` and reviewed by hand before anything is
-> built on top of it. Review UI, multi-image rooms, detector and video: not
-> started.
+> **Status (2026-09-15):** the pipeline is no longer a prototype — it ships as
+> `app/plugins/recycling/` and is reached only through `/recycle` in a real
+> conversation. Detection, consensus, catalog match, resolve, metadata and
+> totals all run end to end, and multi-image rooms are done: one `/recycle
+> scan_image` with several photos attached deduplicates across them in a single
+> vision call.
+>
+> The catalog has been **rebuilt and committed**: `app/plugins/recycling/catalog.json`,
+> 259 rows — 213 collectable, 46 excluded, every collectable row carrying
+> estimated weight, dimensions, volume and material. This replaces the stale
+> 41-row build described here previously. **It has not been reviewed by hand
+> yet, and that review is still mandatory before anything is built on top of
+> it** — 78 of those rows rest on a single observation, and the model is known
+> to get granularity and exclusions wrong (§10). Review it with
+> `/recycle show_catalog`.
+>
+> Not started: catalog in Postgres (it is still a JSON file inside the image,
+> so a redeploy destroys any catalog built on the server), the review UI, and
+> video. `/recycle scan_video` is registered and answers "not implemented yet".
 >
 > **Relationship to this repository: decided, and it has changed.** This is no
 > longer a separate product prototyped alongside the app. It becomes a plugin
 > inside it — `app/plugins/recycling/` — reached through slash commands in the
-> same chat interface. There is **one deployment**, not two; the plugin is left
-> out of `ENABLED_TOOL_PLUGINS` on the deploy branch, so the production job-
-> application service never loads it. See §12.
+> same chat interface. There is **one deployment**, not two; the plugin is named
+> in `EXCLUDED_TOOL_PLUGINS` on the deploy branch, so the production job-
+> application service never loads it. See §12. **This is not yet true in
+> practice:** the gate is now `EXCLUDED_TOOL_PLUGINS`, a denylist, and
+> an unset denylist loads every plugin present — so a deploy that does not set
+> it would load recycling into the job-application service. `deploy/README.md`
+> now documents the variable; the server's own environment still has to set it.
 >
 > **Revision note:** the requirement changed after the first draft. Price is no
 > longer the primary output — see §1.
@@ -515,7 +530,7 @@ Decided 2026-09-14, after the host application gained file uploads.
 | Question | Decision | Why |
 |---|---|---|
 | Separate repo or plugin? | **Plugin**, `app/plugins/recycling/` | The agent loop, auth, storage, SSE streaming and the React UI already exist. Rebuilding them for one feature is the expensive path. |
-| One deployment or two? | **One.** The plugin is omitted from `ENABLED_TOOL_PLUGINS` on the deploy branch | The production service is the job-application product; it must never load recycling. `ENABLED_TOOL_PLUGINS` is an allowlist that already exists, so this costs no code. **Caveat: it is an allowlist, so it must name every plugin that should load** — `clock,documents,attachments`. Forgetting `attachments` silently disables file reading. |
+| One deployment or two? | **One.** The plugin is named in `EXCLUDED_TOOL_PLUGINS` on the deploy branch | The production service is the job-application product; it must never load recycling. The gate already exists, so this costs no code. It was an allowlist (`clock,recruitment,attachments`) until restating every wanted plugin proved worse than naming the one unwanted one; **the caveat is now the opposite — a denylist fails open, so a plugin added later ships to production unless someone adds it here.** |
 | Entry point: agent tool or slash command? | **Slash command**, `/recycle scan`, `/recycle train`, `/recycle catalog` | A command never enters the tool schemas, so the recycling feature cannot confuse the `anna` persona even when both are loaded. It also costs no LLM call to start, and cannot be invoked by mistake. |
 | How does the result reach the screen? | The command **writes the assistant message itself**, as Markdown the frontend already renders | Deterministic. A model asked to reproduce a 40-row table can drop a row or alter a number, and this project's one rule is that nothing detected disappears without the reviewer seeing it. |
 | Where does the catalog live? | Postgres, per tenant | `catalog.json` inside a container is destroyed on every deploy, and SaaS tenancy was a locked decision (§4). |
@@ -527,7 +542,7 @@ Decided 2026-09-14, after the host application gained file uploads.
 | Phase | Work | Status |
 |---|---|---|
 | 0 | Detection, consensus, exclusions | **Done** |
-| 1 | Catalog build + resolve + metadata | **Built; catalog stale, rebuild + review outstanding** |
+| 1 | Catalog build + resolve + metadata | **Built. Catalog rebuilt and committed — 259 rows, 213 collectable, all with metadata. Hand review still outstanding** |
 | 1.5 | Host app: file uploads, image and document reading | **Done** — shipped and tested in the main app |
 | 2 | Slash-command registry: a plugin declares a namespace, `ChatService` routes a leading `/` before the LLM runs | **Done** — generalized to every plugin (`app/plugins/contracts.py`'s `PluginCommand`/`command_factory`), not recycling-specific; proven live with `/clock time` |
 | 3 | `/recycle scan_image` over attached images: pipeline moved into the plugin, run concurrently (`runner.py`, `asyncio.to_thread`), Markdown table + attached JSON written back | **Done** — also folds in phase 6 (see below); `/recycle scan_video` registered as a stub, `/recycle build_catalog` and `/recycle show_catalog` also built (not originally scoped this early, brought forward) |
@@ -538,6 +553,14 @@ Decided 2026-09-14, after the host application gained file uploads.
 | 8 | Guided capture, if deduplication needs help | |
 | 9 | Open-vocabulary detector — **only** if 7 and 8 prove insufficient (§11, §11a) | Dropped from the plan |
 | 10 | Live overlay (cosmetic) | |
+
+### Open before the next phase starts
+
+| # | Item | Why it blocks |
+|---|---|---|
+| 1 | Hand-review the committed 259-row catalog via `/recycle show_catalog` | Every scan result resolves through it. A wrong exclusion or wrong granularity here is invisible later and shows up as a missing item in front of the client. |
+| 2 | Set `EXCLUDED_TOOL_PLUGINS=recycling` on the deployment | The denylist is empty, so production loads recycling today. `deploy/README.md` documents the variable now; the server's environment still has to carry it. |
+| 3 | Decide catalog storage before building the review UI (phases 4 and 5 are in the wrong order) | An editing UI writing to `catalog.json` inside a container writes to a file the next deploy deletes. Postgres has to come first, or the UI ships a data-loss bug. |
 
 Phase 5 is the demo, and it is also the mandatory human review, so it is not
 optional polish. Phase 6 matters more than it sounds: a room is several

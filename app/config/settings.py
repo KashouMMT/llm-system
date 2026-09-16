@@ -317,14 +317,21 @@ MAX_ATTACHMENT_BATCH_BYTES = get_positive_int(
 )
 
 # TOOL PLUGINS
-# Allowlist of plugin folder names under app/plugins/. Empty (the default)
-# means load every plugin folder that is present, which is the point:
-# adding a tool is dropping a folder in and restarting. Set this only to
-# run a subset — a future video-analysis subsystem that has no business
-# seeing the document tools, say.
-ENABLED_TOOL_PLUGINS = frozenset(
+# Denylist of plugin folder names under app/plugins/ to keep OUT of this
+# deployment. Empty (the default) loads every plugin folder present, which
+# is the point: adding a tool is dropping a folder in and restarting.
+#
+# A denylist rather than an allowlist because the allowlist had to restate
+# every plugin the deployment wanted: adding one meant editing the
+# environment of every deployment that should get it, and forgetting a
+# name disabled that feature silently. The trade is the direction of the
+# failure:
+# this fails open, so a new plugin folder reaches production unless someone
+# names it here. That makes this variable the one place that decides what
+# production does NOT run — keep it accurate, and see deploy/README.md.
+EXCLUDED_TOOL_PLUGINS = frozenset(
     name.strip()
-    for name in os.getenv("ENABLED_TOOL_PLUGINS", "").split(",")
+    for name in os.getenv("EXCLUDED_TOOL_PLUGINS", "").split(",")
     if name.strip()
 )
 # A plugin that fails to load is skipped with an ERROR by default, so one
