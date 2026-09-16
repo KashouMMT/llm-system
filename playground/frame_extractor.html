@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Frame extraction probe</title>
+		<style>
+			:root {
+				color-scheme: light dark;
+				--bg: #ffffff;
+				--fg: #1a1a1a;
+				--muted: #6a6a6a;
+				--line: #d8d8d8;
+				--panel: #f6f6f6;
+				--accent: #2563eb;
+				--bad: #b42318;
+			}
+
+			@media (prefers-color-scheme: dark) {
+				:root {
+					--bg: #16181c;
+					--fg: #e8e8e8;
+					--muted: #9a9a9a;
+					--line: #2e3238;
+					--panel: #1e2126;
+					--accent: #6ea8fe;
+					--bad: #f2777a;
+				}
+			}
+
+			* {
+				box-sizing: border-box;
+			}
+
+			body {
+				margin: 0;
+				padding: 24px 16px 64px;
+				background: var(--bg);
+				color: var(--fg);
+				font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+			}
+
+			main {
+				max-width: 1100px;
+				margin: 0 auto;
+			}
+
+			h1 {
+				font-size: 20px;
+				margin: 0 0 4px;
+			}
+
+			.sub {
+				color: var(--muted);
+				margin: 0 0 24px;
+			}
+
+			.controls {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 16px;
+				align-items: flex-end;
+				padding: 16px;
+				border: 1px solid var(--line);
+				border-radius: 10px;
+				background: var(--panel);
+			}
+
+			label {
+				display: block;
+				font-size: 13px;
+				color: var(--muted);
+				margin-bottom: 4px;
+			}
+
+			input[type="number"] {
+				width: 90px;
+			}
+
+			input,
+			select,
+			button {
+				font: inherit;
+				padding: 7px 10px;
+				border: 1px solid var(--line);
+				border-radius: 7px;
+				background: var(--bg);
+				color: var(--fg);
+			}
+
+			button {
+				background: var(--accent);
+				color: #fff;
+				border-color: transparent;
+				cursor: pointer;
+			}
+
+			button:disabled {
+				opacity: 0.5;
+				cursor: default;
+			}
+
+			#status {
+				margin: 20px 0 0;
+				min-height: 22px;
+			}
+
+			#status.error {
+				color: var(--bad);
+				font-weight: 600;
+			}
+
+			table.meta {
+				border-collapse: collapse;
+				margin-top: 16px;
+				font-size: 14px;
+			}
+
+			table.meta td {
+				padding: 3px 18px 3px 0;
+			}
+
+			table.meta td:first-child {
+				color: var(--muted);
+			}
+
+			#frames {
+				display: grid;
+				grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+				gap: 14px;
+				margin-top: 24px;
+			}
+
+			figure {
+				margin: 0;
+				border: 1px solid var(--line);
+				border-radius: 8px;
+				overflow: hidden;
+				background: var(--panel);
+			}
+
+			figure img {
+				display: block;
+				width: 100%;
+				height: auto;
+				cursor: zoom-in;
+			}
+
+			figcaption {
+				padding: 7px 9px;
+				font-size: 12px;
+				color: var(--muted);
+				display: flex;
+				justify-content: space-between;
+				gap: 8px;
+			}
+
+			figcaption a {
+				color: var(--accent);
+			}
+
+			.hint {
+				margin-top: 28px;
+				padding: 14px 16px;
+				border-left: 3px solid var(--line);
+				color: var(--muted);
+				font-size: 14px;
+			}
+		</style>
+	</head>
+
+	<body>
+		<main>
+			<h1>Frame extraction probe</h1>
+			<p class="sub">
+				Throwaway. Pick a video, pull N stills out of it in the browser, and
+				look at whether they actually cover the room.
+			</p>
+
+			<div class="controls">
+				<div>
+					<label for="file">Video file</label>
+					<input id="file" type="file" accept="video/*" />
+				</div>
+
+				<div>
+					<label for="count">Frames</label>
+					<input id="count" type="number" min="1" max="60" value="12" />
+				</div>
+
+				<div>
+					<label for="strategy">Sampling</label>
+					<select id="strategy">
+						<option value="even">Evenly spaced</option>
+						<option value="still">Prefer still moments</option>
+					</select>
+				</div>
+
+				<div>
+					<label for="edge">Max long edge (px)</label>
+					<input id="edge" type="number" min="256" max="4096" value="1024" />
+				</div>
+
+				<div>
+					<label for="quality">JPEG quality</label>
+					<input
+						id="quality"
+						type="number"
+						min="0.3"
+						max="1"
+						step="0.05"
+						value="0.85"
+					/>
+				</div>
+
+				<button id="run" disabled>Extract</button>
+			</div>
+
+			<p id="status"></p>
+			<table class="meta" id="meta" hidden></table>
+
+			<div id="frames"></div>
+
+			<p class="hint">
+				What to look for: do the frames between them show every wall, or do
+				several land on the same one? Compare the total payload against the
+				20&nbsp;MB per-file upload cap. "Prefer still moments" scores candidate
+				frames by how much they differ from the one just before, which is a
+				rough stand-in for "the camera had stopped moving" — if that noticeably
+				beats evenly spaced, motion-aware sampling is worth building properly.
+			</p>
+		</main>
+
+		<script>
+			const fileInput = document.getElementById("file");
+			const countInput = document.getElementById("count");
+			const strategyInput = document.getElementById("strategy");
+			const edgeInput = document.getElementById("edge");
+			const qualityInput = document.getElementById("quality");
+			const runButton = document.getElementById("run");
+			const statusLine = document.getElementById("status");
+			const metaTable = document.getElementById("meta");
+			const frameGrid = document.getElementById("frames");
+
+			let chosenFile = null;
+
+			fileInput.addEventListener("change", () => {
+				chosenFile = fileInput.files?.[0] ?? null;
+				runButton.disabled = chosenFile === null;
+				setStatus(chosenFile ? `Ready: ${chosenFile.name}` : "");
+			});
+
+			runButton.addEventListener("click", () => {
+				runButton.disabled = true;
+				extract(chosenFile)
+					.catch((error) => setStatus(error.message, true))
+					.finally(() => {
+						runButton.disabled = false;
+					});
+			});
+
+			function setStatus(text, isError = false) {
+				statusLine.textContent = text;
+				statusLine.className = isError ? "error" : "";
+			}
+
+			function formatBytes(bytes) {
+				if (bytes < 1024) return `${bytes} B`;
+				if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+				return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+			}
+
+			/**
+			 * Load the file into a <video> and wait for its metadata.
+			 *
+			 * Metadata (duration, dimensions) arrives well before any pixels do,
+			 * and it is the first point at which an undecodable file — an iPhone
+			 * HEVC recording on a browser without a hardware decoder, typically —
+			 * announces itself. Failing here rather than at the first seek is why
+			 * this is its own step.
+			 */
+			function loadVideo(file) {
+				return new Promise((resolve, reject) => {
+					const video = document.createElement("video");
+
+					video.preload = "auto";
+					video.muted = true;
+					// iOS Safari refuses to decode a video that is not marked as
+					// inline-playable, even when it is never shown on screen.
+					video.playsInline = true;
+					video.src = URL.createObjectURL(file);
+
+					video.onloadedmetadata = () => resolve(video);
+					video.onerror = () =>
+						reject(
+							new Error(
+								"The browser could not decode this file. If it is an " +
+									"iPhone .mov, it is probably HEVC — try Safari, or " +
+									"convert it to H.264 first.",
+							),
+						);
+				});
+			}
+
+			/**
+			 * Seek to `time` and resolve once the frame is actually decoded.
+			 *
+			 * Assigning currentTime only *requests* a seek: the decoder has to
+			 * find the last I-frame before that timestamp and replay every frame
+			 * forward from it, which is why this is asynchronous and why seeking
+			 * deep into a long video is slow. Drawing before `seeked` fires gives
+			 * the previous frame or a blank canvas.
+			 *
+			 * The listener is registered before currentTime is assigned. A seek
+			 * that resolves from an already-buffered frame can fire the event
+			 * synchronously, and the other order would miss it and hang.
+			 */
+			function seekTo(video, time) {
+				return new Promise((resolve, reject) => {
+					const timer = setTimeout(
+						() => reject(new Error(`Timed out seeking to ${time.toFixed(2)}s`)),
+						10000,
+					);
+
+					video.onseeked = () => {
+						clearTimeout(timer);
+						resolve();
+					};
+
+					video.currentTime = time;
+				});
+			}
+
+			function drawFrame(video, canvas, maxEdge) {
+				const scale = Math.min(
+					1,
+					maxEdge / Math.max(video.videoWidth, video.videoHeight),
+				);
+
+				canvas.width = Math.round(video.videoWidth * scale);
+				canvas.height = Math.round(video.videoHeight * scale);
+
+				const context = canvas.getContext("2d");
+				context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+				return context;
+			}
+
+			function toJpeg(canvas, quality) {
+				return new Promise((resolve) =>
+					canvas.toBlob(resolve, "image/jpeg", quality),
+				);
+			}
+
+			/**
+			 * Mean absolute difference between two greyscale-ish samples, 0..1.
+			 *
+			 * Deliberately crude — it is only used to rank candidate frames
+			 * against each other, never as an absolute threshold. A LOW score
+			 * means this frame looks like the one just before it, which usually
+			 * means the camera was holding still: that is the frame worth
+			 * keeping, because a frame captured mid-pan is both motion-blurred
+			 * and given fewer bits by the encoder.
+			 */
+			function difference(a, b) {
+				let total = 0;
+
+				// Every 4th pixel, red channel only. Enough signal to rank frames,
+				// a fraction of the work of comparing all of them properly.
+				for (let i = 0; i < a.length; i += 16) {
+					total += Math.abs(a[i] - b[i]);
+				}
+
+				return total / (a.length / 16) / 255;
+			}
+
+			async function extract(file) {
+				frameGrid.innerHTML = "";
+				metaTable.hidden = true;
+				setStatus("Loading video…");
+
+				const started = performance.now();
+				const video = await loadVideo(file);
+
+				const count = Math.max(1, Number(countInput.value) || 12);
+				const maxEdge = Math.max(256, Number(edgeInput.value) || 1024);
+				const quality = Math.min(1, Math.max(0.3, Number(qualityInput.value)));
+				const preferStill = strategyInput.value === "still";
+
+				const canvas = document.createElement("canvas");
+
+				// "Prefer still moments" looks at more candidates than it keeps and
+				// discards the ones that differ most from their predecessor.
+				const candidateCount = preferStill ? count * 3 : count;
+				const candidates = [];
+
+				for (let i = 0; i < candidateCount; i++) {
+					const time = (video.duration * (i + 0.5)) / candidateCount;
+
+					setStatus(`Decoding ${i + 1} / ${candidateCount}…`);
+
+					const seekStarted = performance.now();
+					await seekTo(video, time);
+
+					const context = drawFrame(video, canvas, maxEdge);
+					const pixels = context.getImageData(
+						0,
+						0,
+						canvas.width,
+						canvas.height,
+					).data;
+
+					candidates.push({
+						time: video.currentTime,
+						pixels,
+						blob: await toJpeg(canvas, quality),
+						ms: Math.round(performance.now() - seekStarted),
+						width: canvas.width,
+						height: canvas.height,
+					});
+				}
+
+				let kept = candidates;
+
+				if (preferStill) {
+					for (let i = 0; i < candidates.length; i++) {
+						candidates[i].motion =
+							i === 0
+								? 0
+								: difference(candidates[i].pixels, candidates[i - 1].pixels);
+					}
+
+					// Keep the calmest frames, then put them back in time order so
+					// the grid still reads as a walk through the room.
+					kept = [...candidates]
+						.sort((a, b) => a.motion - b.motion)
+						.slice(0, count)
+						.sort((a, b) => a.time - b.time);
+				}
+
+				const totalBytes = kept.reduce((sum, frame) => sum + frame.blob.size, 0);
+				const elapsed = ((performance.now() - started) / 1000).toFixed(1);
+
+				metaTable.hidden = false;
+				metaTable.innerHTML = `
+					<tr><td>File</td><td>${file.name} (${formatBytes(file.size)})</td></tr>
+					<tr><td>Duration</td><td>${video.duration.toFixed(1)} s</td></tr>
+					<tr><td>Source resolution</td><td>${video.videoWidth} × ${video.videoHeight}</td></tr>
+					<tr><td>Frames kept</td><td>${kept.length} of ${candidates.length} decoded</td></tr>
+					<tr><td>Total payload</td><td><strong>${formatBytes(totalBytes)}</strong> — vs ${formatBytes(file.size)} for the video</td></tr>
+					<tr><td>Wall clock</td><td>${elapsed} s</td></tr>
+				`;
+
+				for (const [index, frame] of kept.entries()) {
+					const url = URL.createObjectURL(frame.blob);
+					const figure = document.createElement("figure");
+
+					const motionNote =
+						frame.motion === undefined
+							? ""
+							: ` · motion ${frame.motion.toFixed(3)}`;
+
+					figure.innerHTML = `
+						<a href="${url}" target="_blank" rel="noopener">
+							<img src="${url}" alt="Frame at ${frame.time.toFixed(2)} seconds" />
+						</a>
+						<figcaption>
+							<span>${frame.time.toFixed(2)}s · ${frame.width}×${frame.height}${motionNote}</span>
+							<a href="${url}" download="frame_${String(index + 1).padStart(2, "0")}.jpg">save</a>
+						</figcaption>
+					`;
+
+					frameGrid.append(figure);
+				}
+
+				setStatus(
+					`Done — ${kept.length} frames, ${formatBytes(totalBytes)} total, ${elapsed}s.`,
+				);
+
+				URL.revokeObjectURL(video.src);
+			}
+		</script>
+	</body>
+</html>

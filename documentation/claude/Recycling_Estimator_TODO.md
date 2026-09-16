@@ -24,6 +24,15 @@
 > so a redeploy destroys any catalog built on the server), the review UI, and
 > video. `/recycle scan_video` is registered and answers "not implemented yet".
 >
+> **Video is now designed, not just planned (2026-09-16).** The raw recording is
+> retained, frames are extracted **server-side with ffmpeg** — not OpenCV, not in
+> the browser — and fed to the multi-image call that already exists. No new Python
+> dependency. Most of the work is host-application upload handling rather than
+> plugin code; §11b has the reasoning and §12 has the ordered steps. OpenCV is
+> deliberately deferred to a later accuracy pass (blur rejection, overlap
+> pruning, coverage warnings), where it sits upstream of the pipeline rather
+> than replacing any part of it.
+>
 > **Relationship to this repository: decided, and it has changed.** This is no
 > longer a separate product prototyped alongside the app. It becomes a plugin
 > inside it — `app/plugins/recycling/` — reached through slash commands in the
@@ -114,9 +123,11 @@ Answer #5 is architecturally load-bearing: see §3.
 | **B. Feed the video and analyse frame by frame** | Not a distinct approach | This is A done naively — 600 calls producing 600 duplicate detections to reconcile. |
 | **C. Hardcoded / classical CV (OpenCV)** | Dead on arrival | OpenCV is image *processing* — resize, blur, edges, contours. It has no concept of "this is a television". The only non-LLM route is training a detector on a hand-labelled dataset, which is the expensive path, not the cheap one. |
 
-**Framing correction that matters:** OpenCV is not a competitor to the AI
-approach. It is the plumbing inside it — decoding video, sampling frames,
-cropping regions. Both get used.
+**Framing correction that matters:** classical CV is not a competitor to the AI
+approach. It is plumbing *inside* it. §11b splits that plumbing in two: ffmpeg
+decodes the video and samples frames, and OpenCV — if and when it is taken on —
+measures those frames (sharpness, overlap, motion) to choose better ones. Neither
+ever names an object; that stays the model's job.
 
 ---
 
@@ -260,6 +271,12 @@ loop (§12), not to keep a standalone tool usable, and once the logic had a
 home inside the app the CLI-only path stopped earning its keep. There is
 now no way to exercise any part of the pipeline without running the full
 app and going through `/recycle` in a real conversation — see §9.
+
+A `playground/` folder exists again (2026-09-16) and is a different kind of
+thing: single-file throwaway probes that answer one question and are then
+deleted, imported by nothing. It currently holds `frame_extractor.html`, the
+browser frame-extraction probe behind §11b's decision. The rule that killed
+the old folder still stands — no part of the pipeline gets a second home there.
 
 ```
 llm-system/
@@ -436,7 +453,7 @@ the classical answer. It is no longer the chosen one.
 
 ```
 video
-  -> OpenCV: decode, sample keyframes, drop near-duplicates by visual difference
+  -> ffmpeg: decode, sample frames, drop near-duplicates by visual difference
   -> batch 8-16 frames into ONE vision call:
      "these are views of one room; list distinct items and counts,
       do not count the same object twice"
@@ -452,7 +469,7 @@ runs: pennies in tokens, a couple of minutes wall-clock with calls issued
 concurrently. `merge_runs` is untouched; only the per-run detection call changes
 from one image to several.
 
-OpenCV (Apache-2.0) decodes and samples. That is the only new dependency.
+Decoding and sampling are somebody's job — see §11b, which settles whose.
 
 ### What is unproven, and the experiment that settles it
 
@@ -523,6 +540,105 @@ boxes.
 
 ---
 
+## 11b. Getting frames out of the video — decided 2026-09-16
+
+§11a settled *what to do with frames*. This settles where they come from.
+
+### The decision that drives the rest: the raw video is retained
+
+The uploaded recording is kept, not discarded after extraction. Two consequences
+follow immediately and they decide everything else in this section:
+
+1. The video must be **uploaded and stored**, so the upload path has to handle
+   files two orders of magnitude larger than anything the app accepts today.
+2. Extraction can be **re-run later**. When the sampling strategy improves, every
+   past recording can be re-scanned. That is only true if extraction happens
+   somewhere reproducible.
+
+### Browser-side or server-side extraction
+
+A browser can extract frames with no backend at all — `<video>` seeks to a
+timestamp, `<canvas>` captures it, `toBlob()` gives a JPEG. It was prototyped in
+`playground/frame_extractor.html` and it works: frames come out roughly 50–100×
+smaller than the video they came from.
+
+| | Browser | Server |
+|---|---|---|
+| Decoder | The user's hardware decoder — fast | Software on shared vCPUs — slower |
+| Who pays the CPU | The user's device | This box |
+| Concurrency | Scales with users | Serialised |
+| HEVC (iPhone default) | **Fails** off Apple platforms | Works |
+| Rotation metadata | Applied free when rendering to canvas | Must be handled explicitly |
+| Same video, same frames? | Varies by device and browser | **Always identical** |
+| Re-extract later | Impossible | **Yes** |
+| Selection algorithm | Limited by seek granularity | Full control |
+
+**Server-side, decided.** Once the video is being uploaded for retention anyway,
+the browser's advantages mostly evaporate — a ~10 s extraction is noise beside a
+~2 min upload — while reproducibility and re-extraction become the point. It also
+removes HEVC as a user-facing problem entirely: ffmpeg decodes whatever the phone
+recorded, so an untrained customer never has to be told to change a camera
+setting.
+
+The browser path is not wasted. It stays available as a **latency optimisation**
+— extract and scan immediately while the raw video uploads in the background,
+cutting time-to-result from roughly 150 s to 25 s — and as a fallback if server
+CPU becomes the bottleneck. Do not build it first. Ship the simple path, measure
+whether the wait is actually intolerable, and revisit.
+
+### ffmpeg, not OpenCV
+
+| | ffmpeg (subprocess) | opencv-python |
+|---|---|---|
+| What it is | Media processing: decode, filter, encode | Computer vision that wraps ffmpeg for decoding |
+| Python version coupling | **None** — a binary in the image | Wheels lag new releases; this project is on 3.14 (§11) |
+| Rotation metadata | Correct by default | Historically inconsistent |
+| Variable frame rate (all phone video) | Handled | Frame-index seeking misbehaves |
+| I-frames only, no decode-forward | `-skip_frame nokey` | Awkward |
+| Representative-frame selection | `-vf thumbnail=N` | Manual |
+| Brings numpy | No | Yes |
+
+ffmpeg already covers more frame selection than expected: `fps=`, `thumbnail=N`
+(picks the most typical frame from each batch by histogram, explicitly designed
+to skip transitional junk), `select='gt(scene,X)'`, and `-skip_frame nokey`.
+Combined with Pillow — already a dependency, already resizing and re-encoding in
+`vision.py` — that is the whole extraction stage with no new Python packages at
+all.
+
+### OpenCV stays on the table, for accuracy rather than decoding
+
+ffmpeg gets the pixels; OpenCV measures what is in them. The distinction matters
+because the open problems in §11a are measurement problems:
+
+| Capability | Answers | Why it matters here |
+|---|---|---|
+| Laplacian variance | How sharp is this frame | A frame grabbed mid-pan is doubly degraded — motion-blurred, *and* given fewer bits by the encoder because so much changed. Rejecting blur cheaply improves every downstream stage. |
+| Feature matching (ORB/SIFT) + homography | How much do two frames overlap | Turns "16 evenly spaced frames" into "16 *distinct* views" at the same token cost |
+| Optical flow | Was the camera moving, and how | A stronger stillness signal than frame differencing |
+| Coverage estimation | Did the sweep skip a wall | The one failure nothing currently detects — see below |
+| `cv2.dnn` (ONNX) | Runs exported detector weights | Sidesteps both the PyTorch wheel risk and the AGPL question, if §11 is ever revisited |
+
+**None of this is a competing approach to counting.** It sits entirely upstream
+of `detect_items_bytes`, choosing which frames get sent. `merge_runs` and the
+consensus machinery are untouched either way. Take the dependency when a measured
+accuracy gap justifies it, not speculatively — and note it brings numpy with it,
+which the project does not currently have.
+
+### The failure none of this addresses
+
+Every selection strategy — evenly spaced, I-frame, stillness, sharpness — picks
+frames by *what the frames look like*. None knows whether the camera ever pointed
+at the north-east corner. Sixteen perfect frames of the same two walls is a
+plausible outcome and no amount of downstream cleverness recovers a wall nobody
+filmed.
+
+Coverage is a **capture-time** problem. The real answers are guided capture
+(fallback 1 above, client question #6) and the human review that is mandatory
+anyway. OpenCV's feature matching can at best *warn* that a sweep looks
+incomplete, which is worth having and is not a fix.
+
+---
+
 ## 12. How this becomes part of the app
 
 Decided 2026-09-14, after the host application gained file uploads.
@@ -531,7 +647,21 @@ Decided 2026-09-14, after the host application gained file uploads.
 |---|---|---|
 | Separate repo or plugin? | **Plugin**, `app/plugins/recycling/` | The agent loop, auth, storage, SSE streaming and the React UI already exist. Rebuilding them for one feature is the expensive path. |
 | One deployment or two? | **One.** The plugin is named in `EXCLUDED_TOOL_PLUGINS` on the deploy branch | The production service is the job-application product; it must never load recycling. The gate already exists, so this costs no code. It was an allowlist (`clock,recruitment,attachments`) until restating every wanted plugin proved worse than naming the one unwanted one; **the caveat is now the opposite — a denylist fails open, so a plugin added later ships to production unless someone adds it here.** |
-| Entry point: agent tool or slash command? | **Slash command**, `/recycle scan`, `/recycle train`, `/recycle catalog` | A command never enters the tool schemas, so the recycling feature cannot confuse the `anna` persona even when both are loaded. It also costs no LLM call to start, and cannot be invoked by mistake. |
+| Entry point: agent tool or slash command? | **Slash command to start**, `/recycle scan`, `/recycle train`, `/recycle catalog` — but see the note below | A command never enters the tool schemas, so the recycling feature cannot confuse the `anna` persona even when both are loaded. It also costs no LLM call to start, and cannot be invoked by mistake. |
+
+**Commands are the first step, not the destination.** This plugin lives inside
+the app specifically so the agent can eventually reach it: catalog CRUD, asking
+the user whether a scanned item is really recyclable, and anything else needing
+judgement or a back-and-forth are meant to become real LangGraph tools the agent
+calls, the same way `generate_rirekisho` and `read_attachment` are tools today.
+A standalone recycling app would not have been built in this repository at all.
+
+The rule for deciding which a new feature is: **does it matter if a value is
+dropped or rephrased?** If yes it stays a deterministic command — a scan's
+result table must reach the reviewer intact. If the step genuinely needs
+reasoning, judgement or conversation, it becomes a tool. Treat a future request
+for catalog CRUD or review-and-confirm flows as this plugin reaching its
+intended shape, not as scope creep.
 | How does the result reach the screen? | The command **writes the assistant message itself**, as Markdown the frontend already renders | Deterministic. A model asked to reproduce a 40-row table can drop a row or alter a number, and this project's one rule is that nothing detected disappears without the reviewer seeing it. |
 | Where does the catalog live? | Postgres, per tenant | `catalog.json` inside a container is destroyed on every deploy, and SaaS tenancy was a locked decision (§4). |
 | Which model does the scan call? | **The app's own model by default** — deployment already runs `MODEL_NAME=gpt-5.6-luna` with `LLM_SUPPORTS_VISION=true`, the same model `vision.py` was originally written against. An optional `RECYCLING_VISION_MODEL` overrides it | No second key, no second configuration to keep in sync. The override exists only for the day the chat model is downgraded for cost and the scan still needs vision. |
@@ -549,10 +679,32 @@ Decided 2026-09-14, after the host application gained file uploads.
 | 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | `/recycle build_catalog`/`show_catalog` exist against the plugin's own `catalog.json`; the Postgres move itself has not started |
 | 5 | Review UI — table, thumbnails, edit count, add missing, name unmatched. Needs a plugin manifest endpoint so the frontend knows the plugin is loaded | Next planned: a `.tsx` settings/review page for `/recycle`, replacing chat-driven catalog editing before it was ever built (an `edit_catalog` command was scoped and deliberately dropped in favour of this) |
 | 6 | Multi-image estimate (a whole room, not one photo) | **Folded into phase 3** — `/recycle scan_image` accepts several attached photos and deduplicates across views in one call (`detect_items_bytes`), since the §11a preliminary result already validated the approach |
-| 7 | Video: OpenCV keyframe sampling -> multi-frame vision call -> existing consensus (§11a). No detector | Not started. `/recycle scan_video` is registered and answers "not implemented yet" — OpenCV is still the one dependency phases 0-2's "no new dependencies" rule was deferring |
+| 7 | Video: upload + retain the raw recording, ffmpeg frame sampling -> multi-frame vision call -> existing consensus (§11a, §11b). No detector | Not started, but now scoped — see the sub-phases below. `/recycle scan_video` is registered and answers "not implemented yet". **No new Python dependency**: ffmpeg is a binary in the image, and Pillow already does the resizing |
 | 8 | Guided capture, if deduplication needs help | |
 | 9 | Open-vocabulary detector — **only** if 7 and 8 prove insufficient (§11, §11a) | Dropped from the plan |
 | 10 | Live overlay (cosmetic) | |
+
+### Phase 7 in detail
+
+Most of this is **host-application work, not plugin work** — the plugin stage is
+the last and smallest step. Ordered so that each one is testable on its own.
+
+| Step | Work | Why it is where it is |
+|---|---|---|
+| 7a | Stream uploads to disk — `FileStorage` gains a streaming write | `POST /conversations/{id}/uploads` buffers the whole body in a `bytearray` then copies it: a 150 MB upload peaks near 300 MB of RAM, *per concurrent upload*. Everything after this assumes it is fixed. |
+| 7b | Per-type size caps | One `UPLOAD_MAX_BYTES` cannot serve both a 200 KB CSV and a 200 MB video. |
+| 7c | nginx `client_max_body_size` **and** `proxy_request_buffering off` | Without the second, nginx buffers the whole body itself and 7a bought nothing. |
+| 7d | Video content types in `app/utils/detect.py` + extension map | Same magic-byte pattern the image types already use. Target is H.264 in MP4; accept what ffmpeg can decode rather than policing formats, since the customer is untrained (§1). |
+| 7e | Manifest branch for video + UI upload progress | Anna will receive videos she can neither see nor read, and must be told to suggest `/recycle scan`. Two minutes of upload with no progress indicator reads as a hung app. |
+| 7f | Storage plan — retention window or S3 | ~150 MB per scan grows without bound on an EBS volume. `FileStorage`'s date-prefixed keys already map onto S3 object keys; this is the swap they were designed for. Needs a client answer — see §13 #7. |
+| 7g | **Plugin:** `/recycle scan_video` — ffmpeg sample -> `detect_items_bytes` -> existing consensus | The pipeline already accepts N images and deduplicates across them (§11a). This step is "produce the N images", nothing more. |
+| 7h | Rename `/recycle scan_image` -> `/recycle scan` | Once one command takes both stills and video, the `_image` suffix is a lie. Do it last, when it is true. |
+
+Quality presets (`/recycle scan fast` … `slow`) trade frame count against
+processing time. Frame count moves extraction time, API cost and accuracy
+together, and the money involved is cents either way — the preset buys patience,
+not budget. Start it as a command argument; promote it to a setting only if
+users ask.
 
 ### Open before the next phase starts
 
@@ -579,7 +731,8 @@ and phase 7 becomes "decode the video into those stills".
 | 3 | Which metadata fields do they actually need? | Weight and volume are assumed; material and price may not matter |
 | 4 | Are dimensions needed per unit, or only totals? | Affects how much precision to chase |
 | 5 | Confirm in writing that the estimate is a reference an employee overrides | Lowers the accuracy bar; protects against a later dispute |
-| 6 | Can the capture app instruct the customer, or must arbitrary video be accepted? | Guided capture is the highest-leverage risk reduction available |
+| 6 | Can the capture app instruct the customer, or must arbitrary video be accepted? | Guided capture is the highest-leverage risk reduction available — and it is the only real answer to the coverage problem in §11b |
+| 7 | **How long must the raw recording be retained, and who may access it?** | Retention is decided (§11b) but its duration is not. At ~150 MB per scan it decides whether storage is "write it to disk" or "wire up S3 now" (phase 7f). It is also a privacy commitment: a video of someone's home is personal data, and the answer should be in writing before the first real upload. |
 
 ---
 
