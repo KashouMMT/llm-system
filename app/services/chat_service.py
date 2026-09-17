@@ -2,7 +2,6 @@ import asyncio
 import base64
 import contextlib
 import re
-import sys
 import time
 import uuid
 from collections.abc import Callable, Coroutine, Mapping, Sequence
@@ -16,7 +15,6 @@ from app.authentication.authorization import is_admin
 from app.authentication.models import User
 from app.config.settings import (
     LLM_SUPPORTS_VISION,
-    MAX_ATTACHMENT_BATCH_BYTES,
     MAX_USER_INPUT_CHARS,
 )
 from app.plugins.contracts import CommandContext, PluginCommand
@@ -43,9 +41,10 @@ from app.services.summarization_service import SummarizationService
 from app.storage.base import FileStorage
 from app.utils import conversation_log
 from app.utils.attachment_manifest import format_attachment_manifest_line
-from app.utils.detect import IMAGE_CONTENT_TYPES
+from app.utils.detect import IMAGE_CONTENT_TYPES, VIDEO_CONTENT_TYPES
 from app.utils.images import downscale_image
 from app.utils.logger import logger
+from app.utils.video_frames import FrameExtractionError, extract_frames
 
 # A command is deterministic and never reaches the LLM: the first
 # whitespace-separated token of the (already-stripped) user input must
@@ -199,12 +198,6 @@ class ChatService:
             user_content=user_input,
             client_message_id=client_message_id,
             user_id=user.id,
-            # No combined-size cap for admin/root; sys.maxsize keeps
-            # create_turn's check a plain int comparison instead of a
-            # special "unlimited" case.
-            max_attachment_batch_bytes=(
-                sys.maxsize if is_admin(user) else MAX_ATTACHMENT_BATCH_BYTES
-            ),
             attachment_ids=attachment_ids,
         )
 
@@ -443,6 +436,8 @@ class ChatService:
 
         for file in files:
             image_prepared = False
+            video_frames_shown = 0
+            video_note: str | None = None
 
             if file.content_type in IMAGE_CONTENT_TYPES and vision_enabled:
                 block = await self._build_image_block(conversation_id, file)
@@ -451,12 +446,21 @@ class ChatService:
                     image_blocks.append(block)
                     image_prepared = True
 
+            if file.content_type in VIDEO_CONTENT_TYPES and vision_enabled:
+                blocks, video_note = await self._build_video_blocks(
+                    conversation_id, file
+                )
+                image_blocks.extend(blocks)
+                video_frames_shown = len(blocks)
+
             manifest_lines.append(
                 format_attachment_manifest_line(
                     file,
                     is_current_turn=True,
                     vision_enabled=vision_enabled,
                     image_prepared=image_prepared,
+                    video_frames_shown=video_frames_shown,
+                    video_note=video_note,
                 )
             )
 
@@ -500,6 +504,53 @@ class ChatService:
             "type": "image_url",
             "image_url": {"url": f"data:{file.content_type};base64,{encoded}"},
         }
+
+    async def _build_video_blocks(
+        self,
+        conversation_id: UUID,
+        file: FileRecord,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """
+        Sample stills from one video as vision content blocks, in time order,
+        plus a note for the manifest line: what was skipped and any capture
+        warnings, or why the video could not be used at all.
+
+        Returns ([], reason) on failure, for the same reason _build_image_block
+        returns None: one unusable video must not fail the turn. The reason is
+        passed on rather than logged away, so the model can tell the user to
+        turn the lights on instead of only saying it could not see the video.
+        """
+        try:
+            async with self.file_storage.temporary_path(file.storage_key) as path:
+                sample = await extract_frames(path)
+        except FrameExtractionError as error:
+            logger.warning(
+                "Could not extract video frames | conversation=%s file=%s error=%s",
+                conversation_id,
+                file.id,
+                error,
+            )
+            return [], str(error)
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Could not prepare video for the model | conversation=%s file=%s",
+                conversation_id,
+                file.id,
+            )
+            return [], None
+
+        blocks = [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/jpeg;base64,"
+                    + base64.b64encode(frame.jpeg).decode("ascii")
+                },
+            }
+            for frame in sample.frames
+        ]
+
+        return blocks, " ".join([sample.summary() + ".", *sample.warnings])
 
     async def generate(
         self,

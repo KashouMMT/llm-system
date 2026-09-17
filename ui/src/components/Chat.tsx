@@ -8,7 +8,11 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { Message, MessageStatus } from "../api/types";
-import { ACCEPTED_FILE_TYPES, type Attachments } from "../hooks/useAttachments";
+import {
+	ACCEPTED_FILE_TYPES,
+	ACCEPTED_VIDEO_TYPES,
+	type Attachments,
+} from "../hooks/useAttachments";
 import type { ChatError, useChat } from "../hooks/useChat";
 import type {
 	ConversationStream,
@@ -59,6 +63,7 @@ const Chat = ({
 
 	const [input, setInput] = useState("");
 	const fileInputRef = useRef<HTMLInputElement>(null);
+	const videoInputRef = useRef<HTMLInputElement>(null);
 	const folderInputRef = useRef<HTMLInputElement>(null);
 
 	// Built from `t` per render rather than as module constants, so they
@@ -405,6 +410,26 @@ const Chat = ({
 						onClick={() => fileInputRef.current?.click()}
 					>
 						<i className="bi bi-paperclip" aria-hidden="true" />
+					</button>
+
+					{/* Its own button because a video is its own kind of send:
+					    one video, nothing else attached (useAttachments.addFiles). */}
+					<input
+						ref={videoInputRef}
+						type="file"
+						hidden
+						accept={ACCEPTED_VIDEO_TYPES}
+						onChange={handleFilesPicked}
+					/>
+
+					<button
+						type="button"
+						className="btn btn-outline-secondary attachment-button"
+						aria-label={t("chat.attachVideo")}
+						disabled={!conversationId}
+						onClick={() => videoInputRef.current?.click()}
+					>
+						<i className="bi bi-camera-video" aria-hidden="true" />
 					</button>
 
 					{attachments.isAdmin && (

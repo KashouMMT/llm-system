@@ -22,8 +22,16 @@ reference workbooks the document renderers were built from are in
 | Document | Status | Read it when |
 |---|---|---|
 | `Recycling_Estimator_TODO.md` | **Current** | Any work on `app/plugins/recycling/` — the detection pipeline, the catalog, or the video path |
+| `Recycling_Video_Frames_Plan.md` | **Proposed, not built** | Implementing phase 7 (video). The step-by-step build plan and the code each step needs; the decisions behind it stay in the TODO |
 
 ## Conventions
+
+**Write compact, not readable.** These are context-restore notes, not prose —
+fragments over sentences, tables and arrows over paragraphs, signatures and argv
+over full code blocks. Keep only what changes what a later session does:
+decisions, contradictions, exact identifiers and paths, gotchas, open questions.
+Density is the goal; a document that reads well but takes three screens to say
+what one screen could is the wrong shape.
 
 **Say what is decided, and why the alternative lost.** A decision recorded
 without its reasoning gets re-litigated every few weeks, and a reversal is
@@ -45,3 +53,10 @@ no longer describes reality.
 table is intent. The recycling document keeps probe findings with their raw
 numbers and their caveats — including what the probe did *not* test — so a
 later reader can judge the evidence rather than inherit a conclusion.
+
+# Notes added by Human User
+
+Try to write your note as compact as possible as you can. Because I want you to save tokens.
+Mentioned in multiple places and written here again for CLAUDE just to be safe. 
+It doesn't need to be human readable so long as you can get to the point and 
+context of the topic I want to talk about.

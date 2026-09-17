@@ -66,11 +66,14 @@ export const en = {
 		sending: "Sending…",
 		attach: "Attach a file",
 		attachFolder: "Attach a folder",
+		attachVideo: "Attach a video",
+		attachmentVideoAlone:
+			"A video must be sent on its own — one video, with no other attachments.",
+		attachmentVideoTooLarge: "This video is larger than the 1 GB daily upload limit.",
 		attachmentUploading: "Uploading…",
 		attachmentError: "Upload failed.",
 		attachmentRemove: "Remove attachment",
 		attachmentTooMany: "Up to {{limit}} attachments per message.",
-		attachmentTooLarge: "Would exceed the {{limit}} MB total attachment limit.",
 		attachmentFileTooLarge: "This file is over the 20 MB limit.",
 		attachmentUnsupported:
 			"Unsupported file. Send an image (PNG, JPEG, WebP), a PDF, or a text file (UTF-8 or Shift_JIS).",

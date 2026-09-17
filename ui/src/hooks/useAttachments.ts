@@ -5,12 +5,6 @@ import { useTranslation } from "react-i18next";
 import { ApiError, uploadFile } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
-// A batch cap, enforced here so a pick of many files fails before any
-// upload starts rather than after wasting bandwidth on some of them.
-// Mirrors MAX_ATTACHMENT_BATCH_BYTES in app/config/settings.py — admin/root
-// carry no cap there, so this is skipped for them below.
-export const MAX_ATTACHMENT_TOTAL_BYTES = 100 * 1024 * 1024;
-
 // Mirrors SendMessageRequest.attachment_ids's max_length in
 // app/runtime/server.py: 10 per message, 500 for admin/root. Enforced here
 // too, or a batch under the size cap but over the count would upload fine
@@ -18,10 +12,18 @@ export const MAX_ATTACHMENT_TOTAL_BYTES = 100 * 1024 * 1024;
 export const MAX_ATTACHMENT_COUNT = 10;
 export const MAX_ATTACHMENT_COUNT_ADMIN = 500;
 
-// Mirrors UPLOAD_MAX_BYTES's default in app/config/settings.py. Checked
-// here so an oversized file is refused at once instead of after uploading
-// 20 MB only to be told 413; the server's limit is still the real one.
+// Mirrors UPLOAD_MAX_BYTES's default in app/config/settings.py (every
+// non-video file, admin included). Checked here so an oversized file is
+// refused at once instead of after uploading; the server's limit is the real
+// one.
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
+// A video has no per-file cap; its bound is the daily upload allowance
+// (UPLOAD_DAILY_BYTES_PER_USER's default). A video larger than the whole
+// allowance can never succeed, so it is refused before uploading. Skipped for
+// admin/root, who have no allowance. The browser can't know how much of today's
+// allowance is already used — the server answers that with 429.
+export const MAX_VIDEO_UPLOAD_BYTES = 1024 * 1024 * 1024;
 
 // What the file picker offers. A convenience only — the server decides
 // the type from the bytes and ignores extensions entirely — so this lists
@@ -37,6 +39,32 @@ export const ACCEPTED_FILE_TYPES = [
 	".csv",
 	".json",
 ].join(",");
+
+// The video button's picker. Separate from ACCEPTED_FILE_TYPES because a
+// video is its own kind of send — see isVideoFile's use in addFiles.
+export const ACCEPTED_VIDEO_TYPES = [
+	"video/mp4",
+	"video/quicktime",
+	".mp4",
+	".mov",
+	".mkv",
+	".webm",
+].join(",");
+
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".mkv", ".webm"];
+
+// By claimed MIME type first, extension second: Windows reports no type at
+// all for .mkv. Only a hint — the server sniffs the bytes — but the one-video
+// rule below needs to know before uploading, not after.
+export function isVideoFile(file: File): boolean {
+	if (file.type.startsWith("video/")) {
+		return true;
+	}
+
+	const name = file.name.toLowerCase();
+
+	return VIDEO_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 
 export type AttachmentSlot = {
 	// Client-local, so a slot can be identified and removed before the
@@ -96,16 +124,14 @@ export const useAttachments = (conversationId: string | undefined) => {
 	const [slots, setSlots] = useState<AttachmentSlot[]>([]);
 
 	// Mirrors is_admin(user) in app/authentication/authorization.py — admin
-	// and root get the relaxed count/total-size limits enforced server-side.
+	// and root get the relaxed count limit and no daily upload allowance.
 	const isAdmin =
 		auth.status === "authenticated" &&
 		(auth.user.role === "admin" || auth.user.role === "root");
 	const maxAttachmentCount = isAdmin
 		? MAX_ATTACHMENT_COUNT_ADMIN
 		: MAX_ATTACHMENT_COUNT;
-	const maxAttachmentTotalBytes = isAdmin
-		? Infinity
-		: MAX_ATTACHMENT_TOTAL_BYTES;
+	const maxVideoUploadBytes = isAdmin ? Infinity : MAX_VIDEO_UPLOAD_BYTES;
 
 	const updateSlot = useCallback(
 		(localId: string, patch: Partial<AttachmentSlot>) => {
@@ -124,19 +150,35 @@ export const useAttachments = (conversationId: string | undefined) => {
 				return;
 			}
 
-			// A rejected slot (over count or over the size budget) doesn't
-			// count against either running total — it was never uploaded, so
-			// it costs the batch nothing.
-			let totalBytes = slots
-				.filter((slot) => slot.status !== "error")
-				.reduce((sum, slot) => sum + slot.file.size, 0);
+			// A rejected slot doesn't count — it was never uploaded.
 			let count = slots.filter((slot) => slot.status !== "error").length;
+
+			// A video is sent alone: one video, nothing else with it. Mirrors
+			// the check in MessageRepository.create_turn, which is the real
+			// enforcement — this only saves uploading something that send
+			// would refuse.
+			const videoQueued = slots.some(
+				(slot) => slot.status !== "error" && isVideoFile(slot.file),
+			);
+			const incoming = Array.from(files);
 
 			const added: AttachmentSlot[] = [];
 			const toUpload: Array<{ localId: string; file: File }> = [];
 
-			for (const file of Array.from(files)) {
+			for (const file of incoming) {
 				const localId = newLocalId();
+				const isVideo = isVideoFile(file);
+
+				if (videoQueued || (isVideo && (count > 0 || incoming.length > 1))) {
+					added.push({
+						localId,
+						file,
+						status: "error",
+						id: null,
+						errorMessage: t("chat.attachmentVideoAlone"),
+					});
+					continue;
+				}
 
 				if (count >= maxAttachmentCount) {
 					added.push({
@@ -151,31 +193,21 @@ export const useAttachments = (conversationId: string | undefined) => {
 					continue;
 				}
 
-				if (file.size > MAX_UPLOAD_BYTES) {
+				if (file.size > (isVideo ? maxVideoUploadBytes : MAX_UPLOAD_BYTES)) {
 					added.push({
 						localId,
 						file,
 						status: "error",
 						id: null,
-						errorMessage: t("chat.attachmentFileTooLarge"),
+						errorMessage: t(
+							isVideo
+								? "chat.attachmentVideoTooLarge"
+								: "chat.attachmentFileTooLarge",
+						),
 					});
 					continue;
 				}
 
-				if (totalBytes + file.size > maxAttachmentTotalBytes) {
-					added.push({
-						localId,
-						file,
-						status: "error",
-						id: null,
-						errorMessage: t("chat.attachmentTooLarge", {
-							limit: Math.round(maxAttachmentTotalBytes / (1024 * 1024)),
-						}),
-					});
-					continue;
-				}
-
-				totalBytes += file.size;
 				count += 1;
 
 				added.push({
@@ -209,7 +241,7 @@ export const useAttachments = (conversationId: string | undefined) => {
 			t,
 			updateSlot,
 			maxAttachmentCount,
-			maxAttachmentTotalBytes,
+			maxVideoUploadBytes,
 		],
 	);
 

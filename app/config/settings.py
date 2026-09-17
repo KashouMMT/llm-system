@@ -38,6 +38,35 @@ def get_positive_int(
     return value
 
 
+def get_optional_positive_int(
+    environment_name: str,
+    default: int | None,
+) -> int | None:
+    """
+    Like get_positive_int, but "null" or "none" means no limit at all.
+
+    An unset or blank variable keeps the default. Only an explicit word
+    removes the limit, so a typo'd or forgotten variable can never switch
+    a cap off by accident.
+    """
+    raw = os.getenv(environment_name)
+
+    if raw is None or not raw.strip():
+        return default
+
+    if raw.strip().lower() in ("null", "none"):
+        return None
+
+    value = int(raw)
+
+    if value < 1:
+        raise ValueError(
+            f"{environment_name} must be >= 1, or null for no limit."
+        )
+
+    return value
+
+
 def get_positive_float(
     environment_name: str,
     default: float,
@@ -289,31 +318,29 @@ CONSOLE_LOG = get_valid_string("CONSOLE_LOG", "false")
 FILE_STORAGE_DIR = get_valid_string("FILE_STORAGE_DIR", "app/generated_files")
 
 # UPLOADS
-# Matches nginx's client_max_body_size for this deployment (see
-# deploy/nginx/llm-system.conf) so the app's own limit is never the looser
-# one — a request nginx would already have rejected should not reach here
-# expecting a different answer.
+# Two limits, and only two.
+#
+# Per file, for everything except video: what a reader can usefully handle.
+# A PDF or image past this is not a bigger document, just slower failure —
+# text extraction and the vision downscale gain nothing from it. Applies to
+# every role, admin included.
 UPLOAD_MAX_BYTES = get_positive_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024)
 
-# Cap on how many bytes one user may upload in a rolling 24 hours, across
-# every conversation. Enforced against files.origin='uploaded' rows only —
-# agent-generated documents don't count, since the user didn't choose to
-# spend disk on those. This is an abuse brake against a public deployment
-# with no per-user disk quota otherwise, not a precise metering feature: the
-# request that crosses the cap is still accepted (the check runs after its
-# body is already read), so a user can land slightly over on that one call.
-UPLOAD_DAILY_BYTES_PER_USER = get_positive_int(
+# Per user, per rolling 24 hours, files and video together. The only bound
+# on a video: a video is sent alone, so one recording may use the whole
+# day's allowance and nothing more. "null" removes the limit. Admin/root are
+# always exempt, so they can debug with any size.
+#
+# Enforced mid-stream, not after the upload finishes: the handler cuts the
+# body off the moment it would cross the allowance. Concurrent uploads each
+# see the same remaining allowance, so racing several can still land over —
+# an abuse brake, not metering. Counts origin='uploaded' rows only.
+#
+# nginx's client_max_body_size (deploy/nginx/llm-system.conf) must stay at
+# or above this, so the app's own error is the one a user sees.
+UPLOAD_DAILY_BYTES_PER_USER = get_optional_positive_int(
     "UPLOAD_DAILY_BYTES_PER_USER",
-    200 * 1024 * 1024,
-)
-
-# Cap on the combined size of the attachment_ids one send attaches. The
-# frontend already refuses to queue a batch this large, but that is a UX
-# convenience, not enforcement — a direct API call could otherwise attach
-# up to 10 uploads at UPLOAD_MAX_BYTES each (200 MB) in one message.
-MAX_ATTACHMENT_BATCH_BYTES = get_positive_int(
-    "MAX_ATTACHMENT_BATCH_BYTES",
-    100 * 1024 * 1024,
+    1024 * 1024 * 1024,
 )
 
 # TOOL PLUGINS

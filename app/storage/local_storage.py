@@ -1,6 +1,8 @@
 import asyncio
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -40,7 +42,13 @@ class LocalFileStorage:
 
         return path
 
-    async def write(self, data: bytes, *, extension: str) -> str:
+    def _new_key(self, extension: str) -> tuple[str, Path]:
+        """
+        A fresh key and the path it maps to.
+
+        Shared by both writers so the key layout is defined once; a second
+        copy of this in write_stream is how the two would drift apart.
+        """
         if not _EXTENSION_PATTERN.match(extension):
             raise ValueError(
                 f"Extension must be lowercase alphanumeric; got {extension!r}"
@@ -52,7 +60,11 @@ class LocalFileStorage:
         today = datetime.now(tz=timezone.utc).date()
 
         key = f"{today:%Y/%m/%d}/{uuid.uuid4().hex}.{extension}"
-        path = self._resolve(key)
+
+        return key, self._resolve(key)
+
+    async def write(self, data: bytes, *, extension: str) -> str:
+        key, path = self._new_key(extension)
 
         await asyncio.to_thread(self._write_sync, path, data)
 
@@ -63,6 +75,61 @@ class LocalFileStorage:
         )
 
         return key
+
+    async def write_stream(
+        self,
+        chunks: AsyncIterator[bytes],
+        *,
+        extension: str,
+    ) -> tuple[str, int]:
+        key, path = self._new_key(extension)
+        temporary = path.with_suffix(path.suffix + ".part")
+        written = 0
+
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+
+        try:
+            with temporary.open("wb") as handle:
+                async for chunk in chunks:
+                    # Offloaded per chunk rather than per file: a 150 MB
+                    # write on the event loop stalls SSE for every other
+                    # conversation, which is the reason this method exists
+                    # at all.
+                    await asyncio.to_thread(handle.write, chunk)
+                    written += len(chunk)
+
+            # Same atomic rename as _write_sync, for the same reason: a
+            # crash mid-upload leaves a stray .part rather than a truncated
+            # file that looks complete.
+            await asyncio.to_thread(temporary.replace, path)
+        except BaseException:
+            # An aborted or rejected upload is the expected path here, not
+            # an edge case — the size cap is enforced by `chunks` raising.
+            # Nothing else ever revisits this file, so it cleans up itself.
+            await asyncio.to_thread(temporary.unlink, True)
+            raise
+
+        logger.debug(
+            "File streamed | key=%s bytes=%s",
+            key,
+            written,
+        )
+
+        return key, written
+
+    @asynccontextmanager
+    async def temporary_path(self, key: str) -> AsyncIterator[Path]:
+        path = self._resolve(key)
+
+        if not path.is_file():
+            raise FileNotFoundError(key)
+
+        # Local storage already is a filesystem, so "temporary" here is a
+        # promise about the contract rather than about this implementation:
+        # nothing is copied, and there is nothing to clean up. An S3
+        # backend pays that cost instead, which is where the promise earns
+        # its keep.
+        yield path
 
     async def read(self, key: str) -> bytes:
         path = self._resolve(key)

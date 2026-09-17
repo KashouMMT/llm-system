@@ -6,16 +6,25 @@ wrote, not something the bytes prove — so the upload endpoint never
 trusts either. Everything here reads the bytes themselves.
 
 The allowlist is deliberately narrow, and it is an application decision
-rather than any one persona's: png, jpeg and webp images, pdf, and plain
+rather than any one persona's: png, jpeg and webp images, pdf, plain
 text in UTF-8 or Shift_JIS (which covers .txt, .md, .csv, .json and the
-like — they are all just text). Office formats are out on purpose: a
-.docx or .xlsx is mostly tables and layout, and extracting only its
-paragraphs silently hands the model half a document. A user with one is
-asked for a PDF or a screenshot instead.
+like — they are all just text), and video. Office formats are out on
+purpose: a .docx or .xlsx is mostly tables and layout, and extracting
+only its paragraphs silently hands the model half a document. A user
+with one is asked for a PDF or a screenshot instead.
+
+Video is the one broad entry, and deliberately so. It is accepted by
+container rather than by codec, and an unrecognised ISO-BMFF brand is
+called mp4 rather than rejected, because the camera operator is an
+untrained customer: the rule is "accept what ffmpeg can decode", not
+"police container brands". Nothing here checks that a video actually
+decodes — there is no is_valid_video to match is_valid_image, because
+that check is ffprobe's and ffprobe belongs to the plugin that reads
+video, not to the upload path every deployment runs.
 
 No third-party sniffing library: python-magic needs the system libmagic,
 which is an extra install step this project does not otherwise require.
-Four fixed signatures plus a text decode attempt cover the whole
+Six fixed signatures plus a text decode attempt cover the whole
 allowlist with the standard library and Pillow.
 """
 
@@ -29,11 +38,22 @@ IMAGE_JPEG = "image/jpeg"
 IMAGE_WEBP = "image/webp"
 APPLICATION_PDF = "application/pdf"
 TEXT_PLAIN = "text/plain"
+VIDEO_MP4 = "video/mp4"
+VIDEO_QUICKTIME = "video/quicktime"
+# Covers .webm as well as .mkv — see _EBML_MAGIC. There is deliberately no
+# separate video/webm constant: nothing here can produce it, and a type
+# the sniffer never returns is a claim the code does not keep.
+VIDEO_MATROSKA = "video/x-matroska"
 
 # The one definition every caller checks against — the upload endpoint,
 # the manifest, the vision path and read_attachment previously each kept
 # their own copy, which is how a new image type ends up half supported.
 IMAGE_CONTENT_TYPES = frozenset({IMAGE_PNG, IMAGE_JPEG, IMAGE_WEBP})
+
+# Same role for video: the upload endpoint checks it to pick a size cap
+# (video is two orders of magnitude larger than anything else here), and
+# the manifest checks it to describe the file to the model.
+VIDEO_CONTENT_TYPES = frozenset({VIDEO_MP4, VIDEO_QUICKTIME, VIDEO_MATROSKA})
 
 # What FileStorage.write() needs as the key's extension. Kept next to the
 # content-type constants so the two cannot drift apart silently.
@@ -43,6 +63,12 @@ EXTENSION_BY_CONTENT_TYPE = {
     IMAGE_WEBP: "webp",
     APPLICATION_PDF: "pdf",
     TEXT_PLAIN: "txt",
+    VIDEO_MP4: "mp4",
+    VIDEO_QUICKTIME: "mov",
+    # A .webm lands here too and is stored under a .mkv key. Only the
+    # storage key's suffix is affected — the name the user sees is the
+    # filename column, and ffmpeg demuxes by content, not by extension.
+    VIDEO_MATROSKA: "mkv",
 }
 
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -50,6 +76,28 @@ _JPEG_MAGIC = b"\xff\xd8\xff"
 _PDF_MAGIC = b"%PDF-"
 _RIFF_MAGIC = b"RIFF"
 _WEBP_FORM = b"WEBP"
+
+# ISO base media format (mp4, mov, 3gp, and everything a phone records):
+# a four-byte big-endian box length, then 'ftyp', then a four-byte brand.
+_FTYP = b"ftyp"
+
+# The ftyp box is a brand plus a short list of compatible brands, so it is
+# tens of bytes. Bounding its declared length is what stops a text file
+# that happens to read "... ftyp ..." at offset 4 from being called video —
+# which matters because the video check runs before the text decode, and
+# would otherwise steal a file the text branch should have had.
+_FTYP_MAX_BOX_BYTES = 1024
+
+# QuickTime's own brand. Every other brand seen in practice is an mp4
+# variant (isom, mp42, iso5, avc1, ...) and an unknown one is treated as
+# mp4 rather than rejected — see the module docstring.
+_QUICKTIME_BRANDS = frozenset({b"qt  "})
+
+# Matroska and WebM share this EBML header. Telling them apart means
+# parsing the DocType element deeper in the file, which buys nothing here:
+# ffmpeg decodes both the same way, and the only thing the distinction
+# would change is a label. Both are reported as matroska.
+_EBML_MAGIC = b"\x1a\x45\xdf\xa3"
 
 # Tried in order. utf-8-sig rather than utf-8 so a BOM — which Windows
 # Notepad and Excel both write — is stripped instead of reaching the model
@@ -96,6 +144,12 @@ def sniff_content_type(data: bytes) -> str | None:
 
     if data.startswith(_PDF_MAGIC):
         return APPLICATION_PDF
+
+    if data[4:8] == _FTYP and 8 <= int.from_bytes(data[:4], "big") <= _FTYP_MAX_BOX_BYTES:
+        return VIDEO_QUICKTIME if data[8:12] in _QUICKTIME_BRANDS else VIDEO_MP4
+
+    if data.startswith(_EBML_MAGIC):
+        return VIDEO_MATROSKA
 
     if decode_text(data) is not None:
         return TEXT_PLAIN

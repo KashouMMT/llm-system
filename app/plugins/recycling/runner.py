@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from dataclasses import dataclass
 
 from openai import OpenAI
 
@@ -21,10 +22,54 @@ from app.plugins.recycling.pipeline.consensus import merge_runs
 from app.plugins.recycling.pipeline.labels import normalize
 from app.plugins.recycling.pipeline.resolve import Resolution, grouping_key, resolve
 from app.plugins.recycling.pipeline.vision import DetectionError, detect_items_bytes
+from app.repositories.file_repository import FileRecord
+from app.storage.base import FileStorage
+from app.utils.video_frames import DEFAULT_FRAME_COUNT, FrameSample, extract_frames
 
 # Matches estimate.py's CLI defaults.
 DEFAULT_RUNS = 3
 DEFAULT_MIN_RUNS_SEEN = 2
+
+
+@dataclass(frozen=True)
+class VideoScanOutcome:
+    confident: Resolution
+    low: Resolution
+    sample: FrameSample
+
+
+async def scan_video(
+    file: FileRecord,
+    *,
+    file_storage: FileStorage,
+    client: OpenAI,
+    model: str,
+    catalog: Catalog,
+    frame_count: int = DEFAULT_FRAME_COUNT,
+) -> VideoScanOutcome:
+    """
+    One stored video → usable frames → the same multi-view scan a set of
+    photos gets.
+
+    The single entry point for scanning a video, deliberately shaped so the
+    /recycle command today and an agent tool later both call it: two copies
+    of this sequence would drift, and a scan must give the same answer
+    however it was started.
+
+    Raises FrameExtractionError (unusable video, with a remedy) or
+    DetectionError (model failure); callers turn either into a message.
+    """
+    async with file_storage.temporary_path(file.storage_key) as path:
+        sample = await extract_frames(path, count=frame_count)
+
+    confident, low = await scan(
+        [frame.jpeg for frame in sample.frames],
+        client=client,
+        model=model,
+        catalog=catalog,
+    )
+
+    return VideoScanOutcome(confident=confident, low=low, sample=sample)
 
 
 async def scan(

@@ -4,10 +4,17 @@ Every instruction this plugin sends to a vision or reasoning model.
 The same split the other plugins follow: a `plugin_prompt.txt` beside a
 plugin's `__init__.py` is text injected into the *system* prompt and paid
 for on every turn, and a `prompts.py` holds what the plugin says only
-when it actually runs. Recycling deliberately has no `plugin_prompt.txt`
-— it exposes no tools, only `/recycle` slash commands, which never reach
-the agent at all, so there is nothing the model needs to be told in
-advance.
+when it actually runs. Recycling's `plugin_prompt.txt` only tells the chat
+model that the `/recycle` commands exist and what the recording rules are;
+everything the scan itself sends is here.
+
+People and animals are excluded here, at detection, and nothing else is.
+Structure (walls, doors, floors) is deliberately still reported and
+excluded by the catalog instead: the exclusion list is the client's data,
+visible to and overridable by a reviewer, and a prompt cannot tell a fitted
+door from a detached one that is a real item. A person is never an item,
+so nothing is lost by never detecting one — and it keeps faces out of the
+result.
 
 It sits inside `pipeline/` rather than at the plugin root, unlike the
 other plugins' prompts.py, for one concrete reason: the pipeline package
@@ -36,6 +43,7 @@ Rules:
 - Group objects of the same kind even if they differ in colour or size.
 - Do NOT identify brands or models. A 2K TV and a 4K TV are both "tv".
 - Do NOT assess condition or damage.
+- Do NOT list people or animals. They are never items.
 - Include structural parts of the room (door, wall, window, floor, ceiling) if
   you see them. The caller filters those out; that is not your job.
 - If you are unsure what something is, still list it with your best guess and a
@@ -79,6 +87,7 @@ Rules:
 - Group objects of the same kind even if they differ in colour or size.
 - Do NOT identify brands or models. A 2K TV and a 4K TV are both "tv".
 - Do NOT assess condition or damage.
+- Do NOT list people or animals. They are never items.
 - Include structural parts of the room (door, wall, window, floor, ceiling)
   if you see them. The caller filters those out; that is not your job.
 - If you are unsure what something is, still list it with your best guess

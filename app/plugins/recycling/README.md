@@ -5,7 +5,7 @@ commands: a scan never enters the model's tool schema, by design, so this
 plugin cannot confuse the `anna` persona even when both are loaded in the
 same deployment. **Must be named in `EXCLUDED_TOOL_PLUGINS` on the deploy
 branch** — the production job-application service must never load it. See
-`documentation/other/Recycling_Estimator_TODO.md`, the context-restore
+`documentation/claude/Recycling_Estimator_TODO.md`, the context-restore
 document this plugin is built from; read that before changing anything
 here.
 
@@ -41,7 +41,7 @@ build_catalog`.
 | Command | Does |
 |---|---|
 | `/recycle scan_image` | Reads this message's image attachments (ignoring and *reporting* any non-images — nothing is dropped silently), runs `runner.scan` against the catalog, renders every section: Collectable, Totals, Excluded by catalog, Not in catalog, Low agreement |
-| `/recycle scan_video` | Registered, **not implemented** — answers explaining why (needs OpenCV keyframe sampling, TODO §11a/phase 7) |
+| `/recycle scan_video [frames]` | One attached video, alone (the app refuses a video sent with anything else). `runner.scan_video` → core `extract_frames` (ffmpeg keyframes; blurry/dark/overexposed/blank/duplicate frames dropped and counted; portrait/short/low-res/glare warned; refused under 4 usable frames with a remedy) → same `scan` as photos. Header states frames used, skipped per reason, warnings — above the table. `frames` = 4–40, default 12, a tuning knob |
 | `/recycle build_catalog` | Runs harvest → cluster → enrich → assemble over this message's attached images, then **merges additively**: new items are added, but anything that already matches an existing catalog row (by canonical label or alias) is left completely untouched. Safe to run repeatedly without eroding hand-reviewed data |
 | `/recycle build_catalog_force` | Same pipeline, but a match **replaces** the existing row instead of being skipped — the newer scan's canonical label, metadata, and excluded/exclusion_reason win. The existing row's `id` is kept (nothing referencing it breaks), aliases are the union of old and new, and `observations` is summed rather than reset |
 | `/recycle show_catalog` | Renders the current catalog as a Markdown table — no LLM call |
@@ -106,5 +106,5 @@ LangChain rewrite, and it moved across unchanged on purpose.
 from TODO §11a) has been deleted. Testing any part of the pipeline now
 means running the full app (`python -m app.main --api`) and going through
 `/recycle` in a real conversation. This was a deliberate trade, not an
-oversight: see `documentation/other/Recycling_Estimator_TODO.md` §12 for
+oversight: see `documentation/claude/Recycling_Estimator_TODO.md` §12 for
 why standalone usability was never the goal.

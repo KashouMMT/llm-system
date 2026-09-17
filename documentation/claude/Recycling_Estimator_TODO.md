@@ -689,6 +689,11 @@ intended shape, not as scope creep.
 Most of this is **host-application work, not plugin work** — the plugin stage is
 the last and smallest step. Ordered so that each one is testable on its own.
 
+> The implementation plan for these steps — the code each one needs, in build
+> order, plus three places where the repository does not yet support what this
+> table assumes — is `Recycling_Video_Frames_Plan.md` (2026-09-16, proposed, not
+> built). Decisions stay here; that document does not re-open any of them.
+
 | Step | Work | Why it is where it is |
 |---|---|---|
 | 7a | Stream uploads to disk — `FileStorage` gains a streaming write | `POST /conversations/{id}/uploads` buffers the whole body in a `bytearray` then copies it: a 150 MB upload peaks near 300 MB of RAM, *per concurrent upload*. Everything after this assumes it is fixed. |

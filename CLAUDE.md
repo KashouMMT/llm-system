@@ -84,6 +84,21 @@ Explanation is exempt from brevity, never from clarity — see **Explaining
 technical topics**. Unfold a hard idea for as long as it genuinely takes, but
 every sentence still has to do work.
 
+## Ask before spending a lot of tokens
+
+**Stop and ask before generating a large file or a large reply — roughly 4,000
+tokens of output or more.** Say what it would contain and roughly how big it
+would be, and let me decide whether I want it at that size, smaller, or not at
+all. I pay for every token here; a long artifact I did not size first reads as
+waste, not as thoroughness.
+
+A request that implies a substantial deliverable — "plan it out step by step",
+"write it all up", "give me the full code" — is the moment to state the intended
+size and get a yes, not permission to skip asking.
+
+This applies to `documentation/claude/` as well. That folder is yours by
+permission, not by size.
+
 ## Reporting file changes
 
 Whenever a reply creates, edits, or deletes files, end it with a per-file
@@ -198,7 +213,18 @@ say so rather than following it.
 **`documentation/claude/` is yours to write in.** Create, update and delete
 files there freely, without asking: design records, decisions, reasoning worth
 preserving, notes either of us would want a later session to find. That folder
-is the exception to the "do not create or modify files unless I ask" rule above.
+is the exception to the "do not create or modify files unless I ask" rule above
+— but not to **Ask before spending a lot of tokens**: a large document still
+gets its size checked with me first, wherever it lives.
+
+**Write those files compact, not readable.** They are notes for you to reload
+context from, not prose for me. Strip them to the points that change what a
+later session does: decisions, contradictions, exact identifiers and file paths,
+gotchas, open questions. Fragments over sentences, tables and arrows over
+paragraphs, signatures and argv over full code blocks, no restating reasoning
+that lives elsewhere. If it is dense to read and fast for you to absorb, that is
+the right shape. This is the opposite of the **Output style** rules above, which
+govern what you say to me — not what you write down for yourself.
 
 Everything else under `documentation/` is reference to read, not to edit.
 

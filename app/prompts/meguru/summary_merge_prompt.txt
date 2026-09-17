@@ -1,0 +1,96 @@
+You are maintaining the long-term memory of an assistant that relays
+measured estimates — item counts, weights and volumes — to the person who
+has to review them. This memory is the only record of everything said
+earlier in the conversation; once a figure is dropped here, it is gone
+permanently, and a figure altered here is indistinguishable from one that
+was measured.
+
+Merge NEW SUMMARY into CURRENT SUMMARY and return the combined memory.
+
+==================================================
+LENGTH BUDGET
+==================================================
+
+Keep the combined memory under {max_characters} characters.
+
+This is a budget, not a target — a short summary is not better than a
+complete one. Only start trimming when you are actually over budget, and
+trim strictly in this order:
+
+1. Tighten wording. Say the same facts in fewer words.
+2. Remove resolved OPEN_ITEMS and any detail that no longer matters.
+3. Merge related entries under TOPICS into broader ones.
+4. Drop the oldest and least consequential TOPICS entries.
+
+Never reach step 4 by skipping the earlier steps. If you are still over
+budget after step 4, go over budget rather than breaking a PRESERVATION
+RULE below — a value silently lost here cannot be recovered.
+
+==================================================
+PRESERVATION RULES
+==================================================
+
+These rules override brevity and the length budget. When in doubt, keep
+the detail.
+
+- Never drop a fact from CURRENT SUMMARY just to make the result
+  shorter. Compress wording, never content.
+- Copy counts, weights, volumes, dimensions, item labels, catalog ids,
+  filenames and dates EXACTLY as they appear, with their units.
+- Never approximate or generalize a value that was previously specific.
+- Never sharpen a value that was previously flagged as uncertain. An item
+  under UNRESOLVED stays under UNRESOLVED until something in the
+  conversation resolved it.
+- Never re-total anything, and never correct a total that looks wrong.
+  Keep the stated totals and keep the discrepancy.
+- Keep information in its original language and script.
+
+==================================================
+MERGE RULES
+==================================================
+
+- Remove exact duplicates only. Two entries that differ in any detail
+  are not duplicates — keep both unless one clearly supersedes the
+  other. Two scans of the same room are not duplicates of each other.
+- When NEW SUMMARY corrects or updates something in CURRENT SUMMARY,
+  keep the newer version and remove the outdated one.
+- When NEW SUMMARY adds detail to an existing entry, combine them into
+  one complete entry rather than keeping a partial and a full version.
+- Move an item out of UNRESOLVED or OPEN_ITEMS once it has been settled,
+  and record how it was settled and by whom.
+- Add newly unanswered questions to OPEN_ITEMS.
+- Remove filler, pleasantries, and resolved temporary detail.
+- Do not add anything that appears in neither summary.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY the structured notes below. No preamble, no explanation, no
+commentary.
+
+TOPICS:
+- ...
+
+USER_PREFERENCES:
+- ...
+
+USER_GOALS:
+- ...
+
+FACTS:
+- ...
+
+UNRESOLVED:
+- ...
+
+OPEN_ITEMS:
+- ...
+
+CURRENT SUMMARY:
+
+{current_summary}
+
+NEW SUMMARY:
+
+{chunk_summary}

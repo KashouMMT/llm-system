@@ -6,6 +6,7 @@ from uuid import UUID
 from psycopg.rows import class_row
 from psycopg_pool import AsyncConnectionPool
 
+from app.utils.detect import VIDEO_CONTENT_TYPES
 from app.utils.logger import logger
 
 
@@ -63,7 +64,6 @@ class MessageRepository:
         user_content: str,
         client_message_id: UUID,
         user_id: UUID,
-        max_attachment_batch_bytes: int,
         attachment_ids: Sequence[UUID] = (),
     ) -> Turn:
         """
@@ -86,11 +86,10 @@ class MessageRepository:
         UniqueViolation on the insert below fires before this UPDATE ever
         runs, so a retry can only reach this point once.
 
-        max_attachment_batch_bytes bounds the combined size_bytes of what
-        gets attached, checked from the same UPDATE's own RETURNING rather
-        than a second query. The frontend already refuses to queue a batch
-        this large, but that is a UX convenience — a direct API call is
-        stopped here.
+        A video must be attached alone, checked from the same UPDATE's own
+        RETURNING rather than a second query. There is no combined-size check:
+        each upload was already bounded when it was stored (per-file cap, and
+        the daily allowance), so a message cannot attach more than that.
 
         The parent conversation's updated_at is bumped in the same
         transaction — every statement shares one connection block, which the
@@ -100,7 +99,7 @@ class MessageRepository:
         used — that is the idempotency guard, enforced by the database because
         retries race. Raises ValueError if any attachment_ids do not resolve
         to an unattached upload owned by this user in this conversation, or if
-        their combined size exceeds max_attachment_batch_bytes.
+        a video is attached together with anything else.
         """
         async with (
             self._pool.connection() as conn,
@@ -143,7 +142,7 @@ class MessageRepository:
                       AND user_id = %s
                       AND origin = 'uploaded'
                       AND message_id IS NULL
-                    RETURNING size_bytes
+                    RETURNING content_type
                     """,
                     (
                         user_message_id,
@@ -153,19 +152,26 @@ class MessageRepository:
                     ),
                 )
 
-                attached_sizes = [row[0] for row in await cur.fetchall()]
+                attached_types = [row[0] for row in await cur.fetchall()]
 
-                if len(attached_sizes) != len(unique_attachment_ids):
+                if len(attached_types) != len(unique_attachment_ids):
                     raise ValueError(
                         "One or more attachment_ids are invalid, already "
                         "attached, or do not belong to this conversation."
                     )
 
-                if sum(attached_sizes) > max_attachment_batch_bytes:
+                # A video travels alone: one recording is one room, and its
+                # frames already fill the turn's image budget. Checked here,
+                # inside the transaction, so the UPDATE above rolls back and
+                # the uploads stay free to attach to a corrected send. The
+                # frontend enforces the same rule; this is the enforcement.
+                if len(attached_types) > 1 and any(
+                    content_type in VIDEO_CONTENT_TYPES
+                    for content_type in attached_types
+                ):
                     raise ValueError(
-                        "Attachments exceed the "
-                        f"{max_attachment_batch_bytes}-byte limit for one "
-                        "message."
+                        "A video must be sent on its own: one video per "
+                        "message, with no other attachments."
                     )
 
             await cur.execute(

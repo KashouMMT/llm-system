@@ -12,7 +12,12 @@ import json
 from collections.abc import Sequence
 
 from app.repositories.file_repository import FileRecord
-from app.utils.detect import APPLICATION_PDF, IMAGE_CONTENT_TYPES, TEXT_PLAIN
+from app.utils.detect import (
+    APPLICATION_PDF,
+    IMAGE_CONTENT_TYPES,
+    TEXT_PLAIN,
+    VIDEO_CONTENT_TYPES,
+)
 from app.utils.filenames import clean_filename
 
 # What read_attachment can extract text from. Anything else that is still
@@ -37,6 +42,8 @@ def format_attachment_manifest_line(
     is_current_turn: bool,
     vision_enabled: bool = False,
     image_prepared: bool = False,
+    video_frames_shown: int = 0,
+    video_note: str | None = None,
 ) -> str:
     """
     One line identifying an attachment, plus a note on how — if at all —
@@ -82,6 +89,44 @@ def format_attachment_manifest_line(
             "read_attachment before answering anything about its contents; "
             "do not rely on what you said about it earlier."
         )
+
+    if file.content_type in VIDEO_CONTENT_TYPES:
+        if not is_current_turn:
+            return (
+                f"{identity} Frames from this video were visible to you only "
+                "on the turn it was attached; they are not shown again here."
+            )
+
+        if not vision_enabled:
+            return f"{identity} You cannot view video; vision is disabled."
+
+        if video_frames_shown:
+            # Stated plainly because a model handed stills tends to talk as
+            # if it watched the video — motion, sound, what happened between
+            # frames — none of which it has.
+            line = (
+                f"{identity} Shown below as {video_frames_shown} still frames "
+                "sampled across the video, in time order. You see only these "
+                "stills: no motion, no audio, and nothing between frames."
+            )
+
+            # Skipped frames and capture problems are told to the user, not
+            # absorbed: an answer built on 5 usable frames of a 60-frame video
+            # must say so.
+            if video_note:
+                line += f" Frame check: {video_note} Tell the user about any of these problems."
+
+            return line
+
+        line = (
+            f"{identity} Could not be prepared for viewing — treat it as not "
+            "visible."
+        )
+
+        if video_note:
+            line += f" Reason: {video_note} Pass this on to the user."
+
+        return line
 
     if file.content_type not in IMAGE_CONTENT_TYPES:
         return (

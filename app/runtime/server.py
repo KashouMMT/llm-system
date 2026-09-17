@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Annotated, Any
@@ -42,10 +43,52 @@ from app.services.chat_service import ConversationHeldError
 from app.utils.detect import (
     EXTENSION_BY_CONTENT_TYPE,
     IMAGE_CONTENT_TYPES,
+    VIDEO_CONTENT_TYPES,
     is_valid_image,
     sniff_content_type,
 )
 from app.utils.filenames import clean_filename
+
+# Enough for every magic-byte signature and a meaningful look at a text
+# file — but only ever used to choose a branch and a size cap. The
+# non-video branch still sniffs the complete body, so a file whose first
+# 8 KB is clean text and whose 20th KB is binary is refused exactly as it
+# was before video existed.
+_SNIFF_BYTES = 8192
+
+
+async def _rejoin(head: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    """The already-consumed head of a request body, then the rest of it."""
+    yield head
+
+    async for chunk in rest:
+        yield chunk
+
+
+async def _capped(
+    chunks: AsyncIterator[bytes],
+    limit: int,
+    *,
+    status_code: int,
+    detail: str,
+) -> AsyncIterator[bytes]:
+    """
+    Pass chunks through, raising the moment their total exceeds `limit`.
+
+    Raising from inside the iterator is the point: it propagates out of
+    FileStorage.write_stream's loop, whose cleanup deletes the partial
+    file. Checking after the write instead would cost a user over the cap
+    a full video's worth of disk write before being told no.
+    """
+    total = 0
+
+    async for chunk in chunks:
+        total += len(chunk)
+
+        if total > limit:
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        yield chunk
 from app.utils.logger import logger
 
 SSE_HEADERS = {
@@ -531,58 +574,109 @@ def create_api(application: Application) -> FastAPI:
         restriction, and FastAPI decodes it back before this function ever
         sees it.
         """
-        body = bytearray()
+        # Called once and held: Starlette refuses a second stream() on the
+        # same request, and the head read here is continued below.
+        stream = request.stream()
+        head = bytearray()
 
-        async for chunk in request.stream():
-            body.extend(chunk)
+        async for chunk in stream:
+            head.extend(chunk)
 
-            if len(body) > UPLOAD_MAX_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Upload exceeds the {UPLOAD_MAX_BYTES}-byte limit.",
-                )
+            if len(head) >= _SNIFF_BYTES:
+                break
 
-        data = bytes(body)
-
-        if not data:
+        # Checked before sniffing, not after: an empty body decodes as
+        # valid (empty) text and would otherwise sniff as text/plain.
+        if not head:
             raise HTTPException(status_code=422, detail="Upload body is empty.")
 
-        content_type = sniff_content_type(data)
+        # Provisional — it picks the branch and the size cap, nothing more.
+        probable_type = sniff_content_type(bytes(head))
 
-        if content_type is None:
+        if probable_type is None:
             raise HTTPException(
                 status_code=415,
                 detail="Unsupported file type.",
             )
 
-        if content_type in IMAGE_CONTENT_TYPES and not is_valid_image(data):
-            raise HTTPException(
-                status_code=415,
-                detail="Image file is corrupt or unreadable.",
-            )
+        is_video = probable_type in VIDEO_CONTENT_TYPES
 
-        # Admin/root are exempt from the daily quota (UPLOAD_MAX_BYTES above
-        # still applies to every role) — skip the query entirely rather than
-        # compute a number that won't be checked.
-        if not is_admin(user):
+        # A video has no per-file cap: it is sent alone, so the daily
+        # allowance below is its bound. Everything else gets UPLOAD_MAX_BYTES,
+        # admin included.
+        limit = sys.maxsize if is_video else UPLOAD_MAX_BYTES
+        status_code = 413
+        detail = f"Upload exceeds the {UPLOAD_MAX_BYTES}-byte limit."
+
+        # The daily allowance is folded into the cap the body streams
+        # against, rather than checked once the body is in — checking
+        # afterwards writes a whole video to disk before refusing it.
+        # Admin/root are exempt, and a null setting means no daily limit:
+        # skip the query entirely rather than compute an unchecked number.
+        if UPLOAD_DAILY_BYTES_PER_USER is not None and not is_admin(user):
             uploaded_today = await application.file_repository.sum_uploaded_bytes_since(
                 user.id,
                 hours=24,
             )
+            remaining = UPLOAD_DAILY_BYTES_PER_USER - uploaded_today
 
-            if uploaded_today + len(data) > UPLOAD_DAILY_BYTES_PER_USER:
-                raise HTTPException(
-                    status_code=429,
-                    detail=(
-                        "Daily upload limit of "
-                        f"{UPLOAD_DAILY_BYTES_PER_USER} bytes exceeded."
-                    ),
+            if remaining < limit:
+                limit = remaining
+                status_code = 429
+                detail = (
+                    f"Daily upload limit of {UPLOAD_DAILY_BYTES_PER_USER} "
+                    "bytes exceeded."
                 )
 
-        storage_key = await application.file_storage.write(
-            data,
-            extension=EXTENSION_BY_CONTENT_TYPE[content_type],
-        )
+            if limit <= 0:
+                raise HTTPException(status_code=status_code, detail=detail)
+
+        if is_video:
+            # Streamed straight to disk: buffering a phone recording here
+            # peaked near twice its size in memory, per concurrent upload.
+            # Nothing validates that it decodes — that is ffprobe's job, in
+            # the plugin that reads video (see app/utils/detect.py).
+            content_type = probable_type
+            storage_key, size_bytes = await application.file_storage.write_stream(
+                _capped(
+                    _rejoin(bytes(head), stream),
+                    limit,
+                    status_code=status_code,
+                    detail=detail,
+                ),
+                extension=EXTENSION_BY_CONTENT_TYPE[content_type],
+            )
+        else:
+            body = head
+
+            async for chunk in stream:
+                body.extend(chunk)
+
+                if len(body) > limit:
+                    raise HTTPException(status_code=status_code, detail=detail)
+
+            data = bytes(body)
+
+            # Re-sniffed on the whole body: the head only chose the branch.
+            content_type = sniff_content_type(data)
+
+            if content_type is None:
+                raise HTTPException(
+                    status_code=415,
+                    detail="Unsupported file type.",
+                )
+
+            if content_type in IMAGE_CONTENT_TYPES and not is_valid_image(data):
+                raise HTTPException(
+                    status_code=415,
+                    detail="Image file is corrupt or unreadable.",
+                )
+
+            storage_key = await application.file_storage.write(
+                data,
+                extension=EXTENSION_BY_CONTENT_TYPE[content_type],
+            )
+            size_bytes = len(data)
 
         record = await application.file_repository.create(
             conversation_id=conversation.id,
@@ -593,7 +687,7 @@ def create_api(application: Application) -> FastAPI:
             filename=clean_filename(filename),
             storage_key=storage_key,
             content_type=content_type,
-            size_bytes=len(data),
+            size_bytes=size_bytes,
         )
 
         logger.info(
@@ -601,7 +695,7 @@ def create_api(application: Application) -> FastAPI:
             record.id,
             conversation.id,
             content_type,
-            len(data),
+            size_bytes,
         )
 
         return {

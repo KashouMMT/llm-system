@@ -67,11 +67,14 @@ export const ja: Messages = {
 		sending: "送信中…",
 		attach: "ファイルを添付",
 		attachFolder: "フォルダを添付",
+		attachVideo: "動画を添付",
+		attachmentVideoAlone:
+			"動画は単独で送信してください（動画1本のみ、他の添付ファイルは不可）。",
+		attachmentVideoTooLarge: "動画のサイズが1日のアップロード上限（1GB）を超えています。",
 		attachmentUploading: "アップロード中…",
 		attachmentError: "アップロードに失敗しました。",
 		attachmentRemove: "添付を削除",
 		attachmentTooMany: "添付は1メッセージあたり最大{{limit}}件までです。",
-		attachmentTooLarge: "添付ファイルの合計サイズが{{limit}}MBを超えます。",
 		attachmentFileTooLarge: "ファイルサイズが上限の20MBを超えています。",
 		attachmentUnsupported:
 			"対応していないファイルです。画像（PNG・JPEG・WebP）、PDF、またはテキストファイル（UTF-8・Shift_JIS）を送信してください。",

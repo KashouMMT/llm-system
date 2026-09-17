@@ -37,11 +37,22 @@ from app.plugins.recycling.pipeline.resolve import (
     UnmatchedItem,
 )
 from app.plugins.recycling.pipeline.vision import DetectionError
-from app.plugins.recycling.runner import DEFAULT_MIN_RUNS_SEEN, harvest, scan
+from app.plugins.recycling.runner import (
+    DEFAULT_MIN_RUNS_SEEN,
+    harvest,
+    scan,
+    scan_video,
+)
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
-from app.utils.detect import IMAGE_CONTENT_TYPES, TEXT_PLAIN
+from app.utils.detect import IMAGE_CONTENT_TYPES, TEXT_PLAIN, VIDEO_CONTENT_TYPES
 from app.utils.logger import logger
+from app.utils.video_frames import (
+    DEFAULT_FRAME_COUNT,
+    MAX_FRAME_COUNT,
+    MIN_FRAME_COUNT,
+    FrameExtractionError,
+)
 
 CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"
 
@@ -163,6 +174,23 @@ def _render_matched_table(items: list[ResolvedItem], title: str) -> str:
     return "\n".join(lines)
 
 
+def _render_excluded_line(items: list[ResolvedItem]) -> str:
+    """
+    Catalog-excluded items as one line, not a table.
+
+    Mostly room structure — walls, floor, doors — which has no weight or
+    volume, so a table of it was rows of "?" that buried the real result.
+    Still listed rather than hidden: a reviewer has to be able to spot a
+    detached door that the catalog excluded as "door". The full rows stay in
+    the attached JSON.
+    """
+    names = ", ".join(
+        f"{item.label} ×{item.count}" if item.count > 1 else item.label
+        for item in items
+    )
+    return f"**Excluded by catalog ({len(items)}):** {names}"
+
+
 def _render_unmatched_table(items: list[UnmatchedItem], title: str) -> str:
     if not items:
         return f"**{title}:** none"
@@ -218,7 +246,7 @@ def render_scan_result(confident: Resolution, low: Resolution, min_runs_seen: in
         _render_totals(confident),
     ]
     if confident.excluded:
-        sections += ["", _render_matched_table(confident.excluded, "Excluded by catalog")]
+        sections += ["", _render_excluded_line(confident.excluded)]
     if confident.unmatched:
         sections += [
             "",
@@ -317,14 +345,107 @@ def _make_scan_image(
     return scan_image
 
 
-async def scan_video(context: CommandContext) -> str: 
-    return (
-        "`/recycle scan_video` is not implemented yet — video needs OpenCV "
-        "keyframe sampling, which has not been built (TODO §11a / phase 7). "
-        "For now, attach one or more still photos and use `/recycle scan_image` "
-        "instead; several photos of the same room already get deduplicated "
-        "across views."
-    )
+def _frame_count_argument(argument: str) -> int | None:
+    """
+    `/recycle scan_video [frames]`. None means the argument is invalid.
+
+    A tuning knob, not the quality presets the TODO describes: those trade
+    frame count for time, and the accuracy curve they would be named after
+    has not been measured yet.
+    """
+    text = argument.strip()
+
+    if not text:
+        return DEFAULT_FRAME_COUNT
+
+    if not text.isdigit() or not MIN_FRAME_COUNT <= int(text) <= MAX_FRAME_COUNT:
+        return None
+
+    return int(text)
+
+
+def _make_scan_video(
+    *, client: OpenAI, model: str, file_repository: FileRepository, file_storage: FileStorage
+) -> CommandHandler:
+    async def scan_video_command(context: CommandContext) -> str:
+        frame_count = _frame_count_argument(context.argument)
+
+        if frame_count is None:
+            return (
+                f"Frame count must be a number from {MIN_FRAME_COUNT} to "
+                f"{MAX_FRAME_COUNT}, e.g. `/recycle scan_video 20`. Leave it "
+                f"out for the default of {DEFAULT_FRAME_COUNT}."
+            )
+
+        files = await file_repository.get_by_message_ids([context.user_message_id])
+        videos = [file for file in files if file.content_type in VIDEO_CONTENT_TYPES]
+
+        if not videos:
+            return (
+                "No video attached. Attach one room recording with the video "
+                "button and send `/recycle scan_video` with it."
+            )
+
+        # Unreachable through the app — create_turn refuses a video sent with
+        # anything else — but a command must not assume how it was reached.
+        if len(files) > 1:
+            return "A video must be scanned on its own: one video, no other attachments."
+
+        try:
+            catalog = _load_catalog_or_empty()
+        except CatalogError as exc:
+            return f"Could not load the catalog: {exc}"
+
+        file = videos[0]
+
+        try:
+            outcome = await scan_video(
+                file,
+                file_storage=file_storage,
+                client=client,
+                model=model,
+                catalog=catalog,
+                frame_count=frame_count,
+            )
+        except FrameExtractionError as exc:
+            return f"Could not scan `{file.filename}`: {exc}"
+        except DetectionError as exc:
+            return f"Scan failed: {exc}"
+
+        sample = outcome.sample
+
+        await _attach_json(
+            context,
+            file_repository=file_repository,
+            file_storage=file_storage,
+            filename="recycle_scan_result.json",
+            payload={
+                **_resolution_payload(outcome.confident),
+                "low_agreement": _resolution_payload(outcome.low),
+                "totals": {
+                    "weight_kg": outcome.confident.total_weight_kg,
+                    "volume_m3": outcome.confident.total_volume_m3,
+                    "price": outcome.confident.total_price,
+                },
+                "frame_check": {
+                    "candidates": sample.candidates,
+                    "used": len(sample.frames),
+                    "skipped": sample.skipped,
+                    "warnings": sample.warnings,
+                },
+            },
+        )
+
+        # Capture problems go above the table, not below it: a reviewer has
+        # to read "half the video was too dark" before trusting the counts.
+        header = [f"Scanned `{file.filename}` — {sample.summary()}."]
+        header += [f"- ⚠ {warning}" for warning in sample.warnings]
+
+        body = render_scan_result(outcome.confident, outcome.low, DEFAULT_MIN_RUNS_SEEN)
+
+        return "\n".join(header) + f"\n\n{body}"
+
+    return scan_video_command
 
 
 def _make_build_catalog(
@@ -504,7 +625,9 @@ def make_recycle_commands(
         "scan_image": _make_scan_image(
             client=client, model=model, file_repository=file_repository, file_storage=file_storage
         ),
-        "scan_video": scan_video,
+        "scan_video": _make_scan_video(
+            client=client, model=model, file_repository=file_repository, file_storage=file_storage
+        ),
         "build_catalog": _make_build_catalog(
             client=client,
             model=model,
@@ -550,8 +673,8 @@ def make_recycle_commands(
             namespace="recycle",
             handler=handle_recycle,
             help_text=(
-                "/recycle scan_image <images>, scan_video <video> (not yet "
-                "implemented), build_catalog <images> (adds new items, never "
+                "/recycle scan_image <images>, scan_video [frames] <one video>, "
+                "build_catalog <images> (adds new items, never "
                 "touches existing ones), build_catalog_force <images> (also "
                 "overwrites matching existing items with the new scan), "
                 "show_catalog"
