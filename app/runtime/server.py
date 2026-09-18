@@ -33,6 +33,7 @@ from app.config.settings import (
     UPLOAD_MAX_BYTES,
 )
 from app.llm.system_prompt import load_first_message
+from app.plugins.command_help import describe_commands
 from app.plugins.recruitment.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.file_repository import serialize_attachment
@@ -820,6 +821,25 @@ def create_api(application: Application) -> FastAPI:
             media_type=document.renderer.content_type,
             headers={"Content-Disposition": _attachment_header(document.filename)},
         )
+
+    # ---- commands ------------------------------------------------------
+
+    @app.get("/commands")
+    async def get_commands(user: Annotated[User, Depends(current_user)]):
+        """
+        The slash commands this deployment loaded, for the frontend's
+        autocomplete — rendered from the same SubcommandSpecs as the system
+        prompt, so the two cannot disagree.
+
+        Admin-only subcommands are omitted for other users. That is only
+        tidiness: ChatService refuses them regardless of what was listed.
+        """
+        return {
+            "commands": describe_commands(
+                application.commands,
+                include_admin=is_admin(user),
+            )
+        }
 
     # ---- settings ------------------------------------------------------
 

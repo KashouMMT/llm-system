@@ -9,11 +9,16 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
-from app.plugins.attachments import prompts
+from app.attachments import prompts
 from app.repositories.file_repository import FileRepository
 from app.storage.base import FileStorage
 from app.utils.attachment_manifest import READABLE_CONTENT_TYPES
-from app.utils.detect import APPLICATION_PDF, IMAGE_CONTENT_TYPES, decode_text
+from app.utils.detect import (
+    APPLICATION_PDF,
+    IMAGE_CONTENT_TYPES,
+    VIDEO_CONTENT_TYPES,
+    decode_text,
+)
 from app.utils.filenames import clean_filename
 from app.utils.logger import logger
 
@@ -166,6 +171,13 @@ def make_attachment_tools(
 
         if file.content_type in IMAGE_CONTENT_TYPES:
             return prompts.IMAGE_ONLY.format(
+                name=name,
+                content_type=file.content_type,
+                size_bytes=file.size_bytes,
+            )
+
+        if file.content_type in VIDEO_CONTENT_TYPES:
+            return prompts.VIDEO_ONLY.format(
                 name=name,
                 content_type=file.content_type,
                 size_bytes=file.size_bytes,

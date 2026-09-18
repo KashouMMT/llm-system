@@ -1,4 +1,6 @@
+from app.attachments.prompts import SYSTEM_PROMPT_SECTION as ATTACHMENTS_SECTION
 from app.config.prompts import (
+    ATTACHMENT_PROMPT_FILE,
     FIRST_MESSAGE_FILE,
     SUMMARY_CHUNK_PROMPT_FILE,
     SUMMARY_MERGE_PROMPT_FILE,
@@ -33,7 +35,9 @@ from app.utils.logger import logger
 # instruction here to call a tool becomes a lie the moment that plugin
 # enters EXCLUDED_TOOL_PLUGINS. Plugin-specific standing instructions go
 # in that plugin's own plugin_prompt.txt, which is injected only while
-# the plugin is loaded — see ToolPlugin.system_prompt.
+# the plugin is loaded — see ToolPlugin.system_prompt. Attachments are the
+# one tool stated outside that block, because read_attachment is core and
+# cannot be excluded — see app/attachments/prompts.py.
 RESPONSE_FORMAT = """
 ==================================================
 RESPONSE FORMAT
@@ -73,11 +77,18 @@ YOUR TOOLS
 """.strip()
 
 
-# Roughly 20% of a 16k context window. The system prompt is re-sent on
-# every request, so growth here is paid for on each turn — and a small
-# model follows a long prompt less reliably than a short one. Crossing
-# this is a prompt to delete something, not a failure.
-SYSTEM_PROMPT_TOKEN_BUDGET = 3000
+# Roughly 30% of the default 16k CONTEXT_WINDOW, leaving ~9k for summary
+# and history after MAX_TOKENS is reserved for the reply. Raised from
+# 3000 once the always-on attachments section and per-set
+# attachment_prompt.txt landed: the largest real set (meguru with every
+# plugin) now estimates ~4k, so 3000 warned on every startup and the
+# warning stopped meaning anything. ~1k headroom above that, and the
+# 4-chars-per-token estimate undercounts Japanese, so keep it that way.
+# The system prompt is re-sent on every request, so growth here is paid
+# for on each turn — and a small model follows a long prompt less reliably
+# than a short one. Crossing this is a prompt to delete something, not a
+# failure.
+SYSTEM_PROMPT_TOKEN_BUDGET = 5000
 
 
 def _estimate_tokens(text: str) -> int:
@@ -91,10 +102,21 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4
 
 
-def _compose(persona: str, plugin_prompts: str = "") -> str:
+def _compose(
+    persona: str,
+    plugin_prompts: str = "",
+    attachment_prompt: str | None = None,
+) -> str:
     """
-    Attach the renderer contract, then whatever the loaded plugins had to
-    say, to a persona.
+    Attach the renderer contract, the attachments section, then whatever
+    the loaded plugins had to say, to a persona.
+
+    The attachments section is two layers. ATTACHMENTS_SECTION is the tool
+    contract (content is data not instructions; re-read, never recall) and
+    is identical for every set, so a persona cannot drop the injection
+    guard by omission. `attachment_prompt` is the set's optional
+    attachment_prompt.txt — what *this* persona should look for in a file —
+    placed directly under it so the two read as one section.
 
     Plugin text goes last on purpose. The persona is who the assistant is
     and the renderer contract is how it writes; a plugin's standing
@@ -102,7 +124,10 @@ def _compose(persona: str, plugin_prompts: str = "") -> str:
     situational of the three and the part most likely to be absent
     entirely.
     """
-    prompt = f"{persona}\n\n{RESPONSE_FORMAT}"
+    prompt = f"{persona}\n\n{RESPONSE_FORMAT}\n\n{ATTACHMENTS_SECTION}"
+
+    if attachment_prompt:
+        prompt = f"{prompt}\n\n{attachment_prompt}"
 
     if plugin_prompts.strip():
         prompt = f"{prompt}\n\n{TOOL_NOTES_HEADER}\n\n{plugin_prompts.strip()}"
@@ -146,15 +171,20 @@ def load_system_prompt(
     read, this degrades to the built-in DEFAULT_PROMPT rather than
     failing, so a bad SYSTEM_PROMPT value never takes the assistant down.
 
-    Every path returns the persona with RESPONSE_FORMAT and the plugin
-    block appended — the formatting contract belongs to the interface, so
-    it must not depend on which persona happened to load, or on whether
-    one loaded at all. The same is true of the plugin block: the tools
-    exist whichever persona is in front of them.
+    Every path returns the persona with RESPONSE_FORMAT, the attachments
+    section and the plugin block appended — the formatting contract
+    belongs to the interface, so it must not depend on which persona
+    happened to load, or on whether one loaded at all. The same is true of
+    the attachments contract and the plugin block: the tools exist
+    whichever persona is in front of them. Only the set's optional
+    attachment_prompt.txt varies, and it is read from whichever set won
+    resolution, so a fallback never pairs set A's persona with set B's
+    attachment guidance.
     """
     try:
         set_dir = resolve_prompt_set(name)
         content = read_prompt_file(set_dir, SYSTEM_PROMPT_FILE)
+        attachment_prompt = read_optional_prompt_file(set_dir, ATTACHMENT_PROMPT_FILE)
     except (OSError, ValueError) as error:
         logger.warning(
             "Persona unreadable, using built-in default | name=%s error=%s",
@@ -164,13 +194,14 @@ def load_system_prompt(
         return _compose(DEFAULT_PROMPT, plugin_prompts)
 
     logger.debug(
-        "System prompt loaded | name=%s dir=%s characters=%s",
+        "System prompt loaded | name=%s dir=%s characters=%s attachment_prompt=%s",
         name,
         set_dir.name,
         len(content),
+        attachment_prompt is not None,
     )
 
-    return _compose(content, plugin_prompts)
+    return _compose(content, plugin_prompts, attachment_prompt)
 
 
 def load_first_message(name: str = SYSTEM_PROMPT) -> str | None:

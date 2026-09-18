@@ -141,6 +141,50 @@ def _discover(
     return plugins, failed
 
 
+async def initialize_plugins(
+    context: ToolContext,
+    *,
+    excluded: Collection[str] = (),
+    strict: bool = False,
+) -> frozenset[str]:
+    """
+    Await every loaded plugin's `initialize` hook, in name order.
+
+    Returns the names whose hook raised. The caller adds them to the
+    exclusion set for tools, commands and prompts: a plugin that could not
+    create its tables would otherwise offer commands that fail on every
+    call, which a user meets as a broken feature rather than a load error.
+
+    Import failures are not reported here — load_tools' own discovery
+    reports them, and counting them twice would make the startup log look
+    like two separate faults. `strict` raises on a failed hook, same
+    meaning as in load_tools.
+    """
+    plugins, _failed = _discover(excluded, quiet=True)
+    failed: list[str] = []
+
+    for plugin in plugins:
+        if plugin.initialize is None:
+            continue
+
+        try:
+            await plugin.initialize(context)
+        except Exception:  # noqa: BLE001
+            logger.exception("Tool plugin initialize failed | plugin=%s", plugin.name)
+            failed.append(plugin.name)
+            continue
+
+        logger.info("Tool plugin initialized | plugin=%s", plugin.name)
+
+    if failed and strict:
+        raise RuntimeError(
+            f"Tool plugins failed to initialize: {failed}. "
+            "Set TOOL_PLUGINS_STRICT=false to boot without them."
+        )
+
+    return frozenset(failed)
+
+
 def load_tools(
     context: ToolContext,
     *,
@@ -229,6 +273,25 @@ def load_tools(
     return tools
 
 
+def _check_subcommand_names(command: PluginCommand) -> None:
+    """
+    Raise when two subcommands of one namespace claim the same name or
+    alias. Same reasoning as a duplicate namespace: PluginCommand.find
+    would silently pick the first, so `/recycle x` would run whichever
+    spec happened to be declared earlier.
+    """
+    seen: dict[str, str] = {}
+
+    for spec in command.subcommands:
+        for name in (spec.name, *spec.aliases):
+            if name in seen:
+                raise ValueError(
+                    f"Duplicate subcommand '/{command.namespace} {name}': claimed "
+                    f"by both '{seen[name]}' and '{spec.name}'."
+                )
+            seen[name] = spec.name
+
+
 def load_commands(
     context: ToolContext,
     *,
@@ -279,6 +342,8 @@ def load_commands(
                     f"and plugin '{plugin.name}'. Namespaces must be unique."
                 )
 
+            _check_subcommand_names(command)
+
             provider_of[command.namespace] = plugin.name
             commands[command.namespace] = command
 
@@ -298,8 +363,8 @@ def load_plugin_prompts(*, excluded: Collection[str] = ()) -> str:
     Collected from the same discovery pass and the same denylist as tools
     and commands, which is the whole point: a plugin that is not loaded
     must not be able to tell the model about tools that are not there.
-    Excluding `attachments` has to remove "call read_attachment" from the
-    prompt as well as removing the tool.
+    Excluding `recycling` has to remove its /recycle guidance from the
+    prompt as well as removing the commands.
 
     Order follows plugin name, like the tool list and for the same
     reason — a prompt that reshuffles itself between restarts busts

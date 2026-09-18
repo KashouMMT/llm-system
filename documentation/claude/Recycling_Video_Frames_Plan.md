@@ -307,7 +307,49 @@ FINDINGS:
 4. stable_landscape scan "computer monitor 3" vs chat reply "two monitors" —
    possible label double-count; unverified.
 
-## Queued AFTER video live test — attachments → core (decided 2026-09-16)
+## DONE 2026-09-17 (uncommitted at write) — attachments → core
+Built: `app/attachments/{__init__ (import-free: system_prompt imports prompts),tools,prompts}.py`;
+`Application` tools = `[*make_attachment_tools(...), *load_tools(...)]`;
+`_compose`: persona → RESPONSE_FORMAT → `ATTACHMENTS_SECTION` (fixed contract) →
+set's optional `attachment_prompt.txt` (`ATTACHMENT_PROMPT_FILE`, config/prompts.py)
+→ plugin block. Written for anna/meguru/default/debug; must not name plugin
+tools/commands. Plugin folder deleted. Budget: anna 3400 / meguru 3560 est.
+tokens w/o recycling → was over 3000 warn → SYSTEM_PROMPT_TOKEN_BUDGET raised to 5000 (max real ~3960).
+VIDEO_ONLY done (same day): video branch before readable-type guard; tool desc says "image or a video".
+Retest pending: PDF read, CSV read, recycle JSON re-read.
+
+## DONE 2026-09-17 (uncommitted at write) — /recycle scan unified; build_catalog takes video
+- `commands._attached_media(ctx) -> _Media(video|images, skipped, error, frame_count)`:
+  video alone → frames arg 4–40; photos + any arg → ERROR (not ignored); none → error.
+- `scan` handler = `scan_image` = `scan_video` (pure aliases; scan_video+photos scans photos).
+  _HELP lists only `scan`. JSON adds `source {kind: video|images}`; `frame_check` video only.
+- `runner.video_frames(file, file_storage, frame_count)` shared by scan_video + build_catalog.
+- `runner.harvest(sources: list[list[bytes]]) -> HarvestResult(frequencies, failed_images)`:
+  detect per image (recall), label set per source → freq counts once per source (video = 1).
+  Was per-photo count + silent drop of failed photos → now failed_images in review notes.
+  Cost: video = frames × BUILD_CATALOG_RUNS(2) calls (12 → 24).
+- Verified with fakes (scratch t_recycle.py): dispatch/aliases/errors/sources shape/per-source
+  counting. NOT live-tested: real video through build_catalog (ffmpeg + cluster/enrich).
+
+## DONE 2026-09-17 (uncommitted at write) — command specs (backend of autocomplete)
+- `contracts.SubcommandSpec(name, summary, usage, attachments, aliases, admin_only)`;
+  `PluginCommand.subcommands` + `.find()`; `help_text` REMOVED.
+- `app/plugins/command_help.py`: `render_command_prompt` (SLASH COMMANDS block, no aliases,
+  admin-only marked not hidden — prompt is per deployment, not per user),
+  `render_subcommand_lines`/`render_command_list` (replies, role-filtered),
+  `describe_commands` (GET /commands, role-filtered).
+- ChatService._run_command: unknown ns → list; spec missing (subcommands declared) → list;
+  admin_only && !is_admin → refuse + WARNING log; else handler gets canonical name.
+- Application: plugin_prompts = command block + load_plugin_prompts. recycling plugin_prompt.txt
+  trimmed to when/why; adds catalog = staff work.
+- loader `_check_subcommand_names` raises on dup name/alias. nginx regex + `commands`.
+- Admin only: recycle build_catalog, build_catalog_force, show_catalog. Open: scan, clock time.
+- Prompt est.: meguru 4319 / anna 4159 with ALL plugins (budget 5000).
+- NEXT: frontend autocomplete reads GET /commands (not built).
+- Live build_catalog on stable_landscape.mp4: 192 s, 12/33 frames, 96 rows from EMPTY catalog
+  (user had renamed catalog.json → catalog_cp.json); max observations 3 (alias merges), per-source OK.
+
+## (original record) attachments → core (decided 2026-09-16)
 
 Why: attachments already ~90% core (upload route, `files`, storage, sniff,
 manifest, vision prep). Only `read_attachment` (~390 lines) + 12-line prompt in

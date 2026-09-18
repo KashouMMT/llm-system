@@ -10,7 +10,7 @@ contributes to the system prompt would otherwise write the same four
 lines of file reading.
 """
 
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,7 @@ from uuid import UUID
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from psycopg_pool import AsyncConnectionPool
 
 from app.authentication.models import User
 from app.repositories.conversation_repository import ConversationRepository
@@ -120,6 +121,12 @@ class ToolContext:
     conversation_repository: ConversationRepository
     chat_model: BaseChatModel
     llm: LLMAccess
+    # The application's own async pool, for a plugin that owns tables. By
+    # convention everything such a plugin does with it lives in its
+    # `database/` folder, so deleting the plugin folder removes the code
+    # that knows the tables exist. The tables themselves stay behind;
+    # accepted, the database is disposable.
+    db_pool: AsyncConnectionPool
 
 
 @dataclass(frozen=True)
@@ -148,20 +155,65 @@ CommandHandler = Callable[[CommandContext], Coroutine[Any, Any, str]]
 
 
 @dataclass(frozen=True)
+class SubcommandSpec:
+    """
+    One subcommand, described as data.
+
+    The single source for everything that lists commands: the SLASH
+    COMMANDS block in the system prompt, the "unknown subcommand" reply,
+    and GET /commands for the frontend's autocomplete — all rendered by
+    app/plugins/command_help.py. Written once here so a rename cannot leave
+    one of those saying the old thing.
+
+    `admin_only` is enforced by ChatService before the handler runs, and
+    hides the subcommand from non-admins in every listing. A handler never
+    re-checks it.
+
+    `aliases` are old or alternative names. ChatService resolves them and
+    hands the handler the canonical `name`, so a plugin's dispatch table
+    holds each subcommand once. They are listed to the frontend (to match
+    what a user types) but never to the model, which should only ever
+    suggest the current name.
+    """
+
+    name: str
+    summary: str
+    # Argument hint shown after the name, e.g. "[frames]".
+    usage: str = ""
+    # What to attach to the message, e.g. "one room video, or photos".
+    # Empty means the subcommand takes no attachments.
+    attachments: str = ""
+    aliases: tuple[str, ...] = ()
+    admin_only: bool = False
+
+
+@dataclass(frozen=True)
 class PluginCommand:
     """
     One plugin's slash-command namespace, exported alongside its tools.
 
     ChatService routes a message whose first token is `/<namespace>`
     straight to `handler` before the LLM ever runs — a command is
-    deterministic, not a tool the model chooses to call. `help_text` is
-    for a human (the "unknown command" listing); it is never sent to a
-    model, unlike a tool's description.
+    deterministic, not a tool the model chooses to call.
+
+    `subcommands` describes what the handler dispatches on. When it is
+    non-empty, ChatService answers an unknown subcommand and refuses an
+    admin_only one itself, and the handler only ever receives a canonical
+    subcommand name. Empty keeps the old contract: every subcommand string
+    reaches the handler as typed, and nothing is listed anywhere.
     """
 
     namespace: str
     handler: CommandHandler
-    help_text: str = ""
+    subcommands: tuple[SubcommandSpec, ...] = ()
+
+    def find(self, subcommand: str) -> SubcommandSpec | None:
+        """The spec `subcommand` names, by canonical name or alias."""
+        for spec in self.subcommands:
+            if subcommand == spec.name or subcommand in spec.aliases:
+                return spec
+
+        return None
 
 
 @dataclass(frozen=True)
@@ -189,6 +241,13 @@ class ToolPlugin:
     called once at startup with the same ToolContext, for the same reason:
     a command handler that needs storage or the app's model access still
     gets it through a bound closure, never a module global.
+
+    `initialize` is optional async setup, awaited once after the database
+    pool opens and before `factory`/`command_factory` run — the place a
+    plugin creates its own tables and seeds them. Async because the pool
+    is; the factories stay sync because they only bind closures. A plugin
+    whose initialize raises is treated as not loaded: its tools, commands
+    and prompt would all describe storage that is not there.
     """
 
     name: str
@@ -198,3 +257,4 @@ class ToolPlugin:
     command_factory: Callable[[ToolContext], Sequence[PluginCommand]] = (
         lambda _context: ()
     )
+    initialize: Callable[[ToolContext], Awaitable[None]] | None = None

@@ -17,6 +17,7 @@ from app.config.settings import (
     LLM_SUPPORTS_VISION,
     MAX_USER_INPUT_CHARS,
 )
+from app.plugins.command_help import render_command_list, render_subcommand_lines
 from app.plugins.contracts import CommandContext, PluginCommand
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import (
@@ -340,17 +341,39 @@ class ChatService:
         identical from every consumer downstream of this call.
         """
         command = self.commands.get(namespace)
+        spec = command.find(subcommand) if command is not None else None
 
         if command is None:
-            content = self._unknown_command_message(namespace)
+            content = self._unknown_command_message(namespace, user)
             status = "complete"
+
+        elif command.subcommands and spec is None:
+            content = self._unknown_subcommand_message(command, subcommand, user)
+            status = "complete"
+
+        elif spec is not None and spec.admin_only and not is_admin(user):
+            # Checked here, once, rather than in each handler: a plugin
+            # that forgot the check would otherwise let any signed-in user
+            # overwrite shared data such as the recycling catalog.
+            logger.warning(
+                "Command refused, admin only | command=/%s %s user=%s conversation=%s",
+                namespace,
+                spec.name,
+                user.id,
+                conversation_id,
+            )
+            content = f"`/{namespace} {spec.name}` is limited to administrators."
+            status = "complete"
+
         else:
             context = CommandContext(
                 conversation_id=conversation_id,
                 user=user,
                 user_message_id=user_message_id,
                 assistant_message_id=assistant_message_id,
-                subcommand=subcommand,
+                # The canonical name, so a handler's dispatch table never
+                # needs alias entries.
+                subcommand=spec.name if spec is not None else subcommand,
                 argument=argument,
             )
 
@@ -374,13 +397,30 @@ class ChatService:
             status=status,
         )
 
-    def _unknown_command_message(self, namespace: str) -> str:
-        known = ", ".join(f"`/{name}`" for name in sorted(self.commands))
+    def _unknown_command_message(self, namespace: str, user: User) -> str:
+        known = render_command_list(self.commands, include_admin=is_admin(user))
 
         return (
             f"Unknown command: `/{namespace}`.\n\n"
-            + (f"Available commands: {known}" if known else "No commands are registered.")
+            + (f"Available commands:\n{known}" if known else "No commands are registered.")
         )
+
+    def _unknown_subcommand_message(
+        self,
+        command: PluginCommand,
+        subcommand: str,
+        user: User,
+    ) -> str:
+        # Admin-only subcommands are left out for a non-admin rather than
+        # advertised and then refused.
+        specs = [spec for spec in command.subcommands if is_admin(user) or not spec.admin_only]
+        heading = (
+            f"`/{command.namespace}` needs a subcommand."
+            if not subcommand
+            else f"Unknown `/{command.namespace}` subcommand: `{subcommand}`."
+        )
+
+        return f"{heading}\n\nAvailable:\n{render_subcommand_lines(command.namespace, specs)}"
 
     async def _run_title_generation(
         self,

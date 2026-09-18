@@ -1,5 +1,6 @@
-"""The /recycle command namespace: scan_image, scan_video, build_catalog,
-show_catalog.
+"""The /recycle command namespace: scan (aliases scan_image, scan_video),
+build_catalog, build_catalog_force, show_catalog. scan and both
+build_catalog variants take one room video or one or more photos.
 
 One namespace, one handler (handle_recycle) that dispatches on
 context.subcommand — same shape as clock's /clock. Every subcommand is
@@ -16,11 +17,18 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
+from dataclasses import dataclass, field
 
 from openai import OpenAI
 
-from app.plugins.contracts import CommandContext, CommandHandler, PluginCommand
+from app.plugins.command_help import render_subcommand_lines
+from app.plugins.contracts import (
+    CommandContext,
+    CommandHandler,
+    PluginCommand,
+    SubcommandSpec,
+)
+from app.plugins.recycling.database import CatalogRepository, CatalogStorageError
 from app.plugins.recycling.pipeline.build import (
     EnrichedItem,
     assemble,
@@ -29,7 +37,11 @@ from app.plugins.recycling.pipeline.build import (
     merge_into_catalog,
     reconcile,
 )
-from app.plugins.recycling.pipeline.catalog import Catalog, CatalogError, ItemMetadata
+from app.plugins.recycling.pipeline.catalog import (
+    CatalogError,
+    CatalogFile,
+    ItemMetadata,
+)
 from app.plugins.recycling.pipeline.labels import normalize
 from app.plugins.recycling.pipeline.resolve import (
     Resolution,
@@ -42,8 +54,9 @@ from app.plugins.recycling.runner import (
     harvest,
     scan,
     scan_video,
+    video_frames,
 )
-from app.repositories.file_repository import FileRepository
+from app.repositories.file_repository import FileRecord, FileRepository
 from app.storage.base import FileStorage
 from app.utils.detect import IMAGE_CONTENT_TYPES, TEXT_PLAIN, VIDEO_CONTENT_TYPES
 from app.utils.logger import logger
@@ -52,30 +65,65 @@ from app.utils.video_frames import (
     MAX_FRAME_COUNT,
     MIN_FRAME_COUNT,
     FrameExtractionError,
+    FrameSample,
 )
 
-CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"
-
-
-def _load_catalog_or_empty() -> Catalog:
-    """Catalog.load(), except a missing file means "no catalog built yet"
-    rather than an error. Every command that reads the catalog must
-    survive it being deleted or not yet built — scan_image then reports
-    everything as unmatched (correct: nothing is known yet), and
-    build_catalog bootstraps a fresh one instead of failing.
-    """
-    if not CATALOG_PATH.is_file():
-        return Catalog([])
-    return Catalog.load(CATALOG_PATH)
-
+# What the user sees when the catalog table cannot be read or written.
+# Deliberately no database detail: the repository has already logged the
+# full error, and the chat is not where a stack trace belongs.
+_STORAGE_FAILED = "Could not reach the item catalog (database error — details are in the server log)."
 
 # Detection passes per photo for build_catalog's harvest stage. Matches
 # the original playground/build_catalog.py CLI's default.
 BUILD_CATALOG_RUNS = 2
 
-_HELP = (
-    "Available: `scan_image`, `scan_video`, `build_catalog`, "
-    "`build_catalog_force`, `show_catalog`"
+_CAPTURE = "one room video alone (video button), or one or more photos"
+
+# The one description of /recycle. ChatService, the system prompt and
+# GET /commands all read this; see app/plugins/command_help.py.
+SUBCOMMANDS = (
+    SubcommandSpec(
+        name="scan",
+        usage="[frames]",
+        summary=(
+            "Estimate the collectable items in a room — counts, approximate "
+            "weight, dimensions, volume and material — as a table for staff "
+            "review, with the full result attached as JSON. `frames` (4–40, "
+            f"default {DEFAULT_FRAME_COUNT}) applies to a video only."
+        ),
+        attachments=_CAPTURE,
+        aliases=("scan_image", "scan_video"),
+    ),
+    # Every catalog command is admin only. The build commands write the
+    # catalog, which every scan depends on and a reviewer corrects by
+    # hand; show_catalog exposes it — unreviewed rows, exclusion decisions
+    # and, once prices are filled in, pricing — which is staff data, not
+    # something a customer needs to get a scan.
+    SubcommandSpec(
+        name="build_catalog",
+        usage="[frames]",
+        summary=(
+            "Detect items in a capture and ADD the ones not already in the "
+            "catalog. Existing rows are never changed."
+        ),
+        attachments=_CAPTURE,
+        admin_only=True,
+    ),
+    SubcommandSpec(
+        name="build_catalog_force",
+        usage="[frames]",
+        summary=(
+            "Like build_catalog, but also OVERWRITES matching existing rows "
+            "with the new detection, replacing hand-reviewed data."
+        ),
+        attachments=_CAPTURE,
+        admin_only=True,
+    ),
+    SubcommandSpec(
+        name="show_catalog",
+        summary="Show the item catalog as a table: label, excluded, weight, dimensions, material.",
+        admin_only=True,
+    ),
 )
 
 
@@ -84,17 +132,68 @@ _HELP = (
 # --------------------------------------------------------------------------
 
 
-async def _attached_images(
+@dataclass(frozen=True)
+class _Media:
+    """
+    What the command's own message carries: one video, or photos — never
+    both. `error` is set instead when the message cannot be scanned at all.
+    """
+
+    video: FileRecord | None = None
+    images: list[tuple[str, bytes]] = field(default_factory=list)
+    # Non-image attachments ignored beside photos — reported, never
+    # silently dropped, per the project's one rule.
+    skipped: list[str] = field(default_factory=list)
+    error: str | None = None
+    frame_count: int = DEFAULT_FRAME_COUNT
+
+
+async def _attached_media(
     context: CommandContext,
     *,
     file_repository: FileRepository,
     file_storage: FileStorage,
-) -> tuple[list[tuple[str, bytes]], list[str]]:
-    """Images attached to the command's own message, and the filenames of
-    any non-image attachments it ignored — never silently, per the
-    project's one rule: nothing is dropped without being reported.
+) -> _Media:
     """
+    Resolve the attachments and the `[frames]` argument together, because
+    whether the argument is valid depends on what is attached.
+
+    The one-video-alone rule is enforced by create_turn before any command
+    runs; the check here is for a caller that did not come through it. So
+    one command can take either kind of capture without the mixed case
+    ever reaching the pipeline.
+    """
+    command = f"/recycle {context.subcommand}"
     files = await file_repository.get_by_message_ids([context.user_message_id])
+    videos = [file for file in files if file.content_type in VIDEO_CONTENT_TYPES]
+    argument = context.argument.strip()
+
+    if videos:
+        if len(files) > 1:
+            return _Media(error="A video must be sent on its own: one video, no other attachments.")
+
+        frame_count = _frame_count_argument(argument)
+
+        if frame_count is None:
+            return _Media(
+                error=(
+                    f"Frame count must be a number from {MIN_FRAME_COUNT} to "
+                    f"{MAX_FRAME_COUNT}, e.g. `{command} 20`. Leave it out for "
+                    f"the default of {DEFAULT_FRAME_COUNT}."
+                )
+            )
+
+        return _Media(video=videos[0], frame_count=frame_count)
+
+    # An error rather than ignored: the user typed a number expecting it to
+    # change something, and for photos it cannot.
+    if argument:
+        return _Media(
+            error=(
+                f"A frame count only applies to a video. Photos are used as "
+                f"attached — send `{command}` without `{argument}`."
+            )
+        )
 
     images: list[tuple[str, bytes]] = []
     skipped: list[str] = []
@@ -106,7 +205,50 @@ async def _attached_images(
         else:
             skipped.append(file.filename)
 
-    return images, skipped
+    if not images:
+        message = (
+            "Nothing to scan. Attach one room video with the video button, or "
+            f"one or more photos, and send `{command}` with them."
+        )
+        if skipped:
+            message += f"\n\nIgnored non-image attachment(s): {', '.join(skipped)}"
+        return _Media(error=message)
+
+    return _Media(images=images, skipped=skipped)
+
+
+def _frame_count_argument(argument: str) -> int | None:
+    """
+    `[frames]` for a video. None means the argument is invalid.
+
+    A tuning knob, not the quality presets the TODO describes: those trade
+    frame count for time, and the accuracy curve they would be named after
+    has not been measured yet.
+    """
+    if not argument:
+        return DEFAULT_FRAME_COUNT
+
+    if not argument.isdigit() or not MIN_FRAME_COUNT <= int(argument) <= MAX_FRAME_COUNT:
+        return None
+
+    return int(argument)
+
+
+def _frame_check_header(filename: str, sample: FrameSample) -> list[str]:
+    # Capture problems go above the table, not below it: a reviewer has to
+    # read "half the video was too dark" before trusting the counts.
+    return [f"Scanned `{filename}` — {sample.summary()}."] + [
+        f"- ⚠ {warning}" for warning in sample.warnings
+    ]
+
+
+def _frame_check_payload(sample: FrameSample) -> dict:
+    return {
+        "candidates": sample.candidates,
+        "used": len(sample.frames),
+        "skipped": sample.skipped,
+        "warnings": sample.warnings,
+    }
 
 
 async def _attach_json(
@@ -287,165 +429,100 @@ def _resolution_payload(resolution: Resolution) -> dict:
 # --------------------------------------------------------------------------
 
 
-def _make_scan_image(
-    *, client: OpenAI, model: str, file_repository: FileRepository, file_storage: FileStorage
+def _make_scan(
+    *,
+    client: OpenAI,
+    model: str,
+    file_repository: FileRepository,
+    file_storage: FileStorage,
+    catalog_repository: CatalogRepository,
 ) -> CommandHandler:
-    async def scan_image(context: CommandContext) -> str:
-        images, skipped = await _attached_images(
+    """
+    `/recycle scan [frames]` — one room video, or one or more photos.
+
+    One command rather than scan_image + scan_video: both captures end in
+    the same runner.scan over a list of images (a video is frames first),
+    so the split only ever existed in this layer. scan_image and scan_video
+    remain as aliases in the dispatch table.
+    """
+
+    async def scan_command(context: CommandContext) -> str:
+        media = await _attached_media(
             context, file_repository=file_repository, file_storage=file_storage
         )
 
-        if not images:
-            message = (
-                "No images attached. Attach one or more photos and run "
-                "`/recycle scan_image` again."
-            )
-            if skipped:
-                message += f"\n\nIgnored non-image attachment(s): {', '.join(skipped)}"
-            return message
+        if media.error:
+            return media.error
 
         try:
-            catalog = _load_catalog_or_empty()
+            catalog = await catalog_repository.load()
         except CatalogError as exc:
             return f"Could not load the catalog: {exc}"
+        except CatalogStorageError:
+            return _STORAGE_FAILED
+
+        sample: FrameSample | None = None
 
         try:
-            confident, low = await scan(
-                [data for _, data in images],
-                client=client,
-                model=model,
-                catalog=catalog,
-            )
+            if media.video is not None:
+                outcome = await scan_video(
+                    media.video,
+                    file_storage=file_storage,
+                    client=client,
+                    model=model,
+                    catalog=catalog,
+                    frame_count=media.frame_count,
+                )
+                confident, low, sample = outcome.confident, outcome.low, outcome.sample
+            else:
+                confident, low = await scan(
+                    [data for _, data in media.images],
+                    client=client,
+                    model=model,
+                    catalog=catalog,
+                )
+        except FrameExtractionError as exc:
+            return f"Could not scan `{media.video.filename}`: {exc}"
         except DetectionError as exc:
             return f"Scan failed: {exc}"
 
-        header = f"Scanned {len(images)} image(s)."
-        if skipped:
-            header += f" Ignored non-image attachment(s): {', '.join(skipped)}."
+        if media.video is not None:
+            header = _frame_check_header(media.video.filename, sample)
+            source = {"kind": "video", "file": media.video.filename}
+        else:
+            header = [f"Scanned {len(media.images)} image(s)."]
+            if media.skipped:
+                header[0] += f" Ignored non-image attachment(s): {', '.join(media.skipped)}."
+            source = {"kind": "images", "files": [name for name, _ in media.images]}
+
+        payload = {
+            # Which capture this came from, so a later read of the file can
+            # say "the video" or "the 3 photos" without guessing.
+            "source": source,
+            **_resolution_payload(confident),
+            "low_agreement": _resolution_payload(low),
+            "totals": {
+                "weight_kg": confident.total_weight_kg,
+                "volume_m3": confident.total_volume_m3,
+                "price": confident.total_price,
+            },
+        }
+        if sample is not None:
+            payload["frame_check"] = _frame_check_payload(sample)
 
         await _attach_json(
             context,
             file_repository=file_repository,
             file_storage=file_storage,
             filename="recycle_scan_result.json",
-            payload={
-                **_resolution_payload(confident),
-                "low_agreement": _resolution_payload(low),
-                "totals": {
-                    "weight_kg": confident.total_weight_kg,
-                    "volume_m3": confident.total_volume_m3,
-                    "price": confident.total_price,
-                },
-            },
+            payload=payload,
         )
 
         body = render_scan_result(confident, low, DEFAULT_MIN_RUNS_SEEN)
-        return f"{header}\n\n{body}"
-
-    return scan_image
-
-
-def _frame_count_argument(argument: str) -> int | None:
-    """
-    `/recycle scan_video [frames]`. None means the argument is invalid.
-
-    A tuning knob, not the quality presets the TODO describes: those trade
-    frame count for time, and the accuracy curve they would be named after
-    has not been measured yet.
-    """
-    text = argument.strip()
-
-    if not text:
-        return DEFAULT_FRAME_COUNT
-
-    if not text.isdigit() or not MIN_FRAME_COUNT <= int(text) <= MAX_FRAME_COUNT:
-        return None
-
-    return int(text)
-
-
-def _make_scan_video(
-    *, client: OpenAI, model: str, file_repository: FileRepository, file_storage: FileStorage
-) -> CommandHandler:
-    async def scan_video_command(context: CommandContext) -> str:
-        frame_count = _frame_count_argument(context.argument)
-
-        if frame_count is None:
-            return (
-                f"Frame count must be a number from {MIN_FRAME_COUNT} to "
-                f"{MAX_FRAME_COUNT}, e.g. `/recycle scan_video 20`. Leave it "
-                f"out for the default of {DEFAULT_FRAME_COUNT}."
-            )
-
-        files = await file_repository.get_by_message_ids([context.user_message_id])
-        videos = [file for file in files if file.content_type in VIDEO_CONTENT_TYPES]
-
-        if not videos:
-            return (
-                "No video attached. Attach one room recording with the video "
-                "button and send `/recycle scan_video` with it."
-            )
-
-        # Unreachable through the app — create_turn refuses a video sent with
-        # anything else — but a command must not assume how it was reached.
-        if len(files) > 1:
-            return "A video must be scanned on its own: one video, no other attachments."
-
-        try:
-            catalog = _load_catalog_or_empty()
-        except CatalogError as exc:
-            return f"Could not load the catalog: {exc}"
-
-        file = videos[0]
-
-        try:
-            outcome = await scan_video(
-                file,
-                file_storage=file_storage,
-                client=client,
-                model=model,
-                catalog=catalog,
-                frame_count=frame_count,
-            )
-        except FrameExtractionError as exc:
-            return f"Could not scan `{file.filename}`: {exc}"
-        except DetectionError as exc:
-            return f"Scan failed: {exc}"
-
-        sample = outcome.sample
-
-        await _attach_json(
-            context,
-            file_repository=file_repository,
-            file_storage=file_storage,
-            filename="recycle_scan_result.json",
-            payload={
-                **_resolution_payload(outcome.confident),
-                "low_agreement": _resolution_payload(outcome.low),
-                "totals": {
-                    "weight_kg": outcome.confident.total_weight_kg,
-                    "volume_m3": outcome.confident.total_volume_m3,
-                    "price": outcome.confident.total_price,
-                },
-                "frame_check": {
-                    "candidates": sample.candidates,
-                    "used": len(sample.frames),
-                    "skipped": sample.skipped,
-                    "warnings": sample.warnings,
-                },
-            },
-        )
-
-        # Capture problems go above the table, not below it: a reviewer has
-        # to read "half the video was too dark" before trusting the counts.
-        header = [f"Scanned `{file.filename}` — {sample.summary()}."]
-        header += [f"- ⚠ {warning}" for warning in sample.warnings]
-
-        body = render_scan_result(outcome.confident, outcome.low, DEFAULT_MIN_RUNS_SEEN)
 
         return "\n".join(header) + f"\n\n{body}"
 
-    return scan_video_command
+    return scan_command
 
 
 def _make_build_catalog(
@@ -454,27 +531,36 @@ def _make_build_catalog(
     model: str,
     file_repository: FileRepository,
     file_storage: FileStorage,
+    catalog_repository: CatalogRepository,
     force: bool,
 ) -> CommandHandler:
-    command_name = "build_catalog_force" if force else "build_catalog"
-
     async def build_catalog(context: CommandContext) -> str:
-        images, skipped = await _attached_images(
+        media = await _attached_media(
             context, file_repository=file_repository, file_storage=file_storage
         )
 
-        if not images:
-            message = (
-                "No images attached. Attach one or more photos and run "
-                f"`/recycle {command_name}` again."
-            )
-            if skipped:
-                message += f"\n\nIgnored non-image attachment(s): {', '.join(skipped)}"
-            return message
+        if media.error:
+            return media.error
+
+        sample: FrameSample | None = None
+
+        # A video is ONE source of many frames; each photo is its own
+        # source. See runner.harvest for why frequencies count per source.
+        if media.video is not None:
+            try:
+                sample = await video_frames(
+                    media.video, file_storage=file_storage, frame_count=media.frame_count
+                )
+            except FrameExtractionError as exc:
+                return f"Could not read `{media.video.filename}`: {exc}"
+
+            sources = [[frame.jpeg for frame in sample.frames]]
+        else:
+            sources = [[data] for _, data in media.images]
 
         try:
-            frequencies = await harvest(
-                [data for _, data in images],
+            harvested = await harvest(
+                sources,
                 client=client,
                 model=model,
                 runs=BUILD_CATALOG_RUNS,
@@ -482,8 +568,10 @@ def _make_build_catalog(
         except DetectionError as exc:
             return f"Harvest failed: {exc}"
 
+        frequencies = harvested.frequencies
+
         if not frequencies:
-            return "No labels were detected across the attached images."
+            return "No labels were detected in the attached capture."
 
         try:
             clusters = cluster(frequencies, client=client, model=model)
@@ -506,17 +594,30 @@ def _make_build_catalog(
             return f"Could not assemble the catalog: {exc}"
 
         try:
-            existing_catalog = _load_catalog_or_empty()
+            existing_catalog = await catalog_repository.load()
             result = merge_into_catalog(existing_catalog, scanned_catalog, force=force)
+            await catalog_repository.save(result.catalog)
         except CatalogError as exc:
             return f"Could not merge into the catalog: {exc}"
-
-        result.catalog.save(CATALOG_PATH)
+        except CatalogStorageError:
+            # The paid build ran and its result is lost; say so, rather
+            # than the generic line, so nobody assumes it was saved.
+            return (
+                f"{_STORAGE_FAILED} The build finished but was **not saved** — "
+                "the catalog is unchanged. Run the build again once the "
+                "database is reachable."
+            )
 
         included = [item for item in result.catalog if not item.excluded]
         incomplete = result.catalog.incomplete()
 
         notes: list[str] = []
+        if harvested.failed_images:
+            unit = "frame(s)" if media.video is not None else "photo(s)"
+            notes.append(
+                f"detection failed on {harvested.failed_images} {unit}; any item "
+                "visible only there is missing from this build"
+            )
         if missing:
             notes.append(
                 f"clustering skipped {len(missing)} label(s), restored as unmerged "
@@ -540,19 +641,21 @@ def _make_build_catalog(
                 + ", ".join(item.canonical_label for item in incomplete[:8])
             )
 
-        header = (
-            f"Scanned {len(images)} image(s): {len(result.added)} new item(s) added"
-        )
+        header = f"{len(result.added)} new item(s) added"
         if force:
             header += f", {len(result.replaced)} replaced with the newer scan"
         header += (
             f". Catalog now has {len(result.catalog)} item(s) total "
             f"({len(included)} collectable, {len(result.catalog) - len(included)} excluded)."
         )
-        if skipped:
-            header += f" Ignored non-image attachment(s): {', '.join(skipped)}."
 
-        lines = [header]
+        if sample is not None:
+            lines = _frame_check_header(media.video.filename, sample) + ["", header]
+        else:
+            summary = f"Scanned {len(media.images)} image(s): {header}"
+            if media.skipped:
+                summary += f" Ignored non-image attachment(s): {', '.join(media.skipped)}."
+            lines = [summary]
         if notes:
             lines += ["", "**Check these during review:**"]
             lines += [f"- {note}" for note in notes]
@@ -570,8 +673,12 @@ def _make_build_catalog(
             context,
             file_repository=file_repository,
             file_storage=file_storage,
-            filename="catalog.json",
-            payload=json.loads(CATALOG_PATH.read_text(encoding="utf-8")),
+            # A snapshot for read_attachment after summarization, not a
+            # file anything loads — the table is the catalog.
+            filename="recycle_catalog_snapshot.json",
+            payload=CatalogFile(
+                version=result.catalog.version, items=result.catalog.items
+            ).model_dump(mode="json"),
         )
 
         return "\n".join(lines)
@@ -579,31 +686,39 @@ def _make_build_catalog(
     return build_catalog
 
 
-async def show_catalog(context: CommandContext) -> str:  
-    try:
-        catalog = Catalog.load(CATALOG_PATH)
-    except CatalogError as exc:
-        return f"Could not load the catalog: {exc}"
+def _make_show_catalog(*, catalog_repository: CatalogRepository) -> CommandHandler:
+    async def show_catalog(context: CommandContext) -> str:
+        try:
+            catalog = await catalog_repository.load()
+        except CatalogError as exc:
+            return f"Could not load the catalog: {exc}"
+        except CatalogStorageError:
+            return _STORAGE_FAILED
 
-    if len(catalog) == 0:
-        return "The catalog is empty. Run `/recycle build_catalog` with some photos first."
+        if len(catalog) == 0:
+            return (
+                "The catalog is empty. Run `/recycle build_catalog` with a room "
+                "video or some photos first."
+            )
 
-    lines = [
-        f"**Catalog ({len(catalog)} items):**",
-        "",
-        "| ID | Label | Excluded | Weight | Dimensions | Material |",
-        "|---|---|---|---|---|---|",
-    ]
-    for item in catalog:
-        metadata: ItemMetadata = item.metadata
-        lines.append(
-            f"| {item.id} | {item.canonical_label} | "
-            f"{'yes' if item.excluded else ''} | "
-            f"{_fmt_number(metadata.weight_kg, ' kg')} | "
-            f"{metadata.dimensions} | "
-            f"{metadata.material or '?'} |"
-        )
-    return "\n".join(lines)
+        lines = [
+            f"**Catalog ({len(catalog)} items):**",
+            "",
+            "| ID | Label | Excluded | Weight | Dimensions | Material |",
+            "|---|---|---|---|---|---|",
+        ]
+        for item in catalog:
+            metadata: ItemMetadata = item.metadata
+            lines.append(
+                f"| {item.id} | {item.canonical_label} | "
+                f"{'yes' if item.excluded else ''} | "
+                f"{_fmt_number(metadata.weight_kg, ' kg')} | "
+                f"{metadata.dimensions} | "
+                f"{metadata.material or '?'} |"
+            )
+        return "\n".join(lines)
+
+    return show_catalog
 
 
 # --------------------------------------------------------------------------
@@ -617,22 +732,30 @@ def make_recycle_commands(
     model: str,
     file_repository: FileRepository,
     file_storage: FileStorage,
+    catalog_repository: CatalogRepository,
 ) -> tuple[PluginCommand, ...]:
     """Build the /recycle command with its dependencies bound in — same
     closure-factory shape as make_document_tools and make_attachment_tools.
     """
+    scan_handler = _make_scan(
+        client=client,
+        model=model,
+        file_repository=file_repository,
+        file_storage=file_storage,
+        catalog_repository=catalog_repository,
+    )
+
+    # Canonical names only: ChatService resolves the scan_image / scan_video
+    # aliases from SUBCOMMANDS before the handler runs. They are pure
+    # aliases — `scan_video` with photos attached scans the photos.
     subcommands: dict[str, CommandHandler] = {
-        "scan_image": _make_scan_image(
-            client=client, model=model, file_repository=file_repository, file_storage=file_storage
-        ),
-        "scan_video": _make_scan_video(
-            client=client, model=model, file_repository=file_repository, file_storage=file_storage
-        ),
+        "scan": scan_handler,
         "build_catalog": _make_build_catalog(
             client=client,
             model=model,
             file_repository=file_repository,
             file_storage=file_storage,
+            catalog_repository=catalog_repository,
             force=False,
         ),
         "build_catalog_force": _make_build_catalog(
@@ -640,9 +763,10 @@ def make_recycle_commands(
             model=model,
             file_repository=file_repository,
             file_storage=file_storage,
+            catalog_repository=catalog_repository,
             force=True,
         ),
-        "show_catalog": show_catalog,
+        "show_catalog": _make_show_catalog(catalog_repository=catalog_repository),
     }
 
     async def handle_recycle(context: CommandContext) -> str:
@@ -656,7 +780,12 @@ def make_recycle_commands(
         )
 
         if handler is None:
-            result = f"Unknown `/recycle` subcommand: `{context.subcommand}`.\n\n{_HELP}"
+            # Unreachable through ChatService, which answers unknown
+            # subcommands itself; kept for a caller that bypasses it.
+            result = (
+                f"Unknown `/recycle` subcommand: `{context.subcommand}`.\n\n"
+                + render_subcommand_lines("recycle", SUBCOMMANDS)
+            )
         else:
             result = await handler(context)
 
@@ -672,12 +801,6 @@ def make_recycle_commands(
         PluginCommand(
             namespace="recycle",
             handler=handle_recycle,
-            help_text=(
-                "/recycle scan_image <images>, scan_video [frames] <one video>, "
-                "build_catalog <images> (adds new items, never "
-                "touches existing ones), build_catalog_force <images> (also "
-                "overwrites matching existing items with the new scan), "
-                "show_catalog"
-            ),
+            subcommands=SUBCOMMANDS,
         ),
     )

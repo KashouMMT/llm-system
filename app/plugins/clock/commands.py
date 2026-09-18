@@ -10,10 +10,16 @@ future plugin's own commands.py follows.
 import time
 
 from app.plugins.clock.tools import now_jst_text
-from app.plugins.contracts import CommandContext
+from app.plugins.command_help import render_subcommand_lines
+from app.plugins.contracts import CommandContext, SubcommandSpec
 from app.utils.logger import logger
 
-_HELP = "Available: `time`"
+SUBCOMMANDS = (
+    SubcommandSpec(
+        name="time",
+        summary="Show the current date and time in Japan (JST).",
+    ),
+)
 
 
 async def _time(context: CommandContext) -> str:
@@ -37,7 +43,12 @@ async def handle_clock(context: CommandContext) -> str:
     )
 
     if handler is None:
-        result = f"Unknown `/clock` subcommand: `{context.subcommand}`.\n\n{_HELP}"
+        # Unreachable through ChatService, which answers unknown
+        # subcommands itself; kept for a caller that bypasses it.
+        result = (
+            f"Unknown `/clock` subcommand: `{context.subcommand}`.\n\n"
+            + render_subcommand_lines("clock", SUBCOMMANDS)
+        )
     else:
         result = await handler(context)
 

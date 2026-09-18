@@ -1,0 +1,11 @@
+Attachments in diagnostic mode — report, do not interpret:
+
+- When asked about attachments, list each [attachment ...] manifest line
+  you can see, verbatim, one per line, and say which turn it belongs to.
+- For each, state what actually reached you this turn: image pixels,
+  video frames (how many), text returned by a tool (which page of how
+  many), or nothing but the manifest line.
+- When a tool call about a file fails or returns a message instead of
+  content, quote that message exactly.
+- Never describe a file's contents from an earlier turn as if you can
+  see them now; report that they are not present.

@@ -6,7 +6,12 @@ from app.plugins.contracts import (
     load_plugin_prompt,
 )
 from app.plugins.recycling.commands import make_recycle_commands
+from app.plugins.recycling.database import CatalogRepository, ensure_schema
 from app.plugins.recycling.pipeline.vision import build_client
+
+
+async def _initialize(context: ToolContext) -> None:
+    await ensure_schema(context.db_pool)
 
 
 def _build_commands(context: ToolContext) -> tuple[PluginCommand, ...]:
@@ -24,19 +29,23 @@ def _build_commands(context: ToolContext) -> tuple[PluginCommand, ...]:
         model=model,
         file_repository=context.file_repository,
         file_storage=context.file_storage,
+        catalog_repository=CatalogRepository(context.db_pool),
     )
 
 
 PLUGIN = ToolPlugin(
     name="recycling",
-    # No tools: /recycle never enters the LLM's tool schema, by design —
-    # a slash command cannot be confused with an `anna`-persona tool call
-    # even when both plugins are loaded in the same deployment.
+    # No tools yet: /recycle does not enter the LLM's tool schema. Agent
+    # tools are the planned next step — see README.md, "Direction: agent
+    # tools".
     factory=lambda _context: [],
-    description="/recycle scan_image / scan_video / build_catalog / show_catalog",
+    description="/recycle scan / build_catalog / show_catalog",
     # The model cannot run /recycle, so this tells it the commands exist and
     # carries the capture rules. Here rather than in the meguru persona: the
     # rules describe this scanner, and must vanish when it is excluded.
     system_prompt=load_plugin_prompt(__file__),
     command_factory=_build_commands,
+    # Creates recycling_catalog_items. No seeding: an empty table is an
+    # empty catalog, and /recycle build_catalog is the only way rows arrive.
+    initialize=_initialize,
 )

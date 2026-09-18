@@ -38,6 +38,34 @@ class VideoScanOutcome:
     sample: FrameSample
 
 
+@dataclass(frozen=True)
+class HarvestResult:
+    # label -> number of *sources* (one photo, or one whole video) it
+    # appeared in. What cluster() shows as "seen Nx" and assemble() stores
+    # as a row's observations.
+    frequencies: dict[str, int]
+    # Photos or frames whose every detection run failed. Reported, never
+    # just skipped: a label on a failed frame is missing from the catalog.
+    failed_images: int
+
+
+async def video_frames(
+    file: FileRecord,
+    *,
+    file_storage: FileStorage,
+    frame_count: int = DEFAULT_FRAME_COUNT,
+) -> FrameSample:
+    """
+    Usable frames from one stored video — the step scan_video and
+    /recycle build_catalog share, so a catalog is built from the same
+    quality-gated frames a scan sees.
+
+    Raises FrameExtractionError with a remedy when too few frames survive.
+    """
+    async with file_storage.temporary_path(file.storage_key) as path:
+        return await extract_frames(path, count=frame_count)
+
+
 async def scan_video(
     file: FileRecord,
     *,
@@ -59,8 +87,7 @@ async def scan_video(
     Raises FrameExtractionError (unusable video, with a remedy) or
     DetectionError (model failure); callers turn either into a message.
     """
-    async with file_storage.temporary_path(file.storage_key) as path:
-        sample = await extract_frames(path, count=frame_count)
+    sample = await video_frames(file, file_storage=file_storage, frame_count=frame_count)
 
     confident, low = await scan(
         [frame.jpeg for frame in sample.frames],
@@ -126,23 +153,30 @@ async def scan(
 
 
 async def harvest(
-    images: list[bytes],
+    sources: list[list[bytes]],
     *,
     client: OpenAI,
     model: str,
     runs: int,
-) -> dict[str, int]:
+) -> HarvestResult:
     """
     Concurrent, bytes-based equivalent of pipeline.build.harvest: for each
     image, `runs` independent single-image detection passes are merged with
-    consensus, then each resulting label counts once per *photo* it
-    appeared in — the harvest counts occurrences across photos, not units,
-    exactly like the CLI's harvest stage.
+    consensus, then each resulting label counts once per *source* it
+    appeared in — occurrences across captures, not units, like the CLI's
+    harvest stage.
 
-    One bad photo (every one of its runs failing) is dropped from the
-    count, not fatal to the whole harvest — the CLI's harvest() has the
-    same tolerance, for the same reason: a long, paid run must not be
-    thrown away over one corrupt image.
+    A source is one capture: a photo is a source of one image, a video is
+    one source of all its frames. Counting per frame instead would make one
+    sofa filmed across 12 frames "seen 12x", which cluster() reads as a
+    common item and assemble() stores as 12 observations. Detection still
+    runs per frame rather than one multi-view call per video: building a
+    catalog wants every distinct label, and a single frame at full size
+    shows small items a 12-image call misses.
+
+    One bad image (every one of its runs failing) does not abort the
+    harvest — a long, paid run must not be thrown away over one corrupt
+    frame — but it is counted in failed_images for the caller to report.
     """
 
     async def one_image(data: bytes) -> list:
@@ -160,15 +194,28 @@ async def harvest(
             raise DetectionError("All detection runs failed for one image.")
         return merge_runs(observations)
 
+    # Flattened so every image of every source runs concurrently, then
+    # regrouped by source index below.
+    owners = [index for index, images in enumerate(sources) for _ in images]
     per_image = await asyncio.gather(
-        *(one_image(data) for data in images), return_exceptions=True
+        *(one_image(data) for images in sources for data in images),
+        return_exceptions=True,
     )
 
-    frequencies: Counter[str] = Counter()
-    for result in per_image:
-        if isinstance(result, BaseException):
-            continue
-        for item in result:
-            frequencies[normalize(item.label)] += 1
+    labels_by_source: list[set[str]] = [set() for _ in sources]
+    failed_images = 0
 
-    return dict(frequencies.most_common())
+    for owner, result in zip(owners, per_image):
+        if isinstance(result, BaseException):
+            failed_images += 1
+            continue
+        labels_by_source[owner].update(normalize(item.label) for item in result)
+
+    frequencies: Counter[str] = Counter()
+    for labels in labels_by_source:
+        frequencies.update(labels)
+
+    return HarvestResult(
+        frequencies=dict(frequencies.most_common()),
+        failed_images=failed_images,
+    )

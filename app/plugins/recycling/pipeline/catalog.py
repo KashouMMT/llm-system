@@ -39,7 +39,7 @@ CM3_PER_M3 = 1_000_000.0
 
 
 class CatalogError(RuntimeError):
-    """Raised when a catalog file is unusable — missing, malformed, or ambiguous."""
+    """Raised when a catalog is unusable — ambiguous (an alias claimed by two rows)."""
 
 
 class Dimensions(BaseModel):
@@ -155,7 +155,8 @@ class CatalogItem(BaseModel):
 
 
 class CatalogFile(BaseModel):
-    """The on-disk shape. Separate from `Catalog` so the index is not serialised."""
+    """The serialised shape, used for the JSON snapshot build_catalog attaches.
+    Separate from `Catalog` so the index is not serialised."""
 
     version: int = 1
     items: list[CatalogItem] = Field(default_factory=list)
@@ -185,27 +186,8 @@ class Catalog:
                     )
                 self._index[key] = item
 
-    # ---- construction -------------------------------------------------
-
-    @classmethod
-    def load(cls, path: Path) -> Catalog:
-        if not path.is_file():
-            raise CatalogError(f"No catalog at {path}. Build one first.")
-        try:
-            payload = CatalogFile.model_validate_json(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise CatalogError(f"Could not read {path}: {exc}") from exc
-        return cls(payload.items, version=payload.version)
-
-    def save(self, path: Path) -> None:
-        """Write atomically: a crash mid-write leaves a .part file, not a
-        truncated catalog that looks complete."""
-        payload = CatalogFile(version=self.version, items=self.items)
-        temporary = path.with_suffix(path.suffix + ".part")
-        temporary.write_text(
-            payload.model_dump_json(indent=2, exclude_none=False), encoding="utf-8"
-        )
-        temporary.replace(path)
+    # Loading and saving live in app/plugins/recycling/database/ — the
+    # catalog is a table, and this class never touches storage.
 
     # ---- queries ------------------------------------------------------
 
@@ -258,7 +240,7 @@ class Catalog:
 def make_id(label: str) -> str:
     """A stable, readable id from a label: 'Washing Machine' -> 'washing_machine'.
 
-    Readable rather than a UUID because a human edits this file by hand, and
+    Readable rather than a UUID because a human reviews and edits rows by hand, and
     'washing_machine' in a diff is worth more than '7f3a...'.
     """
     return "_".join(normalize(label).split()) or "unnamed"

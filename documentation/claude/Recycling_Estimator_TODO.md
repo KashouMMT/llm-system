@@ -20,6 +20,8 @@
 > to get granularity and exclusions wrong (§10). Review it with
 > `/recycle show_catalog`.
 >
+> [2026-09-18: catalog now in Postgres — see `Recycling_Agent_Tools_Plan.md`.
+> Video also shipped since; this header is stale on both.]
 > Not started: catalog in Postgres (it is still a JSON file inside the image,
 > so a redeploy destroys any catalog built on the server), the review UI, and
 > video. `/recycle scan_video` is registered and answers "not implemented yet".
@@ -662,6 +664,16 @@ result table must reach the reviewer intact. If the step genuinely needs
 reasoning, judgement or conversation, it becomes a tool. Treat a future request
 for catalog CRUD or review-and-confirm flows as this plugin reaching its
 intended shape, not as scope creep.
+
+**2026-09-18 — tools now the active direction (user decision).** Goal 1: free text
+→ tool runs the same handler as `/recycle scan|build_catalog|show_catalog`; the
+tool checks preconditions (no media → fixed message). Goal 2: admin asks the model
+to count / find duplicates / flag odd labels, weights and metadata, and to edit rows
+on request. Unchanged: a scan table reaches the user verbatim (code writes it into
+the message, the model gets a summary). The `edit_catalog`-dropped-for-review-UI
+decision (phase 5 row) is reversed for chat editing → admin-only write tool. Open:
+raw SELECT vs typed read tools; typed write tool; user identity in run config;
+per-user tool binding; storage interface + Postgres first.
 | How does the result reach the screen? | The command **writes the assistant message itself**, as Markdown the frontend already renders | Deterministic. A model asked to reproduce a 40-row table can drop a row or alter a number, and this project's one rule is that nothing detected disappears without the reviewer seeing it. |
 | Where does the catalog live? | Postgres, per tenant | `catalog.json` inside a container is destroyed on every deploy, and SaaS tenancy was a locked decision (§4). |
 | Which model does the scan call? | **The app's own model by default** — deployment already runs `MODEL_NAME=gpt-5.6-luna` with `LLM_SUPPORTS_VISION=true`, the same model `vision.py` was originally written against. An optional `RECYCLING_VISION_MODEL` overrides it | No second key, no second configuration to keep in sync. The override exists only for the day the chat model is downgraded for cost and the scan still needs vision. |
@@ -676,7 +688,7 @@ intended shape, not as scope creep.
 | 1.5 | Host app: file uploads, image and document reading | **Done** — shipped and tested in the main app |
 | 2 | Slash-command registry: a plugin declares a namespace, `ChatService` routes a leading `/` before the LLM runs | **Done** — generalized to every plugin (`app/plugins/contracts.py`'s `PluginCommand`/`command_factory`), not recycling-specific; proven live with `/clock time` |
 | 3 | `/recycle scan_image` over attached images: pipeline moved into the plugin, run concurrently (`runner.py`, `asyncio.to_thread`), Markdown table + attached JSON written back | **Done** — also folds in phase 6 (see below); `/recycle scan_video` registered as a stub, `/recycle build_catalog` and `/recycle show_catalog` also built (not originally scoped this early, brought forward) |
-| 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | `/recycle build_catalog`/`show_catalog` exist against the plugin's own `catalog.json`; the Postgres move itself has not started |
+| 4 | Catalog into Postgres; `/recycle train`, `/recycle catalog` | 2026-09-18: catalog moved to Postgres table `recycling_catalog_items` (catalog.json = seed only) — code written, live test pending. See `Recycling_Agent_Tools_Plan.md` |
 | 5 | Review UI — table, thumbnails, edit count, add missing, name unmatched. Needs a plugin manifest endpoint so the frontend knows the plugin is loaded | Next planned: a `.tsx` settings/review page for `/recycle`, replacing chat-driven catalog editing before it was ever built (an `edit_catalog` command was scoped and deliberately dropped in favour of this) |
 | 6 | Multi-image estimate (a whole room, not one photo) | **Folded into phase 3** — `/recycle scan_image` accepts several attached photos and deduplicates across views in one call (`detect_items_bytes`), since the §11a preliminary result already validated the approach |
 | 7 | Video: upload + retain the raw recording, ffmpeg frame sampling -> multi-frame vision call -> existing consensus (§11a, §11b). No detector | Not started, but now scoped — see the sub-phases below. `/recycle scan_video` is registered and answers "not implemented yet". **No new Python dependency**: ffmpeg is a binary in the image, and Pillow already does the resizing |

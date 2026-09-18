@@ -129,6 +129,9 @@ Observed labels:
 # Stage 3. The price ban is deliberate and load-bearing: an LLM knows
 # physical facts about kinds of object and does not know markets, so a
 # plausible wrong price is worse than the null a human can fill in.
+# The English-only rule was hit, not hypothetical: a 2026-09-18 build
+# stored `rope` with material "纤维" (Chinese for fibre), which also broke
+# `SELECT *` in a WIN1252 psql console.
 ENRICH = """\
 For each item below, give typical physical properties of ONE unit, as commonly
 found in a household or small warehouse.
@@ -141,6 +144,8 @@ Rules:
 - Give a min and max weight that honestly reflect how much this varies.
 - Do NOT estimate price. Price is not your job and a plausible wrong price is
   worse than no price.
+- Write every text value (material, labels) in English only, lowercase plain
+  words such as "wood", "steel", "fibre". Never use any other language or script.
 
 Items:
 {labels}

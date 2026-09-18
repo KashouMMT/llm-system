@@ -1,4 +1,4 @@
-from app.plugins.clock.commands import handle_clock
+from app.plugins.clock.commands import SUBCOMMANDS, handle_clock
 from app.plugins.clock.tools import get_current_time
 from app.plugins.contracts import PluginCommand, ToolPlugin
 
@@ -13,7 +13,7 @@ PLUGIN = ToolPlugin(
         PluginCommand(
             namespace="clock",
             handler=handle_clock,
-            help_text="/clock time — current date and time in Japan (JST), no LLM call",
+            subcommands=SUBCOMMANDS,
         ),
     ),
 )

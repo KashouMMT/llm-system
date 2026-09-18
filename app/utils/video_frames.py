@@ -33,7 +33,7 @@ from app.utils.logger import logger
 
 DEFAULT_FRAME_COUNT = 12
 
-# Accepted range for a caller-supplied frame count (/recycle scan_video N).
+# Accepted range for a caller-supplied frame count (/recycle scan N, /recycle build_catalog N).
 MIN_FRAME_COUNT = 4
 MAX_FRAME_COUNT = 40
 

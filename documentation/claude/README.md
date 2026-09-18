@@ -22,6 +22,7 @@ reference workbooks the document renderers were built from are in
 | Document | Status | Read it when |
 |---|---|---|
 | `Recycling_Estimator_TODO.md` | **Current** | Any work on `app/plugins/recycling/` — the detection pipeline, the catalog, or the video path |
+| `Recycling_Agent_Tools_Plan.md` | **Current** — phase 1 written, untested live | Catalog→Postgres, or any recycling agent tool / permission-mode work |
 | `Recycling_Video_Frames_Plan.md` | **Proposed, not built** | Implementing phase 7 (video). The step-by-step build plan and the code each step needs; the decisions behind it stay in the TODO |
 
 ## Conventions
@@ -57,6 +58,6 @@ later reader can judge the evidence rather than inherit a conclusion.
 # Notes added by Human User
 
 Try to write your note as compact as possible as you can. Because I want you to save tokens.
-Mentioned in multiple places and written here again for CLAUDE just to be safe. 
+Mentioned in multiple places and written here again just to be safe. 
 It doesn't need to be human readable so long as you can get to the point and 
 context of the topic I want to talk about.

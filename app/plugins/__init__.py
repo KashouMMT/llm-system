@@ -7,7 +7,12 @@ from app.plugins.contracts import (
     ToolPlugin,
     load_plugin_prompt,
 )
-from app.plugins.loader import load_commands, load_plugin_prompts, load_tools
+from app.plugins.loader import (
+    initialize_plugins,
+    load_commands,
+    load_plugin_prompts,
+    load_tools,
+)
 
 __all__ = [
     "PLUGIN_PROMPT_FILE",
@@ -16,6 +21,7 @@ __all__ = [
     "PluginCommand",
     "ToolContext",
     "ToolPlugin",
+    "initialize_plugins",
     "load_commands",
     "load_plugin_prompt",
     "load_plugin_prompts",

@@ -16,6 +16,7 @@ from app.agent.context.conversation_context_builder import (
 from app.agent.context.history_context_builder import HistoryContextBuilder
 from app.agent.context.summary_context_builder import SummaryContextBuilder
 from app.agent.graph import AgentGraph
+from app.attachments.tools import make_attachment_tools
 from app.authentication.auth_service import AuthService
 from app.authentication.seed import seed_root
 from app.config.runtime_settings import (
@@ -44,10 +45,12 @@ from app.plugins import (
     LLMAccess,
     PluginCommand,
     ToolContext,
+    initialize_plugins,
     load_commands,
     load_plugin_prompts,
     load_tools,
 )
+from app.plugins.command_help import render_command_prompt
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
 from app.repositories.message_repository import MessageRepository
@@ -307,22 +310,57 @@ class Application:
                     api_key=LLM_API_KEY,
                     model=MODEL_NAME,
                 ),
+                db_pool=self.pool,
             )
-            tools = load_tools(
+
+            # Before any factory runs, so a plugin's commands are only built
+            # once its tables exist. A plugin whose setup failed joins the
+            # exclusion set for everything below — tools, commands and
+            # prompt alike — rather than loading half-working.
+            failed_setup = await initialize_plugins(
                 tool_context,
                 excluded=EXCLUDED_TOOL_PLUGINS,
                 strict=TOOL_PLUGINS_STRICT,
             )
+            excluded_plugins = EXCLUDED_TOOL_PLUGINS | failed_setup
+
+            # read_attachment is core, not a plugin: every deployment takes
+            # uploads and the attachment manifest tells the model to call it
+            # unconditionally, so it must not be excludable. Listed first so
+            # the tool order stays stable whatever plugins load — a
+            # reshuffled tool list busts provider-side prompt caching.
+            tools = [
+                *make_attachment_tools(
+                    file_repository=self.file_repository,
+                    file_storage=self.file_storage,
+                ),
+                *load_tools(
+                    tool_context,
+                    excluded=excluded_plugins,
+                    strict=TOOL_PLUGINS_STRICT,
+                ),
+            ]
 
             logger.info("Loading slash commands")
-            self.commands = load_commands(tool_context, excluded=EXCLUDED_TOOL_PLUGINS)
+            self.commands = load_commands(tool_context, excluded=excluded_plugins)
             logger.info("Slash commands loaded | namespaces=%s", sorted(self.commands))
 
             logger.info("Loading plugin prompts")
             # Collected after the tools, from the same allowlist, so a
             # plugin can never contribute prompt text describing tools the
             # agent was not given.
-            self.plugin_prompts = load_plugin_prompts(excluded=EXCLUDED_TOOL_PLUGINS)
+            #
+            # The SLASH COMMANDS block is generated from the commands that
+            # actually loaded, so it carries the same guarantee. It goes
+            # first because plugin prompts refer to it by name.
+            self.plugin_prompts = "\n\n".join(
+                block
+                for block in (
+                    render_command_prompt(self.commands),
+                    load_plugin_prompts(excluded=excluded_plugins),
+                )
+                if block
+            )
 
             logger.info("Creating AgentGraph")
             self.agent_graph = AgentGraph(

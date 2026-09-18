@@ -1,0 +1,8 @@
+What to look for in a file:
+
+- Answer from what the file actually says, and quote exact values —
+  names, dates, numbers — rather than paraphrasing them.
+- If part of a file is unreadable, cut off or ambiguous, say which part
+  instead of filling the gap with a guess.
+- If a file conflicts with what the user told you, point out the
+  difference and ask which is correct.

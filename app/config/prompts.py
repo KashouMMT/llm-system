@@ -55,6 +55,14 @@ FIRST_MESSAGE_FILE = "first_message.txt"
 # DEFAULT_TITLE_PROMPT, so titling keeps working for every existing set.
 TITLE_PROMPT_FILE = "title_prompt.txt"
 
+# Optional per-set file: what this persona should look for in an uploaded
+# file (see system_prompt._compose). Composed under the fixed attachments
+# section from app/attachments/prompts.py, never instead of it — the tool
+# contract and injection guard must not vary by set. Not in REQUIRED_FILES:
+# a set without one gets the fixed section alone. Must not name plugin
+# tools or commands; this file is sent whatever plugins are loaded.
+ATTACHMENT_PROMPT_FILE = "attachment_prompt.txt"
+
 
 def _missing_files(set_dir: Path) -> list[str]:
     """Names of the required files that are absent or empty in ``set_dir``."""
