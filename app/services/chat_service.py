@@ -18,7 +18,7 @@ from app.config.settings import (
     MAX_USER_INPUT_CHARS,
 )
 from app.plugins.command_help import render_command_list, render_subcommand_lines
-from app.plugins.contracts import CommandContext, PluginCommand
+from app.plugins.contracts import CommandContext, CommandReply, PluginCommand
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import (
     FileRecord,
@@ -347,6 +347,7 @@ class ChatService:
         """
         command = self.commands.get(namespace)
         spec = command.find(subcommand) if command is not None else None
+        context_content: str | None = None
 
         if command is None:
             content = self._unknown_command_message(namespace, user)
@@ -383,8 +384,13 @@ class ChatService:
             )
 
             try:
-                content = await command.handler(context)
+                reply = await command.handler(context)
                 status = "complete"
+
+                if isinstance(reply, CommandReply):
+                    content, context_content = reply.content, reply.context_content
+                else:
+                    content = reply
 
             except Exception as exc:  # noqa: BLE001
                 logger.exception(
@@ -400,6 +406,7 @@ class ChatService:
             assistant_message_id=assistant_message_id,
             content=content,
             status=status,
+            context_content=context_content,
         )
 
     def _unknown_command_message(self, namespace: str, user: User) -> str:
@@ -624,13 +631,18 @@ class ChatService:
         start = time.perf_counter()
 
         buffer: list[str] = []
+        # What later turns remember: the same text, except a display-only
+        # block is replaced by its placeholder. Saved only if it differs.
+        context_buffer: list[str] = []
+        has_display_only = False
         seq = 0
         status = "failed"
 
-        def emit(text: str) -> None:
+        def emit(text: str, remembered: str | None = None) -> None:
             nonlocal seq
 
             buffer.append(text)
+            context_buffer.append(text if remembered is None else remembered)
             seq += 1
 
             self.event_bus.publish(
@@ -645,11 +657,19 @@ class ChatService:
                 )
             )
 
-        def emit_block(markdown: str) -> None:
+        def emit_block(markdown: str, context: str | None) -> None:
+            nonlocal has_display_only
+
             # A block is its own paragraph whatever the model wrote before
             # it; a table glued onto the end of a sentence does not render.
             separator = "\n\n" if buffer and not buffer[-1].endswith("\n\n") else ""
-            emit(f"{separator}{markdown.strip()}\n\n")
+            remembered = None
+
+            if context is not None:
+                has_display_only = True
+                remembered = f"{separator}{context.strip()}\n\n"
+
+            emit(f"{separator}{markdown.strip()}\n\n", remembered)
 
         try:
             human_message, image_blocks = await self._build_turn_input(
@@ -715,6 +735,7 @@ class ChatService:
 
         finally:
             content = "".join(buffer)
+            context_content = "".join(context_buffer) if has_display_only else None
 
             # Shielded, and awaited only if we are not already being
             # cancelled: inside a finally during cancellation a bare await is
@@ -725,6 +746,7 @@ class ChatService:
                     assistant_message_id=assistant_message_id,
                     content=content,
                     status=status,
+                    context_content=context_content,
                 )
             )
 
@@ -747,6 +769,7 @@ class ChatService:
         assistant_message_id: int,
         content: str,
         status: str,
+        context_content: str | None = None,
     ) -> None:
         """
         Write the buffer, release the lock, announce the outcome.
@@ -768,6 +791,7 @@ class ChatService:
                 message_id=assistant_message_id,
                 content=content,
                 status=status,
+                context_content=context_content,
             )
 
             await self.conversation_repository.touch(conversation_id)

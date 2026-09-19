@@ -106,6 +106,38 @@ MIGRATIONS: list[Migration] = [
             """,
         ),
     ),
+    (
+        5,
+        "message context_content (display-only output kept out of history)",
+        (
+            # NULL means "the model remembers content itself" — every
+            # existing row, and every message with nothing display-only.
+            """
+            ALTER TABLE messages
+            ADD COLUMN IF NOT EXISTS context_content TEXT
+            """,
+        ),
+    ),
+    (
+        6,
+        "recycle_evidence document_type",
+        (
+            # A video frame kept as catalog evidence: a generated JPEG with
+            # no message_id, so it is never shown as a chat attachment.
+            """
+            ALTER TABLE files DROP CONSTRAINT IF EXISTS files_document_type_check
+            """,
+            """
+            ALTER TABLE files ADD CONSTRAINT files_document_type_check
+                CHECK (document_type IS NULL OR document_type IN (
+                    'rirekisho',
+                    'shokumu_keirekisho',
+                    'recycle_scan',
+                    'recycle_evidence'
+                ))
+            """,
+        ),
+    ),
 ]
 
 

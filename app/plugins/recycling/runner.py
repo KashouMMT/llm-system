@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openai import OpenAI
 
@@ -47,6 +47,11 @@ class HarvestResult:
     # Photos or frames whose every detection run failed. Reported, never
     # just skipped: a label on a failed frame is missing from the catalog.
     failed_images: int
+    # label -> every (source index, image index within that source) it was
+    # detected in, in capture order. Where a catalog row's evidence comes
+    # from: which photo, or which frame of the video, a reviewer should
+    # look at to see what the model saw.
+    sightings: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
 
 
 async def video_frames(
@@ -196,20 +201,28 @@ async def harvest(
 
     # Flattened so every image of every source runs concurrently, then
     # regrouped by source index below.
-    owners = [index for index, images in enumerate(sources) for _ in images]
+    owners = [
+        (source, position)
+        for source, images in enumerate(sources)
+        for position in range(len(images))
+    ]
     per_image = await asyncio.gather(
         *(one_image(data) for images in sources for data in images),
         return_exceptions=True,
     )
 
     labels_by_source: list[set[str]] = [set() for _ in sources]
+    sightings: dict[str, list[tuple[int, int]]] = {}
     failed_images = 0
 
-    for owner, result in zip(owners, per_image):
+    for (source, position), result in zip(owners, per_image):
         if isinstance(result, BaseException):
             failed_images += 1
             continue
-        labels_by_source[owner].update(normalize(item.label) for item in result)
+        labels = {normalize(item.label) for item in result}
+        labels_by_source[source].update(labels)
+        for label in labels:
+            sightings.setdefault(label, []).append((source, position))
 
     frequencies: Counter[str] = Counter()
     for labels in labels_by_source:
@@ -218,4 +231,5 @@ async def harvest(
     return HarvestResult(
         frequencies=dict(frequencies.most_common()),
         failed_images=failed_images,
+        sightings=sightings,
     )

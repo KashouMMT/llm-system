@@ -1,0 +1,182 @@
+/* Settings page, imported by SettingsPage.tsx. Same height rule as
+   .chat-layout: the page scrolls inside the panel, not the window, so the
+   navbar and sidebar stay put. */
+
+.settings-layout {
+	height: calc(100vh - 56px);
+	display: flex;
+}
+
+.settings-sidebar {
+	width: 240px;
+	flex-shrink: 0;
+	overflow-y: auto;
+	padding: 0.75rem 0.5rem;
+	background-color: var(--bg-subtle);
+	border-right: 1px solid var(--border);
+}
+
+.settings-category + .settings-category {
+	margin-top: 1rem;
+}
+
+/* Same small-caps heading style as the chat sidebar's sections. */
+.settings-category-heading {
+	margin: 0 0 0.2rem;
+	padding: 0 0.8rem;
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--text-muted);
+}
+
+.settings-link {
+	display: block;
+	padding: 0.5rem 0.8rem;
+	border-radius: 0.5rem;
+	color: var(--text);
+	text-decoration: none;
+}
+
+.settings-link:hover,
+.settings-link.active {
+	background-color: var(--border);
+	color: var(--text);
+}
+
+.settings-link.active {
+	font-weight: 600;
+}
+
+.settings-main {
+	flex: 1;
+	/* A flex item defaults to min-width: auto, i.e. never narrower than its
+	   content — a wide table would then stretch the panel past the window
+	   instead of scrolling inside its own TableScroll. */
+	min-width: 0;
+	overflow-y: auto;
+	padding: 1.5rem 2rem;
+}
+
+/* The width cap is on the form, not the panel: a plugin section (the
+   recycling catalog) is a wide table and needs the whole panel. */
+.settings-form {
+	max-width: 40rem;
+}
+
+.settings-title {
+	margin: 0 0 0.5rem;
+	font-size: 1.25rem;
+	font-weight: 600;
+}
+
+.settings-field {
+	padding: 1rem 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.settings-field-label {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	margin-bottom: 0.4rem;
+	font-weight: 600;
+}
+
+.settings-badge {
+	padding: 0.1rem 0.4rem;
+	border: 1px solid var(--border);
+	border-radius: 0.25rem;
+	font-size: 0.7rem;
+	font-weight: 400;
+	color: var(--text-muted);
+}
+
+.settings-input {
+	max-width: 16rem;
+}
+
+.settings-field-help {
+	margin: 0.4rem 0 0;
+	font-size: 0.8125rem;
+	color: var(--text-muted);
+}
+
+.settings-field-meta {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-top: 0.25rem;
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+
+/* Link-styled, like .login-link: a secondary action beside the default. */
+.settings-reset {
+	padding: 0;
+	border: 0;
+	background: none;
+	color: var(--text);
+	font: inherit;
+	text-decoration: underline;
+	cursor: pointer;
+}
+
+.settings-reset:disabled {
+	color: var(--text-muted);
+	cursor: default;
+}
+
+.settings-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem;
+	margin-top: 1.25rem;
+}
+
+.settings-status {
+	font-size: 0.875rem;
+	color: var(--text-muted);
+}
+
+/* Same red as .login-error. */
+.settings-error {
+	margin: 1rem 0 0;
+	font-size: 0.875rem;
+	color: #e5484d;
+}
+
+/* .form-control is themed globally in style.css; the select is only used
+   here so far. The app switches [data-theme] rather than Bootstrap's
+   data-bs-theme, so the dark arrow is set by hand (Bootstrap's own
+   dark-theme icon). */
+.settings-panel .form-select {
+	background-color: var(--bg);
+	color: var(--text);
+	border-color: var(--border);
+}
+
+[data-theme="dark"] .settings-panel .form-select {
+	--bs-form-select-bg-img: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23dee2e6' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+}
+
+@media (max-width: 767.98px) {
+	/* Stacked instead of side by side: the section list sits above the
+	   form, and the whole page scrolls as one. */
+	.settings-layout {
+		height: auto;
+		flex-direction: column;
+	}
+
+	.settings-sidebar {
+		width: 100%;
+		border-right: 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.settings-main {
+		overflow-y: visible;
+		padding: 1rem;
+	}
+}

@@ -67,24 +67,9 @@
 	padding: 0.1em 0.3em;
 }
 
+/* The scrolling itself is TableScroll's own (tableScroll.css). */
 .message-content .table-scroll-group {
 	margin: 0.5rem 0;
-}
-
-.message-content .table-scroll-top {
-	overflow-x: auto;
-	overflow-y: hidden;
-	/* Just tall enough to show the horizontal scrollbar track and
-	   nothing else — the spacer div inside it has no visible content. */
-	height: 14px;
-}
-
-.message-content .table-scroll-top > div {
-	height: 1px;
-}
-
-.message-content .table-scroll {
-	overflow-x: auto;
 }
 
 .message-content table {

@@ -1,6 +1,7 @@
 from langchain_core.tools import BaseTool
 
 from app.plugins.contracts import ToolContext, ToolPlugin, load_plugin_prompt
+from app.plugins.recruitment.routes import make_routes
 from app.plugins.recruitment.tools import make_document_tools
 
 
@@ -29,4 +30,7 @@ PLUGIN = ToolPlugin(
     # named this plugin in EXCLUDED_TOOL_PLUGINS. The persona file now
     # describes only who Anna is and how she behaves.
     system_prompt=load_plugin_prompt(__file__),
+    # GET /plugins/recruitment/blank/{doc_type}, for the sidebar's blank
+    # forms (ui/src/plugins/recruitment/).
+    router_factory=make_routes,
 )

@@ -3,13 +3,13 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 
 import "../assets/css/sidebar.css";
-import { blankDocumentUrl } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import {
 	useConversations,
 	useCreateConversation,
 	useRenameConversation,
 } from "../hooks/useConversations";
+import { usePlugins } from "../hooks/usePlugins";
 
 type SidebarProps = {
 	isOpen: boolean;
@@ -21,22 +21,11 @@ type SidebarProps = {
 // getting there.
 const TITLE_MAX_CHARS = 80;
 
-// The empty forms a user can take without talking to the assistant first.
-// Kept here rather than fetched: the two document types are fixed, and a
-// request just to learn their names would delay the sidebar for nothing.
-const BLANK_FORMS = [
-	{ docType: "rirekisho", label: "履歴書", hint: "Rirekisho" },
-	{
-		docType: "shokumu_keirekisho",
-		label: "職務経歴書",
-		hint: "Shokumu Keirekisho",
-	},
-];
-
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const auth = useAuth();
+	const { plugins } = usePlugins();
 
 	const conversationsQuery = useConversations();
 	const createConversation = useCreateConversation();
@@ -188,31 +177,11 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
 					)}
 				</div>
 
-				{/* Plain anchors, like the message attachments in Chat: the
-				    response carries Content-Disposition: attachment, so the
-				    browser downloads without navigating away and the session
-				    cookie rides along on the GET. */}
-				<div className="sidebar-forms">
-					<p className="sidebar-forms-heading">
-						{t("sidebar.blankForms")}
-					</p>
-
-					{BLANK_FORMS.map((form) => (
-						<a
-							key={form.docType}
-							className="sidebar-form"
-							href={blankDocumentUrl(form.docType)}
-						>
-							<span className="sidebar-form-label">
-								{form.label}
-							</span>
-
-							<span className="sidebar-form-hint">
-								{form.hint}
-							</span>
-						</a>
-					))}
-				</div>
+				{/* The chat-sidebar slot: whatever loaded plugins put here
+				    (the recruitment plugin's blank forms, for one). */}
+				{plugins.map(({ name, chatSidebar: Slot }) =>
+					Slot ? <Slot key={name} /> : null,
+				)}
 
 				{auth.status === "authenticated" && (
 					<div className="sidebar-account">

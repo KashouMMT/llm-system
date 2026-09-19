@@ -8,6 +8,9 @@ Every database failure is logged here, once, with the table and tenant,
 before it leaves as CatalogStorageError.
 """
 
+from dataclasses import dataclass
+from typing import Any
+
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -112,6 +115,24 @@ def _from_row(row: dict) -> CatalogItem:
     )
 
 
+@dataclass(frozen=True)
+class CatalogPage:
+    """One page of the catalog browser: flat rows as stored (plus
+    updated_at), the total matching the filters, and every visual_class
+    present, for the filter dropdown."""
+
+    total: int
+    rows: list[dict[str, Any]]
+    visual_classes: list[str]
+
+
+def _like_pattern(text: str) -> str:
+    """Substring match for ILIKE, with the user's own % and _ taken
+    literally rather than as wildcards."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 class CatalogStorageError(RuntimeError):
     """The catalog could not be read from or written to the database.
 
@@ -158,32 +179,47 @@ class CatalogRepository:
         return Catalog(items)
 
     async def save(self, catalog: Catalog) -> None:
-        """Replace the tenant's whole catalog in one transaction.
+        """Make the tenant's stored catalog equal `catalog`, in one
+        transaction.
 
-        Whole-replace rather than per-row upsert because that is what the
-        build produces: merge_into_catalog returns the complete merged
-        catalog. One transaction, so a failure mid-write leaves the old
-        catalog intact rather than a half-written one.
+        The build produces the complete merged catalog
+        (merge_into_catalog), so this takes a whole Catalog — but writes it
+        as upsert-then-delete-missing, not delete-everything-and-reinsert.
+        A row that survives keeps its identity, so what references it
+        (evidence, by foreign key with ON DELETE CASCADE) survives too, and
+        updated_at moves only for rows whose data actually changed. The old
+        delete-and-reinsert wiped all evidence and reset updated_at on
+        every build.
 
-        Raises CatalogStorageError when the write fails.
+        One transaction, so a failure mid-write leaves the old catalog
+        intact rather than a half-written one. Raises CatalogStorageError.
         """
         placeholders = ", ".join(["%s"] * (len(_COLUMNS) + 1))
+        # Everything but the key. position is rewritten too (build order),
+        # but a reorder alone is not a change to the row's data.
+        assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in _COLUMNS[1:])
+        stored = ", ".join(f"{CATALOG_TABLE}.{column}" for column in _DATA_COLUMNS)
+        incoming = ", ".join(f"EXCLUDED.{column}" for column in _DATA_COLUMNS)
 
         try:
             async with self._pool.connection() as conn, conn.transaction():
-                await conn.execute(
-                    f"DELETE FROM {CATALOG_TABLE} WHERE tenant = %s",
-                    (self._tenant,),
-                )
                 async with conn.cursor() as cur:
                     await cur.executemany(
                         f"INSERT INTO {CATALOG_TABLE} (tenant, {', '.join(_COLUMNS)}) "
-                        f"VALUES ({placeholders})",
+                        f"VALUES ({placeholders}) "
+                        "ON CONFLICT (tenant, id) DO UPDATE SET "
+                        f"{assignments}, "
+                        f"updated_at = CASE WHEN ({stored}) IS DISTINCT FROM ({incoming}) "
+                        f"THEN NOW() ELSE {CATALOG_TABLE}.updated_at END",
                         [
                             (self._tenant, *_to_row(item, position))
                             for position, item in enumerate(catalog.items)
                         ],
                     )
+                await conn.execute(
+                    f"DELETE FROM {CATALOG_TABLE} WHERE tenant = %s AND NOT (id = ANY(%s))",
+                    (self._tenant, [item.id for item in catalog.items]),
+                )
         except psycopg.Error as exc:
             logger.exception(
                 "Catalog save failed, previous catalog kept | table=%s tenant=%s items=%s",
@@ -199,6 +235,92 @@ class CatalogRepository:
             self._tenant,
             len(catalog),
         )
+
+    async def counts(self) -> tuple[int, int]:
+        """(total rows, excluded rows) — one aggregate, no rows loaded."""
+        try:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    f"SELECT COUNT(*), COUNT(*) FILTER (WHERE excluded) "
+                    f"FROM {CATALOG_TABLE} WHERE tenant = %s",
+                    (self._tenant,),
+                )
+                total, excluded = await cur.fetchone()
+        except psycopg.Error as exc:
+            logger.exception(
+                "Catalog count failed | table=%s tenant=%s", CATALOG_TABLE, self._tenant
+            )
+            raise CatalogStorageError(str(exc)) from exc
+
+        return total, excluded
+
+    async def page(
+        self,
+        *,
+        search: str = "",
+        visual_class: str | None = None,
+        excluded: bool | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> CatalogPage:
+        """A filtered page for the catalog browser, in catalog order.
+
+        Paged in the database rather than load() and sliced: the browser
+        exists for catalogs too big to render at once, and load() also
+        validates every row through Pydantic, which a read-only table view
+        does not need. `search` matches id, label or any alias.
+        """
+        conditions = ["tenant = %s"]
+        params: list[Any] = [self._tenant]
+
+        if search.strip():
+            pattern = _like_pattern(search.strip())
+            conditions.append(
+                "(id ILIKE %s OR canonical_label ILIKE %s "
+                "OR EXISTS (SELECT 1 FROM unnest(aliases) AS alias WHERE alias ILIKE %s))"
+            )
+            params += [pattern, pattern, pattern]
+
+        if visual_class:
+            conditions.append("visual_class = %s")
+            params.append(visual_class)
+
+        if excluded is not None:
+            conditions.append("excluded = %s")
+            params.append(excluded)
+
+        where = " AND ".join(conditions)
+
+        try:
+            async with (
+                self._pool.connection() as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
+                await cur.execute(
+                    f"SELECT COUNT(*) AS total FROM {CATALOG_TABLE} WHERE {where}", params
+                )
+                total = (await cur.fetchone())["total"]
+
+                await cur.execute(
+                    f"SELECT {', '.join(_COLUMNS)}, updated_at FROM {CATALOG_TABLE} "
+                    f"WHERE {where} ORDER BY position LIMIT %s OFFSET %s",
+                    [*params, limit, offset],
+                )
+                rows = await cur.fetchall()
+
+                await cur.execute(
+                    f"SELECT DISTINCT visual_class FROM {CATALOG_TABLE} "
+                    "WHERE tenant = %s AND visual_class IS NOT NULL ORDER BY 1",
+                    (self._tenant,),
+                )
+                visual_classes = [row["visual_class"] for row in await cur.fetchall()]
+        except psycopg.Error as exc:
+            logger.exception(
+                "Catalog page failed | table=%s tenant=%s", CATALOG_TABLE, self._tenant
+            )
+            raise CatalogStorageError(str(exc)) from exc
+
+        return CatalogPage(total=total, rows=rows, visual_classes=visual_classes)
 
     # ---- single rows ---------------------------------------------------
     #

@@ -3,13 +3,19 @@ import type {
 	Conversation,
 	CreateConversationResponse,
 	Message,
+	PluginsResponse,
+	PromptSetsResponse,
 	RenameConversationRequest,
+	RuntimeSettings,
 	SendMessageRequest,
 	SendMessageResponse,
+	SettingValue,
 	UploadedAttachment,
 } from "./types";
 
-const API_BASE_URL =
+// Exported for frontend plugins, which build their own endpoint URLs
+// rather than adding functions here.
+export const API_BASE_URL =
 	import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 /**
@@ -62,7 +68,12 @@ async function readDetail(response: Response): Promise<unknown> {
 	}
 }
 
-async function request<TResponse>(
+/**
+ * Every API call goes through here: credentials, the CSRF header, and
+ * ApiError on a non-2xx. Exported for frontend plugins, which keep their
+ * own endpoint functions in their folder rather than in this file.
+ */
+export async function request<TResponse>(
 	path: string,
 	init?: RequestInit,
 ): Promise<TResponse> {
@@ -214,6 +225,37 @@ export function uploadFile(
 	);
 }
 
+export function getSettings(signal?: AbortSignal): Promise<RuntimeSettings> {
+	return request<RuntimeSettings>("/settings", { signal });
+}
+
+/**
+ * Applies a batch of changes all-or-nothing and resolves to the full
+ * settings afterwards. A rejected batch is an ApiError of status 422 whose
+ * detail is the server's reason as a plain string. Admin only.
+ */
+export function updateSettings(
+	changes: Record<string, SettingValue>,
+): Promise<RuntimeSettings> {
+	return request<RuntimeSettings>("/settings", {
+		method: "PATCH",
+		body: JSON.stringify(changes),
+	});
+}
+
+/** Restores one setting's environment default. Admin only. */
+export function resetSetting(key: string): Promise<RuntimeSettings> {
+	return request<RuntimeSettings>(`/settings/${encodeURIComponent(key)}`, {
+		method: "DELETE",
+	});
+}
+
+export function listPromptSets(
+	signal?: AbortSignal,
+): Promise<PromptSetsResponse> {
+	return request<PromptSetsResponse>("/settings/prompt-sets", { signal });
+}
+
 export function eventsUrl(conversationId: string): string {
 	return `${API_BASE_URL}/events?conversation_id=${conversationId}`;
 }
@@ -231,15 +273,6 @@ export function fileDownloadUrl(fileId: string): string {
 	return `${API_BASE_URL}/files/${fileId}`;
 }
 
-/**
- * Absolute URL for a blank, fill-by-hand form.
- *
- * A plain link, for the same reasons as fileDownloadUrl: the response
- * carries Content-Disposition: attachment, and the SameSite=Lax session
- * cookie rides along on the GET navigation.
- *
- * docType is "rirekisho" or "shokumu_keirekisho".
- */
-export function blankDocumentUrl(docType: string): string {
-	return `${API_BASE_URL}/documents/blank/${docType}`;
+export function listPlugins(signal?: AbortSignal): Promise<PluginsResponse> {
+	return request<PluginsResponse>("/plugins", { signal });
 }

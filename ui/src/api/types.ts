@@ -132,6 +132,30 @@ export type Attachment = {
 	created_at: string;
 };
 
+export type SettingValue = number | string;
+
+/** One entry of GET /settings — see Application.describe_settings(). */
+export type SettingDescription = {
+	value: SettingValue;
+	// False for a session-only setting (log_level): it reverts to the
+	// environment on restart instead of being stored.
+	persisted: boolean;
+	// The environment value a reset would restore.
+	default: SettingValue;
+};
+
+/** GET/PATCH /settings and DELETE /settings/{key} all answer with this. */
+export type RuntimeSettings = Record<string, SettingDescription>;
+
+export type PromptSetsResponse = {
+	prompt_sets: string[];
+};
+
+/** GET /plugins: backend plugin folder names that loaded. */
+export type PluginsResponse = {
+	plugins: string[];
+};
+
 /** The response body of POST /conversations/{id}/uploads. */
 export type UploadedAttachment = {
 	id: string;

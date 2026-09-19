@@ -21,7 +21,9 @@ from contextlib import contextmanager
 
 from app.utils.logger import logger
 
-BlockWriter = Callable[[str], None]
+# (markdown shown to the user, what later turns remember instead — None
+# means the markdown itself).
+BlockWriter = Callable[[str, str | None], None]
 
 
 class ReplyBlocks:
@@ -39,9 +41,21 @@ class ReplyBlocks:
         finally:
             self._writers.pop(assistant_message_id, None)
 
-    def publish(self, assistant_message_id: int, markdown: str) -> bool:
+    def publish(
+        self,
+        assistant_message_id: int,
+        markdown: str,
+        *,
+        context: str | None = None,
+    ) -> bool:
         """
         Put `markdown` into the reply being generated for this message.
+
+        `context` is what the model's later turns see in its place. Leave it
+        None when the block is worth remembering (a scan result the user
+        will ask about). Pass a one-line placeholder when the block is only
+        for display — a whole catalog table would otherwise be re-sent with
+        every later turn until the conversation is summarized.
 
         Returns False when no generation is attached — the caller must then
         decide what the user sees instead, never assume it was shown. Call
@@ -58,5 +72,5 @@ class ReplyBlocks:
             )
             return False
 
-        writer(markdown)
+        writer(markdown, context)
         return True

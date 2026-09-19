@@ -1,0 +1,137 @@
+/* The catalog browser (Catalog.tsx), shown in the settings panel. Its
+   status and error lines reuse .settings-status / .settings-error. */
+
+.catalog-toolbar {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin: 0.5rem 0 1rem;
+}
+
+.catalog-search {
+	flex: 1 1 16rem;
+	max-width: 24rem;
+}
+
+.catalog-filter {
+	width: auto;
+}
+
+/* Themed like .settings-panel .form-select; this page is a plugin's, so it
+   does not rely on that selector reaching it. */
+.catalog .form-select {
+	background-color: var(--bg);
+	color: var(--text);
+	border-color: var(--border);
+}
+
+.catalog-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.875rem;
+}
+
+/* The previous page stays on screen while the next loads; dimmed so it
+   does not read as the answer. */
+.catalog-table.stale {
+	opacity: 0.55;
+}
+
+/* nowrap, as in chat tables: each cell keeps its natural width and the
+   table overflows sideways into TableScroll's scrollbars, instead of
+   squeezing ten columns into the panel and breaking words mid-letter. */
+.catalog-table th,
+.catalog-table td {
+	padding: 0.5rem 0.6rem;
+	border: 1px solid var(--border);
+	text-align: left;
+	vertical-align: top;
+	white-space: nowrap;
+}
+
+.catalog-table th {
+	background-color: var(--bg-subtle);
+	font-size: 0.75rem;
+	font-weight: 600;
+	color: var(--text-muted);
+}
+
+.catalog-label {
+	font-weight: 600;
+}
+
+.catalog-muted {
+	font-size: 0.75rem;
+	color: var(--text-muted);
+}
+
+.catalog-evidence {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.25rem;
+}
+
+.catalog-chip {
+	padding: 0.1rem 0.45rem;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: transparent;
+	color: var(--text);
+	font-size: 0.75rem;
+	white-space: nowrap;
+	cursor: pointer;
+}
+
+.catalog-chip:hover {
+	background-color: var(--bg-subtle);
+}
+
+.catalog-pager {
+	display: flex;
+	align-items: center;
+	gap: 0.75rem;
+	margin-top: 1rem;
+}
+
+.catalog-preview {
+	position: fixed;
+	inset: 0;
+	z-index: 1060;
+	display: grid;
+	place-items: center;
+	padding: 1rem;
+	background-color: rgba(0, 0, 0, 0.7);
+}
+
+.catalog-preview-body {
+	max-width: min(90vw, 64rem);
+	margin: 0;
+	padding: 0.75rem;
+	border-radius: 0.5rem;
+	background-color: var(--bg);
+}
+
+.catalog-preview-body img {
+	display: block;
+	max-width: 100%;
+	max-height: 75vh;
+	margin: 0 auto;
+}
+
+.catalog-preview-caption {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.75rem;
+	margin-top: 0.6rem;
+	font-size: 0.875rem;
+	color: var(--text-muted);
+}
+
+.catalog-preview-caption a {
+	color: var(--text);
+}
+
+.catalog-preview-caption button {
+	margin-left: auto;
+}

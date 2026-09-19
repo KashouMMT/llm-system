@@ -31,11 +31,12 @@ The tool checks the user's role itself (admin or root) and refuses \
 otherwise. `frames` (4-40) applies to a video only."""
 
 SHOW_CATALOG_DESCRIPTION = """\
-Show the whole item catalog to the user as a table (label, excluded, \
-weight, dimensions, material). Call it whenever the user asks to see the \
-catalog; the tool checks the user's role itself (admin or root) and \
-refuses otherwise. The table is shown to the user directly; you get a \
-count."""
+Give the user a link to the item catalog page, where they can search, \
+filter and page through every row and view its evidence images. Call it \
+whenever the user asks to see, open or browse the catalog; the tool checks \
+the user's role itself (admin or root) and refuses otherwise. The link is \
+shown to the user directly; you get the counts. To answer a question about \
+the catalog's contents yourself, use recycle_query_catalog instead."""
 
 ADMIN_ONLY = (
     "Refused: this is limited to administrators, and the current user is not "
@@ -168,3 +169,22 @@ _CHANGE_SHOWN = (
 
 def edit_summary(*, action: str, item_id: str, detail: str) -> str:
     return f"{action} `{item_id}`: {detail}\n\n{_CHANGE_SHOWN}"
+
+
+def catalog_link_summary(*, total: int, collectable: int, excluded: int) -> str:
+    return (
+        f"A link to the catalog page is displayed to the user, directly above "
+        f"your reply. The catalog has {total} item(s): {collectable} "
+        f"collectable, {excluded} excluded. Its rows are not in your context. "
+        "In one sentence, tell the user they can open it there; do not repeat "
+        "the link. " + _LANGUAGE
+    )
+
+
+def catalog_shown_placeholder(*, total: int) -> str:
+    """What later turns remember instead of the catalog table itself."""
+    return (
+        f"[The full item catalog ({total} rows) was shown to the user here. "
+        "It is not in your context: use recycle_query_catalog to look "
+        "anything up.]"
+    )

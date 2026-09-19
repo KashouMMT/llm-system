@@ -23,17 +23,25 @@ import json
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from uuid import UUID, uuid4
 
 from openai import OpenAI
 
 from app.plugins.command_help import render_subcommand_lines
 from app.plugins.contracts import (
     CommandContext,
+    CommandReply,
     PluginCommand,
     SubcommandSpec,
 )
 from app.plugins.recycling import prompts
-from app.plugins.recycling.database import CatalogRepository, CatalogStorageError
+from app.plugins.recycling.database import (
+    CatalogRepository,
+    CatalogStorageError,
+    EvidenceEntry,
+    EvidenceRecord,
+    EvidenceRepository,
+)
 from app.plugins.recycling.pipeline.build import (
     EnrichedItem,
     assemble,
@@ -43,6 +51,7 @@ from app.plugins.recycling.pipeline.build import (
     reconcile,
 )
 from app.plugins.recycling.pipeline.catalog import (
+    Catalog,
     CatalogError,
     CatalogFile,
     ItemMetadata,
@@ -73,6 +82,7 @@ from app.utils.video_frames import (
     FrameSample,
 )
 
+
 @dataclass(frozen=True)
 class RecycleOutcome:
     """
@@ -88,6 +98,11 @@ class RecycleOutcome:
 
     markdown: str
     model_summary: str | None = None
+    # What later turns remember in place of `markdown`, when the markdown
+    # is only for display. None: remember the markdown itself (a scan the
+    # user will ask about). A placeholder: the whole catalog table, which
+    # would otherwise ride along in every later turn's context.
+    context: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -154,7 +169,11 @@ SUBCOMMANDS = (
     ),
     SubcommandSpec(
         name="show_catalog",
-        summary="Show the item catalog as a table: label, excluded, weight, dimensions, material.",
+        summary=(
+            "Show the item catalog as a table: label, excluded, weight, "
+            "dimensions, material, and links to the evidence images each row "
+            "was detected in."
+        ),
         admin_only=True,
     ),
 )
@@ -174,6 +193,9 @@ class _Media:
 
     video: FileRecord | None = None
     images: list[tuple[str, bytes]] = field(default_factory=list)
+    # The stored file behind each entry of `images`, same order — what a
+    # catalog row's evidence links to.
+    image_files: list[FileRecord] = field(default_factory=list)
     # Non-image attachments ignored beside photos — reported, never
     # silently dropped, per the project's one rule.
     skipped: list[str] = field(default_factory=list)
@@ -229,12 +251,14 @@ async def _attached_media(
         )
 
     images: list[tuple[str, bytes]] = []
+    image_files: list[FileRecord] = []
     skipped: list[str] = []
 
     for file in files:
         if file.content_type in IMAGE_CONTENT_TYPES:
             data = await file_storage.read(file.storage_key)
             images.append((file.filename, data))
+            image_files.append(file)
         else:
             skipped.append(file.filename)
 
@@ -247,7 +271,7 @@ async def _attached_media(
             message += f"\n\nIgnored non-image attachment(s): {', '.join(skipped)}"
         return _Media(error=message)
 
-    return _Media(images=images, skipped=skipped)
+    return _Media(images=images, image_files=image_files, skipped=skipped)
 
 
 def _frame_count_argument(argument: str) -> int | None:
@@ -310,6 +334,118 @@ async def _attach_json(
         content_type=TEXT_PLAIN,
         size_bytes=len(data),
         message_id=context.assistant_message_id,
+    )
+
+
+# --------------------------------------------------------------------------
+# Evidence
+# --------------------------------------------------------------------------
+
+# Per catalog row, per build. Enough for a reviewer to see the thing from a
+# couple of angles; EvidenceRepository keeps the newest few across builds.
+EVIDENCE_PER_ROW_PER_BUILD = 3
+
+
+async def _record_evidence(
+    context: CommandContext,
+    *,
+    media: _Media,
+    sample: FrameSample | None,
+    sightings: dict[str, list[tuple[int, int]]],
+    catalog: Catalog,
+    file_repository: FileRepository,
+    file_storage: FileStorage,
+    evidence_repository: EvidenceRepository,
+) -> tuple[int, int]:
+    """
+    Link each catalog row to the images its labels were detected in.
+    Returns (evidence entries, rows covered).
+
+    A photo is linked as the uploaded file itself. A video frame exists
+    only in memory, so the frames actually used as evidence are stored as
+    JPEG files of their own — no video, no timestamp, just the picture the
+    model looked at. Stored with no message_id, so they never appear as
+    chat attachments.
+
+    Raw labels are mapped to rows through the merged catalog's own index,
+    the same match a scan uses — so a label clustered into another row
+    ("desk" into "table") lands on that row, and a label that matched an
+    existing row adds evidence to it.
+    """
+    chosen: dict[str, list[tuple[int, int, str]]] = {}
+
+    for label, places in sightings.items():
+        item = catalog.match(label)
+        if item is None:
+            continue
+        picks = chosen.setdefault(item.id, [])
+        for source, position in places:
+            if len(picks) >= EVIDENCE_PER_ROW_PER_BUILD:
+                break
+            if any((source, position) == (s, p) for s, p, _ in picks):
+                continue
+            picks.append((source, position, label))
+
+    frame_files: dict[int, UUID] = {}
+    entries: list[EvidenceEntry] = []
+
+    for item_id, picks in chosen.items():
+        for source, position, label in picks:
+            if sample is not None and media.video is not None:
+                frame = sample.frames[position]
+                if position not in frame_files:
+                    frame_files[position] = await _store_frame(
+                        context,
+                        video=media.video,
+                        frame_index=frame.index,
+                        jpeg=frame.jpeg,
+                        file_repository=file_repository,
+                        file_storage=file_storage,
+                    )
+                entries.append(EvidenceEntry(item_id, frame_files[position], frame.index, label))
+            else:
+                entries.append(EvidenceEntry(item_id, media.image_files[source].id, None, label))
+
+    await evidence_repository.add(entries, build_run_id=uuid4())
+    return len(entries), len(chosen)
+
+
+async def _store_frame(
+    context: CommandContext,
+    *,
+    video: FileRecord,
+    frame_index: int,
+    jpeg: bytes,
+    file_repository: FileRepository,
+    file_storage: FileStorage,
+) -> UUID:
+    # Bytes before the row, as everywhere: the reverse can leave a row
+    # pointing at a file that does not exist.
+    storage_key = await file_storage.write(jpeg, extension="jpg")
+    stem = video.filename.rsplit(".", 1)[0]
+    record = await file_repository.create(
+        conversation_id=context.conversation_id,
+        user_id=context.user.id,
+        origin="generated",
+        document_type="recycle_evidence",
+        filename=f"{stem}_frame{frame_index:04d}.jpg",
+        storage_key=storage_key,
+        content_type="image/jpeg",
+        size_bytes=len(jpeg),
+    )
+    return record.id
+
+
+def _evidence_links(records: list[EvidenceRecord]) -> str:
+    """Links for one catalog row's evidence cell. Relative /files/<id>:
+    the frontend's Markdown renderer points it at the API's own origin, and
+    the download route lets an admin open any file."""
+    if not records:
+        return "—"
+    return " ".join(
+        f"[{'f' + str(record.frame_index) if record.frame_index is not None else 'img'}]"
+        f"(/files/{record.file_id})"
+        for record in records
     )
 
 
@@ -576,6 +712,7 @@ def _make_build_catalog(
     file_repository: FileRepository,
     file_storage: FileStorage,
     catalog_repository: CatalogRepository,
+    evidence_repository: EvidenceRepository,
     force: bool,
 ) -> RecycleRunner:
     async def build_catalog(context: CommandContext) -> RecycleOutcome:
@@ -652,6 +789,34 @@ def _make_build_catalog(
                 "database is reachable."
             )
 
+        # After the save, and never able to undo it: the catalog is what
+        # the paid build produced, the evidence is a convenience for review.
+        # A failure here is reported, and the build still stands.
+        try:
+            evidence_count, evidence_rows = await _record_evidence(
+                context,
+                media=media,
+                sample=sample,
+                sightings=harvested.sightings,
+                catalog=result.catalog,
+                file_repository=file_repository,
+                file_storage=file_storage,
+                evidence_repository=evidence_repository,
+            )
+            evidence_line = (
+                f"Evidence: {evidence_count} image reference(s) recorded for "
+                f"{evidence_rows} row(s) — see the Evidence column in "
+                "`/recycle show_catalog`."
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "Catalog evidence not recorded | conversation=%s", context.conversation_id
+            )
+            evidence_line = (
+                "Evidence images could not be recorded (details in the server "
+                "log). The catalog itself was saved."
+            )
+
         included = [item for item in result.catalog if not item.excluded]
         incomplete = result.catalog.incomplete()
 
@@ -700,6 +865,7 @@ def _make_build_catalog(
             if media.skipped:
                 summary += f" Ignored non-image attachment(s): {', '.join(media.skipped)}."
             lines = [summary]
+        lines += ["", evidence_line]
         if notes:
             lines += ["", "**Check these during review:**"]
             lines += [f"- {note}" for note in notes]
@@ -733,7 +899,11 @@ def _make_build_catalog(
     return build_catalog
 
 
-def _make_show_catalog(*, catalog_repository: CatalogRepository) -> RecycleRunner:
+def _make_show_catalog(
+    *,
+    catalog_repository: CatalogRepository,
+    evidence_repository: EvidenceRepository,
+) -> RecycleRunner:
     async def show_catalog(context: CommandContext) -> RecycleOutcome:
         try:
             catalog = await catalog_repository.load()
@@ -741,6 +911,14 @@ def _make_show_catalog(*, catalog_repository: CatalogRepository) -> RecycleRunne
             return _failed(f"Could not load the catalog: {exc}")
         except CatalogStorageError:
             return _failed(_STORAGE_FAILED)
+
+        # Evidence is a review aid: if it cannot be read, show the catalog
+        # without it and say so, rather than show nothing.
+        evidence_note = ""
+        try:
+            evidence = await evidence_repository.by_item()
+        except CatalogStorageError:
+            evidence, evidence_note = {}, "\n\n_Evidence links could not be loaded (details in the server log)._"
 
         if len(catalog) == 0:
             # Not a failure, but nothing to show: the model relays it, and
@@ -753,8 +931,8 @@ def _make_show_catalog(*, catalog_repository: CatalogRepository) -> RecycleRunne
         lines = [
             f"**Catalog ({len(catalog)} items):**",
             "",
-            "| ID | Label | Excluded | Weight | Dimensions | Material |",
-            "|---|---|---|---|---|---|",
+            "| ID | Label | Excluded | Weight | Dimensions | Material | Evidence |",
+            "|---|---|---|---|---|---|---|",
         ]
         for item in catalog:
             metadata: ItemMetadata = item.metadata
@@ -763,18 +941,62 @@ def _make_show_catalog(*, catalog_repository: CatalogRepository) -> RecycleRunne
                 f"{'yes' if item.excluded else ''} | "
                 f"{_fmt_number(metadata.weight_kg, ' kg')} | "
                 f"{metadata.dimensions} | "
-                f"{metadata.material or '?'} |"
+                f"{metadata.material or '?'} | "
+                f"{_evidence_links(evidence.get(item.id, []))} |"
             )
 
         included = sum(1 for item in catalog if not item.excluded)
         return RecycleOutcome(
-            markdown="\n".join(lines),
+            markdown="\n".join(lines) + evidence_note,
             model_summary=prompts.show_catalog_summary(
                 total=len(catalog), collectable=included, excluded=len(catalog) - included
             ),
+            # Display only: later turns get one line, not the whole table.
+            context=prompts.catalog_shown_placeholder(total=len(catalog)),
         )
 
     return show_catalog
+
+
+# Where the catalog browser lives in the web UI: the settings route for
+# this plugin's "catalog" section (ui/src/plugins/recycling/index.ts,
+# /settings/plugin/<plugin>-<section>). A contract between the plugin's
+# two halves; rename one, rename both.
+CATALOG_PAGE_PATH = "/settings/plugin/recycling-catalog"
+
+
+def _make_catalog_link(*, catalog_repository: CatalogRepository) -> RecycleRunner:
+    """What the recycle_show_catalog *tool* runs: a link to the catalog
+    browser plus the counts, instead of the whole table. A chat table stops
+    being usable long before a catalog stops growing, and the browser
+    pages, searches and shows evidence. The typed /recycle show_catalog
+    keeps its table — the CLI has no browser, and the web UI redirects the
+    typed command to the page before it is ever sent."""
+
+    async def catalog_link(context: CommandContext) -> RecycleOutcome:
+        try:
+            total, excluded = await catalog_repository.counts()
+        except CatalogStorageError:
+            return _failed(_STORAGE_FAILED)
+
+        if total == 0:
+            return _failed(
+                "The catalog is empty. Run `/recycle build_catalog` with a room "
+                "video or some photos first."
+            )
+
+        return RecycleOutcome(
+            markdown=(
+                f"**[Open the item catalog]({CATALOG_PAGE_PATH})** — {total} items "
+                f"({total - excluded} collectable, {excluded} excluded). "
+                "Search, filter and view each item's evidence images there."
+            ),
+            model_summary=prompts.catalog_link_summary(
+                total=total, collectable=total - excluded, excluded=excluded
+            ),
+        )
+
+    return catalog_link
 
 
 # --------------------------------------------------------------------------
@@ -789,6 +1011,7 @@ def make_recycle_runners(
     file_repository: FileRepository,
     file_storage: FileStorage,
     catalog_repository: CatalogRepository,
+    evidence_repository: EvidenceRepository,
 ) -> dict[str, RecycleRunner]:
     """Every subcommand's implementation, keyed by canonical name, with its
     dependencies bound in — same closure-factory shape as
@@ -812,6 +1035,7 @@ def make_recycle_runners(
             file_repository=file_repository,
             file_storage=file_storage,
             catalog_repository=catalog_repository,
+            evidence_repository=evidence_repository,
             force=False,
         ),
         "build_catalog_force": _make_build_catalog(
@@ -820,9 +1044,17 @@ def make_recycle_runners(
             file_repository=file_repository,
             file_storage=file_storage,
             catalog_repository=catalog_repository,
+            evidence_repository=evidence_repository,
             force=True,
         ),
-        "show_catalog": _make_show_catalog(catalog_repository=catalog_repository),
+        "show_catalog": _make_show_catalog(
+            catalog_repository=catalog_repository,
+            evidence_repository=evidence_repository,
+        ),
+        # Not a subcommand: the recycle_show_catalog tool's runner (see
+        # _make_catalog_link). ChatService only dispatches names listed in
+        # SUBCOMMANDS, so a user cannot reach it by typing.
+        "catalog_link": _make_catalog_link(catalog_repository=catalog_repository),
     }
 
 
@@ -830,7 +1062,7 @@ def make_recycle_commands(runners: dict[str, RecycleRunner]) -> tuple[PluginComm
     """The /recycle slash command over the shared runners. A command always
     writes the outcome's Markdown as the message, success or not."""
 
-    async def handle_recycle(context: CommandContext) -> str:
+    async def handle_recycle(context: CommandContext) -> str | CommandReply:
         start = time.perf_counter()
         runner = runners.get(context.subcommand)
 
@@ -848,7 +1080,14 @@ def make_recycle_commands(runners: dict[str, RecycleRunner]) -> tuple[PluginComm
                 + render_subcommand_lines("recycle", SUBCOMMANDS)
             )
         else:
-            result = (await runner(context)).markdown
+            outcome = await runner(context)
+            # Display-only output (the catalog table) is shown in full but
+            # remembered as its placeholder, same as when a tool shows it.
+            result = (
+                CommandReply(outcome.markdown, context_content=outcome.context)
+                if outcome.context is not None
+                else outcome.markdown
+            )
 
         logger.info(
             "Command completed | command=/recycle %s elapsed=%.2fs",

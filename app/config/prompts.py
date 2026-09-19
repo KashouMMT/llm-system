@@ -77,6 +77,22 @@ def _missing_files(set_dir: Path) -> list[str]:
     return missing
 
 
+def list_prompt_sets() -> list[str]:
+    """
+    Names of the complete prompt sets, for the settings page's persona
+    picker.
+
+    Complete only: an incomplete set is accepted by system_prompt_name but
+    silently loads ``default`` instead, so offering it would present a
+    choice that does not do what it says.
+    """
+    return sorted(
+        entry.name
+        for entry in PROMPTS_DIR.iterdir()
+        if entry.is_dir() and not _missing_files(entry)
+    )
+
+
 def resolve_prompt_set(name: str) -> Path:
     """
     Return the directory of the prompt set to load from.

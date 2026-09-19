@@ -16,11 +16,13 @@ import importlib
 import json
 import pkgutil
 from collections.abc import Collection
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from app.plugins.contracts import PluginCommand, ToolContext, ToolPlugin
+from app.plugins.contracts import PluginCommand, RouteContext, ToolContext, ToolPlugin
 from app.utils.logger import logger
 
 PLUGINS_DIR = Path(__file__).resolve().parent
@@ -185,12 +187,24 @@ async def initialize_plugins(
     return frozenset(failed)
 
 
+@dataclass(frozen=True)
+class LoadedTools:
+    tools: list[BaseTool]
+    # Plugins whose factory ran: the deployment's loaded plugins, as the
+    # frontend is told through GET /plugins.
+    plugins: tuple[str, ...]
+    # Import, declaration or factory failures. The caller excludes these
+    # from commands and prompts too, so a plugin whose tools failed cannot
+    # still describe them to the model or offer their commands.
+    failed: frozenset[str]
+
+
 def load_tools(
     context: ToolContext,
     *,
     excluded: Collection[str] = (),
     strict: bool = False,
-) -> list[BaseTool]:
+) -> LoadedTools:
     """
     Every tool the agent may call, from every plugin that loaded.
 
@@ -208,6 +222,7 @@ def load_tools(
     plugins, failed = _discover(excluded)
 
     tools: list[BaseTool] = []
+    loaded: list[str] = []
     provider_of: dict[str, str] = {}
 
     for plugin in plugins:
@@ -233,6 +248,7 @@ def load_tools(
             provider_of[tool.name] = plugin.name
 
         tools.extend(provided)
+        loaded.append(plugin.name)
 
         logger.info(
             "Tool plugin loaded | plugin=%s tools=%s",
@@ -244,7 +260,7 @@ def load_tools(
 
     logger.info(
         "Tool plugins ready | loaded=%s failed=%s tools=%s estimated_tokens=%s",
-        [plugin.name for plugin in plugins],
+        loaded,
         failed,
         len(tools),
         estimated_tokens,
@@ -270,7 +286,11 @@ def load_tools(
             "Set TOOL_PLUGINS_STRICT=false to boot without them."
         )
 
-    return tools
+    return LoadedTools(
+        tools=tools,
+        plugins=tuple(loaded),
+        failed=frozenset(failed),
+    )
 
 
 def _check_subcommand_names(command: PluginCommand) -> None:
@@ -353,6 +373,38 @@ def load_commands(
     )
 
     return commands
+
+
+def load_routers(
+    context: RouteContext,
+    *,
+    excluded: Collection[str] = (),
+) -> dict[str, Any]:
+    """
+    Each loaded plugin's HTTP router, keyed by plugin name, for the server
+    to mount under /plugins/<name>/.
+
+    Same denylist as tools, commands and prompts, so an excluded plugin has
+    no endpoints either. A router_factory that raises is logged and that
+    plugin gets no routes — its UI then meets 404s, which is loud enough —
+    rather than taking the API down, the same trade load_commands makes.
+    """
+    plugins, _failed = _discover(excluded, quiet=True)
+
+    routers: dict[str, Any] = {}
+
+    for plugin in plugins:
+        if plugin.router_factory is None:
+            continue
+
+        try:
+            routers[plugin.name] = plugin.router_factory(context)
+        except Exception:  # noqa: BLE001
+            logger.exception("Plugin router_factory failed | plugin=%s", plugin.name)
+
+    logger.info("Plugin routes ready | plugins=%s", sorted(routers))
+
+    return routers
 
 
 def load_plugin_prompts(*, excluded: Collection[str] = ()) -> str:

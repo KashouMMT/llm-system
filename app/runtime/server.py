@@ -1,10 +1,8 @@
-import asyncio
 import json
 import sys
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Annotated, Any
-from urllib.parse import quote
 from uuid import UUID
 
 import psycopg
@@ -21,6 +19,7 @@ from app.authentication.csrf import (
 )
 from app.authentication.dependencies import make_current_user, make_require_admin
 from app.authentication.models import User
+from app.config.prompts import list_prompt_sets
 from app.config.settings import (
     ALLOW_REGISTRATION,
     COOKIE_SAMESITE,
@@ -33,8 +32,8 @@ from app.config.settings import (
     UPLOAD_MAX_BYTES,
 )
 from app.llm.system_prompt import load_first_message
+from app.plugins import RouteContext, load_routers
 from app.plugins.command_help import describe_commands
-from app.plugins.recruitment.blank import BLANK_DOCUMENTS
 from app.repositories.conversation_repository import Conversation
 from app.repositories.file_repository import serialize_attachment
 from app.repositories.message_repository import TurnLookup
@@ -48,7 +47,7 @@ from app.utils.detect import (
     is_valid_image,
     sniff_content_type,
 )
-from app.utils.filenames import clean_filename
+from app.utils.filenames import attachment_disposition, clean_filename
 
 # Enough for every magic-byte signature and a meaningful look at a text
 # file — but only ever used to choose a branch and a size cap. The
@@ -742,7 +741,7 @@ def create_api(application: Application) -> FastAPI:
         return Response(
             content=content,
             media_type=record.content_type,
-            headers={"Content-Disposition": _attachment_header(record.filename)},
+            headers={"Content-Disposition": attachment_disposition(record.filename)},
         )
 
     @app.get("/events")
@@ -789,38 +788,40 @@ def create_api(application: Application) -> FastAPI:
             headers=SSE_HEADERS,
         )
 
-    # ---- documents --------------------------------------------------
+    # ---- plugins -------------------------------------------------------
 
-    @app.get(
-        "/documents/blank/{doc_type}",
-        dependencies=[Depends(current_user)],
+    @app.get("/plugins", dependencies=[Depends(current_user)])
+    async def get_plugins():
+        """
+        The tool plugins this deployment loaded, by folder name.
+
+        The frontend's plugin gate: it holds UI code for several plugins
+        but shows a plugin's pieces only when its name is listed here, so
+        EXCLUDED_TOOL_PLUGINS stays the one place that decides. Hiding is
+        presentation only — a plugin's own endpoints must refuse on their
+        own, which is why they are mounted below only for loaded plugins.
+        """
+        return {"plugins": list(application.loaded_plugins)}
+
+    # A plugin's own HTTP routes, under /plugins/<name>/. Only loaded
+    # plugins are mounted, so an excluded plugin's endpoints do not exist
+    # at all (404), not merely hidden. Sign-in is required on every one of
+    # them here, so a plugin cannot forget it; admin-only is the plugin's
+    # call, through RouteContext.require_admin.
+    route_context = RouteContext(
+        tool=application.tool_context,
+        current_user=current_user,
+        require_admin=require_admin,
     )
-    async def download_blank_document(doc_type: str):
-        """
-        Stream an empty form for the user to fill in by hand.
 
-        Rendered on demand from the same template and renderer the agent's
-        generate_* tools use. There is no stored file and no database row,
-        because a blank form carries nothing worth keeping — so this does
-        not touch file_storage or file_repository the way /files does.
-
-        Registered whether or not the documents tool plugin is enabled:
-        downloading a blank form and having the agent fill one in are
-        separate features that happen to share a renderer.
-        """
-        document = BLANK_DOCUMENTS.get(doc_type)
-
-        if document is None:
-            raise HTTPException(status_code=404, detail="Unknown document type")
-
-        # openpyxl and docxtpl are synchronous and not instant; keep them
-        # off the event loop, as document_tool's generate does.
-        content = await asyncio.to_thread(document.render)
-
-        return Response(
-            content=content,
-            media_type=document.renderer.content_type,
-            headers={"Content-Disposition": _attachment_header(document.filename)},
+    for plugin_name, router in load_routers(
+        route_context,
+        excluded=application.excluded_plugins,
+    ).items():
+        app.include_router(
+            router,
+            prefix=f"/plugins/{plugin_name}",
+            dependencies=[Depends(current_user)],
         )
 
     # ---- commands ------------------------------------------------------
@@ -847,6 +848,12 @@ def create_api(application: Application) -> FastAPI:
     @app.get("/settings")
     async def get_settings(user: Annotated[User, Depends(current_user)]):
         return application.describe_settings()
+
+    # No clash with /settings/{key}: that route is DELETE-only, so a GET
+    # to this path can only land here, whatever the registration order.
+    @app.get("/settings/prompt-sets", dependencies=[Depends(current_user)])
+    async def get_prompt_sets():
+        return {"prompt_sets": list_prompt_sets()}
 
     @app.patch("/settings", dependencies=[Depends(require_admin)])
     async def update_settings(changes: dict[str, Any]):
@@ -896,21 +903,3 @@ def _existing_turn_response(
         },
     )
 
-
-def _attachment_header(filename: str) -> str:
-    """
-    Content-Disposition for a download (RFC 6266).
-
-    Both forms on purpose: `filename=` for the plain ASCII case, and
-    `filename*=` carrying the UTF-8 original. Today's names are ASCII, but
-    職務経歴書 filenames will not be, and non-ASCII bytes in a bare
-    `filename=` are silently mangled rather than rejected.
-    """
-    ascii_fallback = (
-        filename.encode("ascii", "replace").decode("ascii").replace('"', "_")
-    )
-
-    return (
-        f'attachment; filename="{ascii_fallback}"; '
-        f"filename*=UTF-8''{quote(filename, safe='')}"
-    )

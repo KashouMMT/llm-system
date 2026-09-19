@@ -1,5 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
+import "../assets/css/tableScroll.css";
+
 type TableScrollProps = {
 	children: ReactNode;
 };

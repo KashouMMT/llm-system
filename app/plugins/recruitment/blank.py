@@ -52,9 +52,9 @@ class BlankDocument:
         return self.renderer.render(self.schema_cls.blank())
 
 
-# Keyed by the path segment in GET /documents/blank/{doc_type}. The
-# filenames are Japanese on purpose — the file lands on the user's disk,
-# and server._attachment_header already carries a UTF-8 name.
+# Keyed by the path segment in GET /plugins/recruitment/blank/{doc_type}
+# (routes.py). The filenames are Japanese on purpose — the file lands on
+# the user's disk, and attachment_disposition carries a UTF-8 name.
 #
 # dated=False: a blank form must not carry a generation date, or it is
 # stale the moment the year turns.

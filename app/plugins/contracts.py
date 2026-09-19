@@ -13,7 +13,7 @@ lines of file reading.
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -27,6 +27,11 @@ from app.repositories.file_repository import FileRepository
 from app.services.reply_blocks import ReplyBlocks
 from app.storage.base import FileStorage
 from app.utils.logger import logger
+
+if TYPE_CHECKING:
+    # Type-only: the contract names the router type without making every
+    # importer of this module (the CLI included) load FastAPI.
+    from fastapi import APIRouter
 
 # The conventional name for a plugin's system-prompt contribution, read
 # by load_plugin_prompt from beside the plugin's __init__.py.
@@ -141,6 +146,25 @@ class ToolContext:
 
 
 @dataclass(frozen=True)
+class RouteContext:
+    """
+    What a plugin's router_factory gets: the ToolContext, plus the
+    server's auth dependencies, which only exist once the API is built.
+
+    The dependencies are the server's own, passed in rather than rebuilt,
+    so a plugin route authenticates exactly like every core route. Every
+    plugin route already requires sign-in (the server mounts them that
+    way); a route that is admin-only adds
+    `dependencies=[Depends(context.require_admin)]`, or takes
+    `Annotated[User, Depends(context.current_user)]` to know who is asking.
+    """
+
+    tool: ToolContext
+    current_user: Callable[..., Awaitable[User]]
+    require_admin: Callable[..., Awaitable[User]]
+
+
+@dataclass(frozen=True)
 class CommandContext:
     """
     Everything a slash-command handler needs, assembled by
@@ -160,9 +184,27 @@ class CommandContext:
     argument: str
 
 
+@dataclass(frozen=True)
+class CommandReply:
+    """
+    A command's reply when what the user sees and what later turns
+    remember must differ.
+
+    `content` is shown and saved as the message, verbatim. `context_content`
+    replaces it in the model's history and in summarization — a one-line
+    placeholder for output that is only for display (a whole catalog
+    table), which would otherwise ride along in every later turn's context.
+    None means remember `content` itself, the same as returning a plain str.
+    """
+
+    content: str
+    context_content: str | None = None
+
+
 # Returns the Markdown written as the assistant message, verbatim — a
-# command's output is never passed through the LLM.
-CommandHandler = Callable[[CommandContext], Coroutine[Any, Any, str]]
+# command's output is never passed through the LLM. A CommandReply instead
+# of a str also says what the model's history should keep.
+CommandHandler = Callable[[CommandContext], Coroutine[Any, Any, "str | CommandReply"]]
 
 
 @dataclass(frozen=True)
@@ -259,6 +301,13 @@ class ToolPlugin:
     is; the factories stay sync because they only bind closures. A plugin
     whose initialize raises is treated as not loaded: its tools, commands
     and prompt would all describe storage that is not there.
+
+    `router_factory` is optional: the plugin's own HTTP routes, for its UI
+    half under ui/src/plugins/<name>/. Called once when the API is built
+    (never in CLI mode) and mounted under /plugins/<name>/, only if the
+    plugin loaded — so an excluded plugin's endpoints do not exist. FastAPI
+    reaches into the plugin only through the router it returns, in the
+    plugin's own routes.py.
     """
 
     name: str
@@ -269,3 +318,4 @@ class ToolPlugin:
         lambda _context: ()
     )
     initialize: Callable[[ToolContext], Awaitable[None]] | None = None
+    router_factory: Callable[[RouteContext], "APIRouter"] | None = None

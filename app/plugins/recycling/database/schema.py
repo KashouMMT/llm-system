@@ -4,7 +4,9 @@ Created here, from the plugin's initialize hook, rather than in core
 app/database/init_db.py: the plugin owns its whole vertical, storage
 included. The database is disposable (no migrations), so a schema change
 is an edit to CREATE TABLE plus dropping the table, then rebuilding the
-catalog with /recycle build_catalog. There is no seed file.
+catalog with /recycle build_catalog. There is no seed file. The evidence
+table references core `files`, so core's tables must exist first — they
+do: initialize_database runs before any plugin's initialize hook.
 
 A failure here is logged by the plugin loader, which then leaves the whole
 plugin out rather than loading commands against a missing table.
@@ -66,6 +68,44 @@ CREATE TABLE IF NOT EXISTS {CATALOG_TABLE} (
 """
 
 
+# Which photo or video frame a catalog row was detected in — what a
+# reviewer opens to see what the model saw. The image itself is a row in
+# core `files`: an uploaded photo as-is, or a video frame stored as its own
+# JPEG (document_type 'recycle_evidence', no message_id, so it never shows
+# up as a chat attachment). No bounding box: the vision model returns
+# none, so evidence is the whole image, not a crop.
+#
+# Both foreign keys cascade. A deleted catalog row takes its evidence with
+# it; a deleted file (its conversation deleted) takes the reference with
+# it rather than leaving a link that 404s. The catalog key cascade is only
+# safe because CatalogRepository.save upserts — the old delete-and-reinsert
+# save would have wiped every row's evidence on every build.
+#
+# id is BIGSERIAL, not UUID, so "newest first" is simply ORDER BY id DESC
+# even within one build, where created_at is identical.
+EVIDENCE_TABLE = "recycling_catalog_evidence"
+
+_CREATE_EVIDENCE_TABLE = f"""
+CREATE TABLE IF NOT EXISTS {EVIDENCE_TABLE} (
+    id              BIGSERIAL PRIMARY KEY,
+    tenant          TEXT NOT NULL,
+    item_id         TEXT NOT NULL,
+    file_id         UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    frame_index     INTEGER,
+    raw_label       TEXT NOT NULL,
+    build_run_id    UUID NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    FOREIGN KEY (tenant, item_id) REFERENCES {CATALOG_TABLE} (tenant, id)
+        ON DELETE CASCADE,
+    UNIQUE (tenant, item_id, file_id)
+)
+"""
+
+_CREATE_EVIDENCE_INDEX = f"""
+CREATE INDEX IF NOT EXISTS idx_{EVIDENCE_TABLE}_item
+ON {EVIDENCE_TABLE} (tenant, item_id, id DESC)
+"""
+
 # What the model's SQL sees, instead of the table. Three jobs:
 # - Tenant isolation. The agent role is granted this view only, never the
 #   table, so model-written SQL cannot read another tenant's rows. The
@@ -94,6 +134,8 @@ WHERE tenant = '{DEFAULT_TENANT}'
 async def ensure_schema(pool: AsyncConnectionPool) -> None:
     async with pool.connection() as conn:
         await conn.execute(_CREATE_CATALOG_TABLE)
+        await conn.execute(_CREATE_EVIDENCE_TABLE)
+        await conn.execute(_CREATE_EVIDENCE_INDEX)
         await conn.execute(f"DROP VIEW IF EXISTS {CATALOG_VIEW}")
         await conn.execute(_CREATE_CATALOG_VIEW)
 

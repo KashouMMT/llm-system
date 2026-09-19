@@ -23,6 +23,7 @@ reference workbooks the document renderers were built from are in
 |---|---|---|
 | `Recycling_Estimator_TODO.md` | **Current** | Any work on `app/plugins/recycling/` — the detection pipeline, the catalog, or the video path |
 | `Recycling_Agent_Tools_Plan.md` | **Current** — phases 1–3 live-tested; phase 4 written, untested live; phase 5 (permission modes) spec noted | Catalog→Postgres, or any recycling agent tool / permission-mode work |
+| `Settings_Page_Plan.md` | **Current** — S1–S2 live-tested; S3 (= R3b) built, untested live | Settings page, frontend plugin system, ROOT user management, or R3b |
 | `Recycling_Video_Frames_Plan.md` | **Proposed, not built** | Implementing phase 7 (video). The step-by-step build plan and the code each step needs; the decisions behind it stay in the TODO |
 
 ## Conventions

@@ -38,12 +38,12 @@ const Navbar = () => {
 						{canSeeSettings && (
 							<li className="nav-item">
 								<NavLink
-									to="/setting"
+									to="/settings"
 									className={({ isActive }) =>
 										isActive ? "nav-link active" : "nav-link"
 									}
 								>
-									{t("nav.setting")}
+									{t("nav.settings")}
 								</NavLink>
 							</li>
 						)}

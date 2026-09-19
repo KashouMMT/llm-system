@@ -1,0 +1,19 @@
+/* TableScroll's own mechanics, imported by the component so they apply
+   wherever it is used (chat messages, the catalog browser). Only the
+   spacing around it and the table's look belong to the page using it. */
+
+.table-scroll-top {
+	overflow-x: auto;
+	overflow-y: hidden;
+	/* Just tall enough to show the horizontal scrollbar track and
+	   nothing else — the spacer div inside it has no visible content. */
+	height: 14px;
+}
+
+.table-scroll-top > div {
+	height: 1px;
+}
+
+.table-scroll {
+	overflow-x: auto;
+}

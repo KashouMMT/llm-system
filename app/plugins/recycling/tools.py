@@ -47,8 +47,18 @@ def make_recycle_tools(
     runners: dict[str, RecycleRunner],
     reply_blocks: ReplyBlocks,
 ) -> list[BaseTool]:
-    def build(tool_name: str, subcommand: str, description: str, args: type[BaseModel]) -> BaseTool:
-        runner = runners[subcommand]
+    def build(
+        tool_name: str,
+        subcommand: str,
+        description: str,
+        args: type[BaseModel],
+        *,
+        runner_key: str | None = None,
+    ) -> BaseTool:
+        # `subcommand` decides the admin rule and the CommandContext; the
+        # runner is usually the command's own, unless runner_key names one
+        # made for the tool (show_catalog links instead of tabulating).
+        runner = runners[runner_key or subcommand]
 
         async def run(config: RunnableConfig, frames: int | None = None) -> str:
             start = time.perf_counter()
@@ -78,7 +88,9 @@ def make_recycle_tools(
 
             if not outcome.ok:
                 result = prompts.FAILED.format(markdown=outcome.markdown)
-            elif reply_blocks.publish(who.assistant_message_id, outcome.markdown):
+            elif reply_blocks.publish(
+                who.assistant_message_id, outcome.markdown, context=outcome.context
+            ):
                 result = outcome.model_summary
             else:
                 result = prompts.NOT_DISPLAYED.format(subcommand=subcommand)
@@ -106,5 +118,11 @@ def make_recycle_tools(
             prompts.BUILD_CATALOG_DESCRIPTION,
             _CaptureArgs,
         ),
-        build("recycle_show_catalog", "show_catalog", prompts.SHOW_CATALOG_DESCRIPTION, _NoArgs),
+        build(
+            "recycle_show_catalog",
+            "show_catalog",
+            prompts.SHOW_CATALOG_DESCRIPTION,
+            _NoArgs,
+            runner_key="catalog_link",
+        ),
     ]

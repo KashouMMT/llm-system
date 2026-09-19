@@ -5,7 +5,7 @@ import type { Messages } from "./en";
 export const ja: Messages = {
 	nav: {
 		home: "ホーム",
-		setting: "設定",
+		settings: "設定",
 		themeToDark: "ダークモードに切り替え",
 		themeToLight: "ライトモードに切り替え",
 	},
@@ -38,7 +38,6 @@ export const ja: Messages = {
 		empty: "会話がまだありません。",
 		rename: "名前を変更",
 		renameAria: "会話の名前を変更",
-		blankForms: "空のフォーム",
 		signOut: "ログアウト",
 	},
 	chat: {
@@ -80,6 +79,93 @@ export const ja: Messages = {
 			"対応していないファイルです。画像（PNG・JPEG・WebP）、PDF、またはテキストファイル（UTF-8・Shift_JIS）を送信してください。",
 		attachmentQuotaExceeded:
 			"本日のアップロード上限に達しました。明日もう一度お試しください。",
+	},
+	settings: {
+		navLabel: "設定のセクション",
+		categories: {
+			core: "コア",
+			root: "ルート",
+			plugin: "プラグイン",
+		},
+		sections: {
+			general: "一般",
+			llm: "LLM 設定",
+			memory: "記憶と要約",
+			streaming: "ストリーミング",
+		},
+		loading: "設定を読み込み中…",
+		loadError: "設定を読み込めませんでした。",
+		save: "保存",
+		saving: "保存中…",
+		discard: "変更を破棄",
+		saved: "保存しました。次のターンから反映されます。",
+		reset: "既定値に戻す",
+		defaultValue: "既定値: {{value}}",
+		sessionOnly: "再起動で元に戻ります",
+		incompleteSet: "{{name}}（不完全: default として動作）",
+		errGeneric: "保存できませんでした。API は起動していますか？",
+		fields: {
+			system_prompt_name: {
+				label: "ペルソナ",
+				help: "app/prompts/ 以下のプロンプトセット。新しい会話の最初の挨拶も変わります。",
+			},
+			log_level: {
+				label: "ログレベル",
+				help: "サーバーログの詳細度。",
+			},
+			temperature: {
+				label: "Temperature",
+				help: "応答のランダム性（0〜2）。低いほど与えられた事実に忠実になります。",
+			},
+			top_p: {
+				label: "Top P",
+				help: "確率の高いトークンから、この累積確率に収まる範囲だけを候補にします（0〜1）。",
+			},
+			top_k: {
+				label: "Top K",
+				help: "確率の高い上位 K 個のトークンだけを候補にします。Ollama のみに送信されます。",
+			},
+			max_tokens: {
+				label: "応答の最大トークン数",
+				help: "モデルが書ける応答の最大長。コンテキストウィンドウより小さくしてください。",
+			},
+			context_window: {
+				label: "コンテキストウィンドウ",
+				help: "プロンプトと応答を合わせたトークン予算。Ollama のみに送信されます。",
+			},
+			summary_token_threshold: {
+				label: "要約を開始するトークン数",
+				help: "履歴がこのトークン数に達すると要約が始まります。",
+			},
+			max_summary_chars: {
+				label: "要約の最大文字数",
+				help: "保持する要約の最大文字数。",
+			},
+			max_context_history_messages: {
+				label: "履歴ウィンドウ",
+				help: "毎ターンモデルに送る直近のメッセージ数。",
+			},
+			max_unsummarized_messages: {
+				label: "要約を開始するメッセージ数",
+				help: "メッセージ数による予備の要約トリガー。履歴ウィンドウを超えないようにしてください。",
+			},
+			min_retained_raw_messages: {
+				label: "原文のまま残すメッセージ数",
+				help: "要約に含めない最新のメッセージ数。「要約を開始するメッセージ数」より小さくしてください。",
+			},
+			max_checkpoint_messages: {
+				label: "チェックポイントのメッセージ上限",
+				help: "保存するエージェント状態のサイズだけを制限します。モデルが見る内容は変わりません。",
+			},
+			sse_heartbeat_seconds: {
+				label: "ハートビート間隔（秒）",
+				help: "待機中のイベントストリームが接続維持の信号を送る間隔。",
+			},
+			sse_queue_maxsize: {
+				label: "イベントキューのサイズ",
+				help: "タブごとにバッファするイベント数。超えた遅いタブは切断され、再接続します。",
+			},
+		},
 	},
 	error: {
 		notFoundTitle: "ページが見つかりません",

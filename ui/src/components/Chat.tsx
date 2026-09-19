@@ -7,6 +7,7 @@ import {
 	useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import type { Message, MessageStatus } from "../api/types";
 import {
 	ACCEPTED_FILE_TYPES,
@@ -14,6 +15,7 @@ import {
 	type Attachments,
 } from "../hooks/useAttachments";
 import type { ChatError, useChat } from "../hooks/useChat";
+import { useCommandRedirect } from "../hooks/usePlugins";
 import type {
 	ConversationStream,
 	StreamStatus,
@@ -60,6 +62,8 @@ const Chat = ({
 	onToggleSidebar,
 }: ChatProps) => {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
+	const commandRedirect = useCommandRedirect();
 
 	const [input, setInput] = useState("");
 	const fileInputRef = useRef<HTMLInputElement>(null);
@@ -160,6 +164,18 @@ const Chat = ({
 		const attachmentIds = attachments.attachedIds;
 
 		if ((!text.trim() && attachmentIds.length === 0) || !conversationId) {
+			return;
+		}
+
+		// A command a plugin answers with a page (/recycle show_catalog →
+		// the catalog browser) is never sent. Not with attachments: those
+		// were meant for the backend, and would be silently dropped.
+		const redirect =
+			attachmentIds.length === 0 ? commandRedirect(text) : null;
+
+		if (redirect) {
+			setInput("");
+			navigate(redirect);
 			return;
 		}
 

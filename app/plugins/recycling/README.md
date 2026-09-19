@@ -18,11 +18,12 @@ here.
 | `__init__.py` | `PLUGIN` — `initialize` creates the catalog table and view and grants the view to the agent database role; builds the `openai` client (from `ToolContext.llm`, overridable by `RECYCLING_VISION_MODEL`) and the shared runners; registers `/recycle` and the `recycle_*` tools |
 | `commands.py` | The runners (`make_recycle_runners` → `RecycleOutcome`), `/recycle` dispatch, attachment handling, Markdown rendering, the durable-context file attachment |
 | `tools.py` | `recycle_scan`, `recycle_build_catalog`, `recycle_show_catalog` — thin adapters over the runners |
+| `routes.py` | `GET /plugins/recycling/catalog` (admin; the plugin's `router_factory`): a filtered page (`CatalogRepository.page` — search over id/label/aliases, `visual_class`, `excluded`, paged in SQL) plus each row's evidence. Feeds the catalog browser, `ui/src/plugins/recycling/`, under Settings → Plugins; typing bare `/recycle show_catalog` in the web chat opens that page instead of sending. Read-only: edits stay with the catalog tools |
 | `catalog_tools.py` | `recycle_query_catalog` (read, SQL) and `recycle_create/update/delete_catalog_item` (write, typed) — see **Catalog knowledge tools** |
 | `prompts.py` | The chat agent's side: tool descriptions, refusals, the summaries a tool returns. `pipeline/prompts.py` is the vision model's side |
 | `plugin_prompt.txt` | Rides every request: attachments-of-this-message rule, never restate a table, call catalog tools without gatekeeping the role, build immediately (no confirmation round), SQL analysis at scale + the anomaly checklist + edit rules, force stays a command, recording rules |
 | `runner.py` | Async glue the pipeline itself doesn't have — fires consensus runs concurrently via `asyncio.to_thread` |
-| `database/` | Everything this plugin does with Postgres — see **Catalog storage** |
+| `database/` | Everything this plugin does with Postgres — `schema.py`, `catalog_repository.py`, `evidence_repository.py`; see **Catalog storage** |
 | `pipeline/` | The detection pipeline — see below |
 
 `pipeline/` was originally prototyped as a standalone `playground/` folder
@@ -56,9 +57,9 @@ exposes that staff data. `ChatService` refuses them for any other user;
 | Command | Does |
 |---|---|
 | `/recycle scan [frames]` | One room video **or** one or more photos (`_attached_media` decides; the app refuses a video sent with anything else). **Photos:** non-images ignored and *reported*, `runner.scan` against the catalog. **Video:** `runner.scan_video` → core `extract_frames` (ffmpeg keyframes; blurry/dark/overexposed/blank/duplicate frames dropped and counted; portrait/short/low-res/glare warned; refused under 4 usable frames with a remedy) → the same `scan`; header states frames used, skipped per reason, warnings — above the table. `frames` = 4–40, default 12, video only (an error with photos, not ignored). Renders every section: Collectable, Totals, Excluded by catalog, Not in catalog, Low agreement. JSON carries `source` (`video` / `images`) and, for video, `frame_check`. `scan_image` and `scan_video` are aliases of this handler |
-| `/recycle build_catalog [frames]` | Same video-or-photos input as `scan`. Runs harvest → cluster → enrich → assemble, then **merges additively**: new items are added, but anything that already matches an existing catalog row (by canonical label or alias) is left completely untouched. Safe to run repeatedly without eroding hand-reviewed data |
+| `/recycle build_catalog [frames]` | Same video-or-photos input as `scan`. Runs harvest → cluster → enrich → assemble, then **merges additively**: new items are added, but anything that already matches an existing catalog row (by canonical label or alias) is left completely untouched. Safe to run repeatedly without eroding hand-reviewed data. Records **evidence** after the catalog is saved: each harvested label → the row it matches → the photo or frame it was seen in (`runner.harvest` now returns `sightings`). An evidence failure is reported and never undoes the build |
 | `/recycle build_catalog_force` | Same pipeline, but a match **replaces** the existing row instead of being skipped — the newer scan's canonical label, metadata, and excluded/exclusion_reason win. The existing row's `id` is kept (nothing referencing it breaks), aliases are the union of old and new, and `observations` is summed rather than reset |
-| `/recycle show_catalog` | Renders the current catalog as a Markdown table — no LLM call |
+| `/recycle show_catalog` | Renders the current catalog as a Markdown table — no LLM call — with an **Evidence** column: `[img]` / `[f<frame>]` links to `/files/<id>` (the frontend points them at the API; admins may download any file). **Display-only:** later turns remember a one-line placeholder, not the table (`CommandReply` / reply-block `context=`). In the web UI the bare typed command never reaches here — the frontend opens the catalog browser instead; the CLI still renders this table. The `recycle_show_catalog` tool does not use this runner: it runs `catalog_link` (one `COUNT` query, `CatalogRepository.counts`) and posts a link to the page (`CATALOG_PAGE_PATH`, which must match the frontend section's route) |
 
 Both build commands tolerate an empty catalog — an empty table is an
 empty catalog, so the very first build bootstraps one rather than
@@ -82,7 +83,8 @@ plugin's database code lives in its own `database/` folder.
 | `aliases TEXT[]`, no uniqueness constraint | A contested alias must reach a reviewer (`Catalog` raises on load), not be silently rejected by the database |
 | Primary key `(tenant, id)`, one `'default'` tenant today | The catalog is meant to be per-client; adding the column later means a key change and a filter in every query |
 | `position` column | Keeps build order, the order `show_catalog` has always listed |
-| `CatalogRepository.save` replaces the tenant's whole catalog in one transaction | `merge_into_catalog` already returns the complete merged catalog; a failed write leaves the old catalog intact |
+| `CatalogRepository.save` takes the whole merged catalog but writes it as **upsert + delete-missing** in one transaction; `updated_at` moves only when a row's data changed | `merge_into_catalog` returns the complete catalog. Upsert, not delete-and-reinsert: a surviving row keeps its identity, so its evidence (FK, `ON DELETE CASCADE`) survives builds — the old delete-everything save would have wiped all evidence every build. A failed write leaves the old catalog intact |
+| Evidence table `recycling_catalog_evidence` (FK to the catalog row and to core `files`, both cascading; `UNIQUE(tenant, item_id, file_id)`; BIGSERIAL id) | Which image a row was detected in, for review. Photos link to the uploaded file itself; a video frame is stored as its own JPEG (`document_type='recycle_evidence'`, no `message_id`, so never a chat attachment — no video or timestamp needed). No bounding box exists, so evidence is the whole image. At most 3 per row per build, newest 5 per row kept |
 | No seed file | The table is the only catalog. A fresh database starts empty and `/recycle build_catalog` fills it. Two sources of truth (a file and a table) would need syncing on every edit |
 | View `recycling_catalog` (`WITH (security_barrier)`, `WHERE tenant = 'default'`) is what model-written SQL reads; the agent role is granted the view, **never the table** | Tenant isolation for agent SQL, and `tenant`/`position` hidden from the model. Dropped and recreated on every start (so the grant is re-applied after it). The tenant is a literal because there is one: per-tenant access for agent SQL (a view per tenant, or row-level security) is **unsolved** and must be decided before a second tenant exists |
 | `pg_trgm` created best-effort | Gives the model `similarity(a, b)` for near-duplicate labels, which grows more important with catalog size. Needs privileges a managed database may not grant; without it only that function is missing |
@@ -102,6 +104,14 @@ the plugin loader, and the plugin is then left out entirely.
 
 A schema change: edit `CREATE TABLE` in `database/schema.py`, drop the
 table (the database is disposable), restart, rebuild.
+
+**Evidence known gaps:** a video frame file whose evidence row is trimmed
+(beyond the newest 5 per catalog row) stays in `files` and on disk, with
+nothing pointing at it — bounded (at most 3 per row per build), not yet
+swept. Evidence files belong to the conversation the build ran in, so
+deleting that conversation removes the images and, by cascade, the links.
+Room photos kept as evidence are personal data (someone's home) with no
+retention policy yet — a side note for the coordinator.
 
 ## Why every data-producing command also attaches a file
 
@@ -152,7 +162,7 @@ Auto). The phase plan and its open questions are in
 |---|---|---|---|
 | `recycle_scan(frames?)` | `scan` | anyone | none — the user asked for it |
 | `recycle_build_catalog(frames?)` | `build_catalog` | admin | **none — runs in the same turn.** A confirmation round was tried and dropped: the capture is only readable on the message it came with, so by the "yes" it was gone. Control will come from permission modes (Manual / Accept edits / Auto), not the prompt |
-| `recycle_show_catalog()` | `show_catalog` | admin | none |
+| `recycle_show_catalog()` | `catalog_link` (not a subcommand; admin rule taken from `show_catalog`) | admin | none. Posts a link to the catalog page with counts — a chat table stops being usable long before the catalog stops growing |
 | — | `build_catalog_force` | admin | **not a tool.** The model suggests the command and warns it overwrites hand-corrected rows |
 
 How one call runs (`tools.py`):
@@ -221,10 +231,14 @@ The row cap is applied *inside* the database (the query is wrapped in
 `LIMIT`), so a large table costs nothing extra; the cut message and the
 plugin prompt steer the model to `COUNT` / `GROUP BY` / `HAVING` and to
 `similarity()` for near-duplicates, and to `LIMIT`/`OFFSET` paging only
-when rows must be listed. Anomaly checks are named in `plugin_prompt.txt`
-(shared labels/aliases, weight outside min–max, implausible metadata,
-volume vs dimensions, missing metadata, excluded with no reason,
-non-English text). The model proposes fixes and never changes a row it was
+when rows must be listed. Anomaly checks are named in `plugin_prompt.txt` as
+**two passes**: rule checks in SQL (shared labels/aliases, near-duplicates,
+weight outside min–max, volume vs dimensions, missing metadata, excluded
+with no reason, non-English text), then a plausibility read of compact
+rows judged against what each label names — all rows up to ~250, beyond
+that one `visual_class` or page at a time with coverage stated. The second
+pass exists because the first live test ran only rule checks and missed
+furniture excluded inconsistently (`desk` excluded, `drawer_unit` not). The model proposes fixes and never changes a row it was
 not asked to change.
 
 **Cost.** Measured as sent to OpenAI (2026-09-19): create ≈1,040 tokens,

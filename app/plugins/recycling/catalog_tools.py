@@ -334,7 +334,10 @@ def make_catalog_tools(
             finish(name, start, "disabled")
             return prompts.QUERY_DISABLED
 
-        logger.info("Agent query | sql=%s", " ".join(sql.split())[:500])
+        # Whitespace collapsed to one line, but long enough to keep a whole
+        # analysis query: at 500 characters a multi-condition filter was
+        # cut mid-WHERE, and its shape could not be read from the app log.
+        logger.info("Agent query | sql=%s", " ".join(sql.split())[:4000])
 
         try:
             result = await agent_role.query(sql, max_rows=MAX_QUERY_ROWS)

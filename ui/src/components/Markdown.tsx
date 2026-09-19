@@ -1,10 +1,14 @@
 import { isValidElement } from "react";
 import ReactMarkdown from "react-markdown";
+import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 
+import { fileDownloadUrl } from "../api/client";
 import MermaidDiagram from "./MermaidDiagram";
 import TableScroll from "./TableScroll";
+
+const FILE_LINK = /^\/files\/([0-9a-f-]{36})$/i;
 
 type MarkdownProps = {
 	children: string;
@@ -67,6 +71,29 @@ const Markdown = ({ children, isStreaming = false }: MarkdownProps) => {
 							<table>{tableChildren}</table>
 						</TableScroll>
 					);
+				},
+				// The backend links a stored file as a relative /files/<id>
+				// (e.g. catalog evidence images). Relative is right behind
+				// nginx, where UI and API share an origin, but in local dev
+				// the API is a different origin — so point it at the API
+				// explicitly.
+				//
+				// Any other root-relative link is a page of this app (the
+				// catalog link a recycling tool posts): followed through the
+				// router, so the chat is not reloaded from scratch. Absolute
+				// and protocol-relative (//host) links are left as written.
+				a({ href, children: linkChildren }) {
+					const fileId = href?.match(FILE_LINK)?.[1];
+
+					if (fileId) {
+						return <a href={fileDownloadUrl(fileId)}>{linkChildren}</a>;
+					}
+
+					if (href?.startsWith("/") && !href.startsWith("//")) {
+						return <Link to={href}>{linkChildren}</Link>;
+					}
+
+					return <a href={href}>{linkChildren}</a>;
 				},
 			}}
 		>

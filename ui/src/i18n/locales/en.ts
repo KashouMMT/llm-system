@@ -3,7 +3,7 @@
 export const en = {
 	nav: {
 		home: "Home",
-		setting: "Setting",
+		settings: "Settings",
 		themeToDark: "Switch to dark mode",
 		themeToLight: "Switch to light mode",
 	},
@@ -36,7 +36,6 @@ export const en = {
 		empty: "No conversations yet.",
 		rename: "Rename",
 		renameAria: "Rename conversation",
-		blankForms: "Blank forms",
 		signOut: "Sign out",
 	},
 	chat: {
@@ -79,6 +78,95 @@ export const en = {
 			"Unsupported file. Send an image (PNG, JPEG, WebP), a PDF, or a text file (UTF-8 or Shift_JIS).",
 		attachmentQuotaExceeded:
 			"You've reached today's upload limit. Try again tomorrow.",
+	},
+	settings: {
+		navLabel: "Settings sections",
+		categories: {
+			core: "Core",
+			root: "Root",
+			plugin: "Plugins",
+		},
+		sections: {
+			general: "General",
+			llm: "LLM configuration",
+			memory: "Memory & summarization",
+			streaming: "Streaming",
+		},
+		loading: "Loading settings…",
+		loadError: "Could not load settings.",
+		save: "Save",
+		saving: "Saving…",
+		discard: "Discard changes",
+		saved: "Saved. Applies from the next turn.",
+		reset: "Reset to default",
+		defaultValue: "Default: {{value}}",
+		sessionOnly: "Resets on restart",
+		incompleteSet: "{{name}} (incomplete: runs as default)",
+		errGeneric: "Could not save. Is the API running?",
+		// Keys match the backend's setting names in
+		// app/config/runtime_settings.py; the form looks them up by name.
+		fields: {
+			system_prompt_name: {
+				label: "Persona",
+				help: "Prompt set under app/prompts/. Also changes the greeting of new conversations.",
+			},
+			log_level: {
+				label: "Log level",
+				help: "Server log verbosity.",
+			},
+			temperature: {
+				label: "Temperature",
+				help: "Randomness of replies, 0–2. Lower sticks closer to the facts it was given.",
+			},
+			top_p: {
+				label: "Top P",
+				help: "Sample only from the most likely tokens covering this share of probability, 0–1.",
+			},
+			top_k: {
+				label: "Top K",
+				help: "Sample only from the K most likely tokens. Sent to Ollama only.",
+			},
+			max_tokens: {
+				label: "Max reply tokens",
+				help: "The longest reply the model may write. Must be less than the context window.",
+			},
+			context_window: {
+				label: "Context window",
+				help: "Token budget for prompt plus reply. Sent to Ollama only.",
+			},
+			summary_token_threshold: {
+				label: "Summarize after (tokens)",
+				help: "History size, in tokens, that triggers a summary.",
+			},
+			max_summary_chars: {
+				label: "Summary length limit",
+				help: "Maximum characters kept in the running summary.",
+			},
+			max_context_history_messages: {
+				label: "History window",
+				help: "Most recent messages sent to the model each turn.",
+			},
+			max_unsummarized_messages: {
+				label: "Summarize after (messages)",
+				help: "Backup trigger by message count. Must not exceed the history window.",
+			},
+			min_retained_raw_messages: {
+				label: "Messages kept word for word",
+				help: "Newest messages never folded into the summary. Must be less than “Summarize after (messages)”.",
+			},
+			max_checkpoint_messages: {
+				label: "Checkpoint message cap",
+				help: "Bounds stored agent state only; does not change what the model sees.",
+			},
+			sse_heartbeat_seconds: {
+				label: "Heartbeat interval (seconds)",
+				help: "How often an idle event stream sends a keep-alive.",
+			},
+			sse_queue_maxsize: {
+				label: "Event queue size",
+				help: "Events buffered per open tab before a slow tab is dropped and reconnects.",
+			},
+		},
 	},
 	error: {
 		notFoundTitle: "Page not found",

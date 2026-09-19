@@ -15,10 +15,12 @@ from app.plugins.recycling.commands import (
 from app.plugins.recycling.catalog_tools import make_catalog_tools
 from app.plugins.recycling.database import (
     CatalogRepository,
+    EvidenceRepository,
     ensure_schema,
     grant_agent_read,
 )
 from app.plugins.recycling.pipeline.vision import build_client
+from app.plugins.recycling.routes import make_routes
 from app.plugins.recycling.tools import make_recycle_tools
 
 
@@ -48,6 +50,7 @@ def _build_runners(context: ToolContext) -> dict[str, RecycleRunner]:
         file_repository=context.file_repository,
         file_storage=context.file_storage,
         catalog_repository=CatalogRepository(context.db_pool),
+        evidence_repository=EvidenceRepository(context.db_pool),
     )
 
 
@@ -85,4 +88,7 @@ PLUGIN = ToolPlugin(
     # Creates recycling_catalog_items. No seeding: an empty table is an
     # empty catalog, and a catalog build is the only way rows arrive.
     initialize=_initialize,
+    # GET /plugins/recycling/catalog, for the catalog browser under
+    # Settings → Plugins (ui/src/plugins/recycling/).
+    router_factory=make_routes,
 )

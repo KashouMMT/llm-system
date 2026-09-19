@@ -211,6 +211,15 @@ class Application:
         self.title_service: ConversationTitleService | None = None
         self.chat_service: ChatService | None = None
         self.commands: dict[str, PluginCommand] = {}
+        # Plugin folder names that actually loaded (GET /plugins). Excluded
+        # and failed plugins are absent; the frontend shows a plugin's UI
+        # only when its name is here.
+        self.loaded_plugins: tuple[str, ...] = ()
+        # Kept for create_api, which builds plugin routers after startup:
+        # the same context the factories got, and the final exclusion set
+        # (denylist + failed setup + failed tools).
+        self.tool_context: ToolContext | None = None
+        self.excluded_plugins: frozenset[str] = frozenset()
 
     async def initialize(self) -> None:
         """
@@ -359,16 +368,24 @@ class Application:
             # unconditionally, so it must not be excludable. Listed first so
             # the tool order stays stable whatever plugins load — a
             # reshuffled tool list busts provider-side prompt caching.
+            loaded_tools = load_tools(
+                tool_context,
+                excluded=excluded_plugins,
+                strict=TOOL_PLUGINS_STRICT,
+            )
+            # A plugin whose tools failed is out of commands and prompts
+            # too, for the same reason as a failed setup above.
+            excluded_plugins |= loaded_tools.failed
+            self.loaded_plugins = loaded_tools.plugins
+            self.excluded_plugins = excluded_plugins
+            self.tool_context = tool_context
+
             tools = [
                 *make_attachment_tools(
                     file_repository=self.file_repository,
                     file_storage=self.file_storage,
                 ),
-                *load_tools(
-                    tool_context,
-                    excluded=excluded_plugins,
-                    strict=TOOL_PLUGINS_STRICT,
-                ),
+                *loaded_tools.tools,
             ]
 
             logger.info("Loading slash commands")

@@ -53,6 +53,12 @@ class TurnLookup:
 # by definition, and an interrupted one can be.
 HISTORY_FILTER = "status <> 'streaming' AND content <> ''"
 
+# What the model remembers of a message: context_content when a message
+# carries display-only output (a whole catalog table shown to the user),
+# otherwise the content itself. Used by every model-context and
+# summarization reader; the display reader (get_messages) keeps content.
+_CONTEXT_CONTENT = "COALESCE(context_content, content) AS content"
+
 
 class MessageRepository:
     def __init__(self, pool: AsyncConnectionPool) -> None:
@@ -284,7 +290,7 @@ class MessageRepository:
                 SELECT
                     id,
                     role,
-                    content,
+                    {_CONTEXT_CONTENT},
                     created_at,
                     status
                 FROM messages
@@ -348,7 +354,7 @@ class MessageRepository:
                 SELECT
                     id,
                     role,
-                    content,
+                    {_CONTEXT_CONTENT},
                     created_at,
                     status
                 FROM messages
@@ -377,12 +383,16 @@ class MessageRepository:
         message_id: int,
         content: str,
         status: str,
+        context_content: str | None = None,
     ) -> None:
         """
         Write the buffered response and its terminal status in one update.
 
         One write per turn, not one per token: the buffer lives in memory
         while generating, and this is the single flush.
+
+        context_content is what later turns remember instead of content;
+        None (the usual case) means content itself.
         """
         async with (
             self._pool.connection() as conn,
@@ -393,10 +403,11 @@ class MessageRepository:
                 UPDATE messages
                 SET
                     content = %s,
+                    context_content = %s,
                     status = %s
                 WHERE id = %s
                 """,
-                (content, status, message_id),
+                (content, context_content, status, message_id),
             )
 
             if cur.rowcount != 1:

@@ -34,6 +34,7 @@ with the plugin.
 | `schemas_shokumu.py` | `ShokumuKeirekisho` — imports `YearMonth`/`KANA_PATTERN` from `schemas_rirekisho` rather than restating them |
 | `dates.py` | 西暦→和暦 conversion, 満年齢 — document-specific date formatting only; the application-wide `JST`/`today_in_japan()` lives in `app/utils/jst.py` |
 | `blank.py` | `BLANK_DOCUMENTS` — placeholder payloads the API can hand the frontend |
+| `routes.py` | `GET /plugins/recruitment/blank/{doc_type}` (the plugin's `router_factory`). Was core-registered in `server.py` regardless of this plugin; moved so that excluding the plugin removes the endpoint too. UI half: `ui/src/plugins/recruitment/` |
 | `layouts/rirekisho_jis.py` | The JIS 履歴書 form's cell map and capacity model (font shrink, `LayoutOverflow`) |
 | `renderers/` | `base.py` (the `Renderer` protocol), `xlsx_renderer.py`, `docx_renderer.py`, `ooxml.py` (restores the photo-box drawing `openpyxl` drops on save) |
 | `templates/` | `rirekisho.xlsx`, `shokumu_keirekisho.docx` — the blank forms rendering fills in |
