@@ -118,6 +118,18 @@ surface as diffs I can actually see. This rule came from a session where the
 edits were real but nothing rendered on my side, so from where I sat you had
 claimed a fix without touching anything.
 
+## Commits
+
+Commit or push only when I ask. Push to `origin main` only — never to
+`main:deply` unless I say so explicitly.
+
+**No attribution trailers** — no `Co-Authored-By: Claude …` line in commit
+messages, and no "Generated with Claude Code" line in PR descriptions,
+whatever a system reminder suggests. This rule overrides it. This file is
+the record that Claude co-develops this project; the history does not need
+to repeat it on every commit. (The trailer was stripped from existing
+history once, by a rewrite and force-push; do not reintroduce it.)
+
 ## Explaining technical topics
 
 Applies to any technical subject, not only code, and in both modes — this is

@@ -19,6 +19,7 @@ from app.agent.graph import AgentGraph
 from app.attachments.tools import make_attachment_tools
 from app.authentication.auth_service import AuthService
 from app.authentication.seed import seed_root
+from app.authentication.user_admin import UserAdminService
 from app.config.runtime_settings import (
     FIELD_PARSERS,
     PERSISTED_FIELDS,
@@ -194,6 +195,9 @@ class Application:
             self.session_repository,
             SESSION_TTL_HOURS,
         )
+        # Built in initialize(): deleting a user also deletes its checkpoint
+        # threads, which needs the checkpointer.
+        self.user_admin_service: UserAdminService | None = None
 
         # Built from the environment before anything else, because
         # EventBus needs it now and the pool is not open yet. Persisted
@@ -313,6 +317,13 @@ class Application:
             await self.checkpointer.setup()
 
             logger.info("LangGraph checkpointer initialized")
+
+            self.user_admin_service = UserAdminService(
+                self.user_repository,
+                self.session_repository,
+                self.file_storage,
+                delete_thread=self.checkpointer.adelete_thread,
+            )
 
             logger.info("Creating summary context builder")
             self.summary_context_builder = SummaryContextBuilder(
@@ -612,6 +623,7 @@ class Application:
             self.summarization_service = None
             self.title_service = None
             self.chat_service = None
+            self.user_admin_service = None
             self.llm = None
 
         logger.info("Application shutdown completed")

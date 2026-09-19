@@ -8,6 +8,7 @@ import {
 	MemorySection,
 	StreamingSection,
 } from "./CoreSections";
+import UsersSection from "./UsersSection";
 
 /**
  * Who OWNS a section. Who may SEE it is `minRole`, a separate axis: a
@@ -62,7 +63,7 @@ export const pluginSections = (
 		})),
 	);
 
-// The CORE sections. Plugin sections are added at render time by
+// The CORE and ROOT sections. Plugin sections are added at render time by
 // pluginSections(), since which plugins loaded is only known then.
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 	{
@@ -92,5 +93,14 @@ export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
 		labelKey: "settings.sections.streaming",
 		minRole: "admin",
 		component: StreamingSection,
+	},
+	{
+		category: "root",
+		id: "users",
+		labelKey: "settings.sections.users",
+		// Account management is root's alone (ACTION_MANAGE_ADMINS); an
+		// admin does not see this entry, and /users refuses them anyway.
+		minRole: "root",
+		component: UsersSection,
 	},
 ];

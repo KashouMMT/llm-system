@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(python -)",
+      "WebSearch",
+      "Bash(grep -nP '[A-Za-z]{4,}' meeting_jp.md)",
+      "Bash(awk 'NR>=382 && NR<=440' meeting_jp.md)",
+      "Bash(grep -nE '[A-Za-z]{3,}')",
+      "WebFetch(domain:next.rikunabi.com)",
+      "WebFetch(domain:tenshoku.mynavi.jp)",
+      "WebFetch(domain:doda.jp)",
+      "WebFetch(domain:employment.en-japan.com)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)"
+    ]
+  }
+}

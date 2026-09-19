@@ -151,6 +151,27 @@ export type PromptSetsResponse = {
 	prompt_sets: string[];
 };
 
+/** One account as GET /users lists it (root only). */
+export type ManagedUser = {
+	id: string;
+	email: string;
+	role: UserRole;
+	created_at: string;
+	updated_at: string;
+};
+
+/** Roles root may assign; there is only ever one root. */
+export type AssignableRole = Exclude<UserRole, "root">;
+
+export type CreateUserRequest = {
+	email: string;
+	password: string;
+	role: AssignableRole;
+};
+
+/** Only the fields present change. */
+export type UpdateUserRequest = Partial<CreateUserRequest>;
+
 /** GET /plugins: backend plugin folder names that loaded. */
 export type PluginsResponse = {
 	plugins: string[];

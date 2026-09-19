@@ -15,7 +15,7 @@ browser ─→ http://<EC2-public-IP>/…
          ├─ /assets/    → /var/www/llm-system/assets/     (hashed files, cached 1y)
          ├─ /           → a real file, else index.html    (SPA client-side routing)
          ├─ /events     → proxy → 127.0.0.1:8000          (SSE: proxy_buffering off, no read timeout)
-         └─ /auth /commands /conversations /files /plugins /settings /health
+         └─ /auth /commands /conversations /files /plugins /settings /users /health
                         → proxy → 127.0.0.1:8000
                                      │
                               docker container "api"

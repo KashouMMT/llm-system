@@ -1,6 +1,6 @@
 # Settings page + frontend plugin system
 
-Status 2026-09-19: S1, S2 live-tested OK (user). S3 built, awaiting live test. Next: ROOT users & roles, then R4.
+Status 2026-09-19: S1–S3 live-tested OK (user), committed. ROOT Users built, awaiting live test. Next: R4 (Recycling_Agent_Tools_Plan.md).
 Precedes R3b in `Recycling_Agent_Tools_Plan.md` (R3b = S3 here).
 
 ## Model (agreed)
@@ -60,6 +60,14 @@ Users & roles: root CRUDs all users, grants elevated role. Delete = hard delete 
 - Verified: tsc, eslint, vite build; TestClient: plugin route 401 unauth, 404 when excluded/unknown; catalog 403 user, 422 limit=999; page() SQL all filter branches vs real DB (empty catalog → no row-shape check).
 - Follow-up fixes (2026-09-19, user): (1) tool `recycle_show_catalog` → runner `catalog_link` (commands.py; `CatalogRepository.counts()`; `CATALOG_PAGE_PATH="/settings/plugin/recycling-catalog"` = FE contract) posts link+counts; `tools.build(runner_key=)`; typed cmd/CLI keep table. Markdown.tsx: root-relative non-`//` href → router `<Link>`. (2) TableScroll mechanics moved chat.css → `assets/css/tableScroll.css` imported by component (were scoped `.message-content` → no overflow on settings page); catalog cells nowrap + bordered like chat; `.settings-main {min-width:0}` (flex item else grows to table width); sticky th dropped (scroll container breaks it). (3) recruitment settings section `blank-forms` (BlankFormsSection.tsx, download buttons); shared `forms.ts` (BLANK_FORMS, blankDocumentUrl).
 - Not done / open: No thumbnails (full-size images; would need resize endpoint). Catalog edits in UI not built.
+
+## ROOT Users as built (2026-09-19)
+- BE: `app/authentication/user_admin.py` `UserAdminService` (list/create/update/delete; errors UserNotFound→404, EmailTaken/RootProtected→409, other UserAdminError→422 — never 403, SPA's AuthProvider turns any 403 into the CSRF reload screen). `make_require_root` (dependencies.py, `can(ACTION_MANAGE_ADMINS)`). `UserRepository.list_all/update/delete` (delete: one txn reads files' storage_keys (user_id OR user's conversations) then DELETE users → cascade; service deletes bytes after, best effort). Routes `/users` GET/POST, `/users/{id}` PATCH/DELETE in server.py; `_serialize_user` omits password_hash. nginx regex + deploy/README gain `users`.
+- Rules: assignable roles user/admin only; root row not editable/deletable (env + --seed-admin); pw change → `sessions.delete_for_user`; role change needs nothing (session lookup re-reads users row).
+- FE: `settings/UsersSection.tsx` (ROOT category, minRole root), `hooks/useUsers.ts` (invalidate on change), client fns, types `ManagedUser/AssignableRole/Create|UpdateUserRequest`; i18n `settings.users.*`; CSS `.users-*` in settings.css.
+- Verified: service vs dev DB with throwaway `zz-test-*@example.invalid` (create, dup, update+pw sign-out, root edit/delete refused, list order, delete, delete-again 404); HTTP: user/admin 403, root 200, no hash in body. tsc/eslint/vite build clean.
+- Delete completeness (checked vs information_schema 2026-09-19): all FKs CASCADE; only LangGraph `checkpoints/checkpoint_blobs/checkpoint_writes` (thread_id text, no FK) escaped → `UserAdminService(delete_thread=checkpointer.adelete_thread)`, built in `Application.initialize()` after checkpointer; `UserRepository.delete` → `DeletedUser(storage_keys, conversation_ids)`. E2E verified: conv/msg/file/checkpoint/checkpoint_writes all 0 after, bytes deleted.
+- Open: "ban" instead of hard delete (user's stated long-term semantics); delete of a user mid-generation not handled; no self-service password change for non-root.
 
 ## Slices
 S1 shell + CORE + prompt-sets endpoint → S2 `/plugins` + FE registry + blank forms gated → S3 router_factory + catalog page (R3b) → ROOT users & roles.

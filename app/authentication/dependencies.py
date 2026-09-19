@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
 
-from app.authentication.authorization import is_admin
+from app.authentication.authorization import ACTION_MANAGE_ADMINS, can, is_admin
 from app.authentication.models import User
 from app.config.settings import SESSION_COOKIE_NAME
 from app.runtime.application import Application
@@ -37,3 +37,19 @@ def make_require_admin(current_user):
         return user
 
     return require_admin
+
+
+def make_require_root(current_user):
+    """Require the root user (account management), or raise 403."""
+
+    async def require_root(
+        user: Annotated[User, Depends(current_user)],
+    ) -> User:
+        if not can(user, ACTION_MANAGE_ADMINS):
+            raise HTTPException(
+                status_code=403,
+                detail="Root privileges required",
+            )
+        return user
+
+    return require_root

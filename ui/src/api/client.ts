@@ -2,6 +2,8 @@ import type {
 	AuthUser,
 	Conversation,
 	CreateConversationResponse,
+	CreateUserRequest,
+	ManagedUser,
 	Message,
 	PluginsResponse,
 	PromptSetsResponse,
@@ -10,6 +12,7 @@ import type {
 	SendMessageRequest,
 	SendMessageResponse,
 	SettingValue,
+	UpdateUserRequest,
 	UploadedAttachment,
 } from "./types";
 
@@ -271,6 +274,35 @@ export function eventsUrl(conversationId: string): string {
  */
 export function fileDownloadUrl(fileId: string): string {
 	return `${API_BASE_URL}/files/${fileId}`;
+}
+
+// ---- users (root only) -------------------------------------------------
+// A refused change comes back as 404/409/422 with the server's reason as a
+// string detail; never 403, which the app treats as a stale CSRF token.
+
+export function listUsers(signal?: AbortSignal): Promise<ManagedUser[]> {
+	return request<ManagedUser[]>("/users", { signal });
+}
+
+export function createUser(body: CreateUserRequest): Promise<ManagedUser> {
+	return request<ManagedUser>("/users", {
+		method: "POST",
+		body: JSON.stringify(body),
+	});
+}
+
+export function updateUser(
+	id: string,
+	body: UpdateUserRequest,
+): Promise<ManagedUser> {
+	return request<ManagedUser>(`/users/${id}`, {
+		method: "PATCH",
+		body: JSON.stringify(body),
+	});
+}
+
+export function deleteUser(id: string): Promise<void> {
+	return request<void>(`/users/${id}`, { method: "DELETE" });
 }
 
 export function listPlugins(signal?: AbortSignal): Promise<PluginsResponse> {

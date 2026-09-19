@@ -2,7 +2,7 @@ import json
 import sys
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 import psycopg
@@ -17,8 +17,18 @@ from app.authentication.csrf import (
     clear_csrf_cookie,
     set_csrf_cookie,
 )
-from app.authentication.dependencies import make_current_user, make_require_admin
+from app.authentication.dependencies import (
+    make_current_user,
+    make_require_admin,
+    make_require_root,
+)
 from app.authentication.models import User
+from app.authentication.user_admin import (
+    EmailTakenError,
+    RootProtectedError,
+    UserAdminError,
+    UserNotFoundError,
+)
 from app.config.prompts import list_prompt_sets
 from app.config.settings import (
     ALLOW_REGISTRATION,
@@ -143,6 +153,35 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class CreateUserRequest(BaseModel):
+    # Same bounds as RegisterRequest: one definition of a valid account.
+    email: str = Field(min_length=3, max_length=254, pattern=_EMAIL_PATTERN)
+    password: str = Field(min_length=1, max_length=1024)
+    # 'root' is not assignable: there is one root, seeded from the
+    # environment (see app/authentication/user_admin.py).
+    role: Literal["user", "admin"] = "user"
+
+
+class UpdateUserRequest(BaseModel):
+    # Every field optional: only what is sent changes.
+    email: str | None = Field(
+        default=None, min_length=3, max_length=254, pattern=_EMAIL_PATTERN
+    )
+    password: str | None = Field(default=None, min_length=1, max_length=1024)
+    role: Literal["user", "admin"] | None = None
+
+
+def _serialize_user(user: User) -> dict[str, Any]:
+    # Explicit, so password_hash can never ride along.
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "role": user.role,
+        "created_at": user.created_at,
+        "updated_at": user.updated_at,
+    }
+
+
 class RenameConversationRequest(BaseModel):
     # min_length=1 rejects an empty string; the handler also strips and
     # re-checks, since "   " passes this but is not a title.
@@ -179,6 +218,7 @@ def create_api(application: Application) -> FastAPI:
 
     current_user = make_current_user(application)
     require_admin = make_require_admin(current_user)
+    require_root = make_require_root(current_user)
 
     async def require_conversation(
         conversation_id: UUID,
@@ -881,6 +921,78 @@ def create_api(application: Application) -> FastAPI:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
         return application.describe_settings()
+
+    # ---- users (root) --------------------------------------------------
+    #
+    # Account management. Rules (root is never managed here, roles limited
+    # to user/admin, password change signs out, delete cascades) live in
+    # UserAdminService; these handlers only map its errors. A refused
+    # change is 409 or 422, never 403: the frontend treats any 403 as a
+    # stale CSRF token and replaces the whole app with its reload screen.
+
+    def _user_admin_error(error: UserAdminError) -> HTTPException:
+        if isinstance(error, UserNotFoundError):
+            status = 404
+        elif isinstance(error, (EmailTakenError, RootProtectedError)):
+            status = 409
+        else:
+            status = 422
+
+        return HTTPException(status_code=status, detail=str(error))
+
+    @app.get("/users", dependencies=[Depends(require_root)])
+    async def list_users():
+        users = await application.user_admin_service.list_users()
+        return [_serialize_user(user) for user in users]
+
+    @app.post("/users", status_code=201)
+    async def create_user(
+        body: CreateUserRequest,
+        actor: Annotated[User, Depends(require_root)],
+    ):
+        try:
+            user = await application.user_admin_service.create_user(
+                actor=actor,
+                email=body.email,
+                password=body.password,
+                role=body.role,
+            )
+        except UserAdminError as error:
+            raise _user_admin_error(error) from error
+
+        return _serialize_user(user)
+
+    @app.patch("/users/{user_id}")
+    async def update_user(
+        user_id: UUID,
+        body: UpdateUserRequest,
+        actor: Annotated[User, Depends(require_root)],
+    ):
+        try:
+            user = await application.user_admin_service.update_user(
+                actor=actor,
+                user_id=user_id,
+                email=body.email,
+                password=body.password,
+                role=body.role,
+            )
+        except UserAdminError as error:
+            raise _user_admin_error(error) from error
+
+        return _serialize_user(user)
+
+    @app.delete("/users/{user_id}", status_code=204)
+    async def delete_user(
+        user_id: UUID,
+        actor: Annotated[User, Depends(require_root)],
+    ):
+        try:
+            await application.user_admin_service.delete_user(
+                actor=actor,
+                user_id=user_id,
+            )
+        except UserAdminError as error:
+            raise _user_admin_error(error) from error
 
     return app
 
