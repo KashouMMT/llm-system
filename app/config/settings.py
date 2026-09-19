@@ -261,6 +261,21 @@ else:
 DB_POOL_MIN_SIZE = get_positive_int("DB_POOL_MIN_SIZE", 2)
 DB_POOL_MAX_SIZE = get_positive_int("DB_POOL_MAX_SIZE", 10)
 
+# AGENT DATABASE ROLE
+#
+# The login role model-written SQL runs as (app/database/agent_role.py).
+# Created lazily, only when a loaded plugin grants it a table, so a
+# deployment with no such plugin never gets the role at all. It can read
+# exactly what plugins grant it and nothing else.
+#
+# The password has a default so a local run works out of the box; startup
+# warns while it is in use. Set a real one for any shared server, or set it
+# to an empty string to disable model-written SQL entirely. os.getenv
+# directly rather than get_valid_string, because empty is meaningful here.
+DB_AGENT_USER = get_valid_string("DB_AGENT_USER", "llm_agent")
+DEFAULT_DB_AGENT_PASSWORD = "llm_agent_local_only"
+DB_AGENT_PASSWORD = os.getenv("DB_AGENT_PASSWORD", DEFAULT_DB_AGENT_PASSWORD).strip()
+
 # REALTIME (SSE)
 SSE_HEARTBEAT_SECONDS = get_positive_float("SSE_HEARTBEAT_SECONDS", 15.0)
 # A subscriber that falls this far behind is dropped rather than buffered

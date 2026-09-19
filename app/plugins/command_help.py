@@ -87,6 +87,11 @@ def render_command_prompt(commands: Mapping[str, PluginCommand]) -> str:
     The prompt is built once per deployment, not per user, so the model
     cannot know whether it is talking to an admin. Admin-only commands are
     listed and marked instead of hidden, with the rule for mentioning them.
+    That rule must not make the model gatekeep: an earlier wording ("suggest
+    one only to someone who says they manage this system") made it refuse
+    a real admin's plain request and point at the command instead of
+    calling the equivalent tool. The system enforces the role; the model
+    only avoids advertising.
     Aliases are deliberately omitted: the model should teach the current
     name.
     """
@@ -110,11 +115,17 @@ def render_command_prompt(commands: Mapping[str, PluginCommand]) -> str:
             "",
             "The user runs one of these by sending it as the whole message,",
             "with any attachments it names. You cannot run a command yourself",
-            "and never produce its output; tell the user the exact command to",
-            "send. Only the commands below exist — never invent a subcommand",
-            "or an argument. Commands marked (admin only) are refused for",
-            "other users: suggest one only to someone who says they manage",
-            "this system.",
+            "and never produce its output — but where one of your tools does",
+            "the same job, call the tool instead of telling the user to type",
+            "the command. Only the commands below exist — never invent a",
+            "subcommand or an argument.",
+            "",
+            "Commands marked (admin only) are refused by the system for anyone",
+            "who is not an administrator; the admin and root roles both count",
+            "as administrator. You cannot see the user's role, so never refuse,",
+            "question or second-guess a user over it — the system checks. Do",
+            "not bring admin-only commands up unprompted; when a user asks for",
+            "one, act on it.",
             "",
             *lines,
         ]

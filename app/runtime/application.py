@@ -28,6 +28,12 @@ from app.config.runtime_settings import (
 from app.config.settings import (
     AUTH_BOOTSTRAP_EMAIL,
     AUTH_BOOTSTRAP_PASSWORD,
+    DATABASE_URL,
+    DB_AGENT_PASSWORD,
+    DB_AGENT_USER,
+    DB_NAME,
+    DB_USER,
+    DEFAULT_DB_AGENT_PASSWORD,
     EXCLUDED_TOOL_PLUGINS,
     FILE_STORAGE_DIR,
     LLM_API_KEY,
@@ -37,6 +43,7 @@ from app.config.settings import (
     SESSION_TTL_HOURS,
     TOOL_PLUGINS_STRICT,
 )
+from app.database.agent_role import AgentRole
 from app.database.connection import create_pool
 from app.database.init_db import initialize_database
 from app.llm.llm_factory import LLMFactory
@@ -62,6 +69,7 @@ from app.runtime.conversation_lock import ConversationLock
 from app.runtime.event_bus import EventBus
 from app.services.chat_service import ChatService
 from app.services.conversation_title_service import ConversationTitleService
+from app.services.reply_blocks import ReplyBlocks
 from app.services.summarization_service import SummarizationService
 from app.storage.local_storage import LocalFileStorage
 from app.utils.logger import logger, set_log_level
@@ -154,9 +162,25 @@ class Application:
         self.history_context_builder: HistoryContextBuilder | None = None
 
         self.file_storage = LocalFileStorage(Path(FILE_STORAGE_DIR))
+        # One instance shared by ChatService (attaches a writer per
+        # generation) and the tools (publish into it) via ToolContext.
+        self.reply_blocks = ReplyBlocks()
 
         # Unopened until initialize(); constructing it needs no event loop.
         self.pool = create_pool()
+
+        # The login role model-written SQL runs as. Created lazily, the
+        # first time a plugin grants it a table — see agent_role.py. After
+        # self.pool: it does its role DDL through the application's pool.
+        self.agent_role = AgentRole(
+            admin_pool=self.pool,
+            conninfo=DATABASE_URL,
+            role=DB_AGENT_USER,
+            password=DB_AGENT_PASSWORD,
+            default_password=DEFAULT_DB_AGENT_PASSWORD,
+            main_user=DB_USER,
+            database=DB_NAME,
+        )
 
         self.conversation_repository = ConversationRepository(self.pool)
         self.message_repository = MessageRepository(self.pool)
@@ -210,6 +234,10 @@ class Application:
             logger.info("Opening PostgreSQL connection pool")
             await self.pool.open(wait=True)
             self._resources.push_async_callback(self.pool.close)
+            # Registered after the main pool, so it closes first. Opened
+            # only if a plugin grants it something; closing an unopened
+            # pool is a no-op.
+            self._resources.push_async_callback(self.agent_role.close)
             logger.info("PostgreSQL connection pool ready")
 
             logger.info("Loading persisted settings")
@@ -311,6 +339,8 @@ class Application:
                     model=MODEL_NAME,
                 ),
                 db_pool=self.pool,
+                reply_blocks=self.reply_blocks,
+                agent_role=self.agent_role,
             )
 
             # Before any factory runs, so a plugin's commands are only built
@@ -404,6 +434,7 @@ class Application:
                 event_bus=self.event_bus,
                 conversation_lock=self.conversation_lock,
                 spawn=self.spawn,
+                reply_blocks=self.reply_blocks,
                 commands=self.commands,
             )
             logger.info("ChatService initialized")

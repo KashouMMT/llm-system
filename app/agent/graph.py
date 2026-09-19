@@ -21,6 +21,7 @@ from app.agent.nodes.prepare_context_node import (
     create_prepare_context_node,
 )
 from app.agent.state import AgentState
+from app.authentication.models import User
 from app.config.runtime_settings import RuntimeSettingsHolder
 from app.utils.logger import logger
 
@@ -175,6 +176,7 @@ class AgentGraph:
         current_user_message_id: int | None = None,
         assistant_message_id: int | None = None,
         current_turn_image_blocks: Sequence[dict[str, Any]] = (),
+        user: User | None = None,
     ) -> AsyncIterator[tuple[BaseMessage, dict]]:
         start = time.perf_counter()
 
@@ -195,6 +197,12 @@ class AgentGraph:
                 # produces a file attaches it here, so the identity comes
                 # from the server rather than from the model.
                 "assistant_message_id": assistant_message_id,
+                # Who this turn runs for, from the authenticated session.
+                # Tools read it through app.plugins.run_context — the only
+                # place an admin check can trust. A User object, not a
+                # primitive, so the checkpointer does not copy it into
+                # checkpoint metadata (same rule as the list below).
+                "user": user,
                 # Base64 image content blocks for this turn's attachments.
                 # Here rather than in the HumanMessage because messages are
                 # checkpointed on every step and never deleted; config is

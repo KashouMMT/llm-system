@@ -2,8 +2,12 @@
 build_catalog, build_catalog_force, show_catalog. scan and both
 build_catalog variants take one room video or one or more photos.
 
-One namespace, one handler (handle_recycle) that dispatches on
-context.subcommand — same shape as clock's /clock. Every subcommand is
+Each subcommand is a runner returning a RecycleOutcome, built once by
+make_recycle_runners and shared by two ways in: the slash command
+(handle_recycle, which writes the Markdown as the message) and the agent
+tools in tools.py (which publish it as a reply block). One namespace, one
+handler that dispatches on context.subcommand — same shape as clock's
+/clock. Every subcommand is
 deterministic: it runs the pipeline directly and writes Markdown as the
 assistant message, never through the LLM, so a 40-row table can never be
 dropped or paraphrased by a model relaying it. The full structured result
@@ -17,6 +21,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from openai import OpenAI
@@ -24,10 +29,10 @@ from openai import OpenAI
 from app.plugins.command_help import render_subcommand_lines
 from app.plugins.contracts import (
     CommandContext,
-    CommandHandler,
     PluginCommand,
     SubcommandSpec,
 )
+from app.plugins.recycling import prompts
 from app.plugins.recycling.database import CatalogRepository, CatalogStorageError
 from app.plugins.recycling.pipeline.build import (
     EnrichedItem,
@@ -67,6 +72,34 @@ from app.utils.video_frames import (
     FrameExtractionError,
     FrameSample,
 )
+
+@dataclass(frozen=True)
+class RecycleOutcome:
+    """
+    What a /recycle subcommand produced, for both ways in.
+
+    `markdown` is what the user sees. The slash command writes it as the
+    message; a tool publishes it as a reply block. `model_summary` is set
+    only on success: it is all a tool hands back to the model, so the model
+    comments on the result without ever holding (and retyping) the table.
+    None means `markdown` is an error or a remedy ("nothing attached"),
+    which the tool returns to the model to explain in its own words.
+    """
+
+    markdown: str
+    model_summary: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.model_summary is not None
+
+
+def _failed(markdown: str) -> RecycleOutcome:
+    return RecycleOutcome(markdown=markdown)
+
+
+RecycleRunner = Callable[[CommandContext], Awaitable[RecycleOutcome]]
+
 
 # What the user sees when the catalog table cannot be read or written.
 # Deliberately no database detail: the repository has already logged the
@@ -436,7 +469,7 @@ def _make_scan(
     file_repository: FileRepository,
     file_storage: FileStorage,
     catalog_repository: CatalogRepository,
-) -> CommandHandler:
+) -> RecycleRunner:
     """
     `/recycle scan [frames]` — one room video, or one or more photos.
 
@@ -446,20 +479,20 @@ def _make_scan(
     remain as aliases in the dispatch table.
     """
 
-    async def scan_command(context: CommandContext) -> str:
+    async def scan_command(context: CommandContext) -> RecycleOutcome:
         media = await _attached_media(
             context, file_repository=file_repository, file_storage=file_storage
         )
 
         if media.error:
-            return media.error
+            return _failed(media.error)
 
         try:
             catalog = await catalog_repository.load()
         except CatalogError as exc:
-            return f"Could not load the catalog: {exc}"
+            return _failed(f"Could not load the catalog: {exc}")
         except CatalogStorageError:
-            return _STORAGE_FAILED
+            return _failed(_STORAGE_FAILED)
 
         sample: FrameSample | None = None
 
@@ -482,9 +515,9 @@ def _make_scan(
                     catalog=catalog,
                 )
         except FrameExtractionError as exc:
-            return f"Could not scan `{media.video.filename}`: {exc}"
+            return _failed(f"Could not scan `{media.video.filename}`: {exc}")
         except DetectionError as exc:
-            return f"Scan failed: {exc}"
+            return _failed(f"Scan failed: {exc}")
 
         if media.video is not None:
             header = _frame_check_header(media.video.filename, sample)
@@ -520,7 +553,18 @@ def _make_scan(
 
         body = render_scan_result(confident, low, DEFAULT_MIN_RUNS_SEEN)
 
-        return "\n".join(header) + f"\n\n{body}"
+        return RecycleOutcome(
+            markdown="\n".join(header) + f"\n\n{body}",
+            model_summary=prompts.scan_summary(
+                header=header,
+                collectable=len(confident.matched),
+                excluded=len(confident.excluded),
+                not_in_catalog=len(confident.unmatched),
+                low_agreement=len(low.matched) + len(low.unmatched) + len(low.excluded),
+                weight=_fmt_number(confident.total_weight_kg, " kg"),
+                volume=_fmt_number(confident.total_volume_m3, " m3", 2),
+            ),
+        )
 
     return scan_command
 
@@ -533,14 +577,14 @@ def _make_build_catalog(
     file_storage: FileStorage,
     catalog_repository: CatalogRepository,
     force: bool,
-) -> CommandHandler:
-    async def build_catalog(context: CommandContext) -> str:
+) -> RecycleRunner:
+    async def build_catalog(context: CommandContext) -> RecycleOutcome:
         media = await _attached_media(
             context, file_repository=file_repository, file_storage=file_storage
         )
 
         if media.error:
-            return media.error
+            return _failed(media.error)
 
         sample: FrameSample | None = None
 
@@ -552,7 +596,7 @@ def _make_build_catalog(
                     media.video, file_storage=file_storage, frame_count=media.frame_count
                 )
             except FrameExtractionError as exc:
-                return f"Could not read `{media.video.filename}`: {exc}"
+                return _failed(f"Could not read `{media.video.filename}`: {exc}")
 
             sources = [[frame.jpeg for frame in sample.frames]]
         else:
@@ -566,17 +610,17 @@ def _make_build_catalog(
                 runs=BUILD_CATALOG_RUNS,
             )
         except DetectionError as exc:
-            return f"Harvest failed: {exc}"
+            return _failed(f"Harvest failed: {exc}")
 
         frequencies = harvested.frequencies
 
         if not frequencies:
-            return "No labels were detected in the attached capture."
+            return _failed("No labels were detected in the attached capture.")
 
         try:
             clusters = cluster(frequencies, client=client, model=model)
         except DetectionError as exc:
-            return f"Clustering failed: {exc}"
+            return _failed(f"Clustering failed: {exc}")
 
         clusters, missing = reconcile(clusters, list(frequencies))
 
@@ -586,23 +630,23 @@ def _make_build_catalog(
         try:
             enriched: dict[str, EnrichedItem] = enrich(wanted, client=client, model=model)
         except DetectionError as exc:
-            return f"Enrichment failed: {exc}"
+            return _failed(f"Enrichment failed: {exc}")
 
         try:
             scanned_catalog, conflicts = assemble(clusters, enriched, frequencies)
         except CatalogError as exc:
-            return f"Could not assemble the catalog: {exc}"
+            return _failed(f"Could not assemble the catalog: {exc}")
 
         try:
             existing_catalog = await catalog_repository.load()
             result = merge_into_catalog(existing_catalog, scanned_catalog, force=force)
             await catalog_repository.save(result.catalog)
         except CatalogError as exc:
-            return f"Could not merge into the catalog: {exc}"
+            return _failed(f"Could not merge into the catalog: {exc}")
         except CatalogStorageError:
             # The paid build ran and its result is lost; say so, rather
             # than the generic line, so nobody assumes it was saved.
-            return (
+            return _failed(
                 f"{_STORAGE_FAILED} The build finished but was **not saved** — "
                 "the catalog is unchanged. Run the build again once the "
                 "database is reachable."
@@ -681,22 +725,27 @@ def _make_build_catalog(
             ).model_dump(mode="json"),
         )
 
-        return "\n".join(lines)
+        return RecycleOutcome(
+            markdown="\n".join(lines),
+            model_summary=prompts.build_summary(header=header, review_notes=len(notes)),
+        )
 
     return build_catalog
 
 
-def _make_show_catalog(*, catalog_repository: CatalogRepository) -> CommandHandler:
-    async def show_catalog(context: CommandContext) -> str:
+def _make_show_catalog(*, catalog_repository: CatalogRepository) -> RecycleRunner:
+    async def show_catalog(context: CommandContext) -> RecycleOutcome:
         try:
             catalog = await catalog_repository.load()
         except CatalogError as exc:
-            return f"Could not load the catalog: {exc}"
+            return _failed(f"Could not load the catalog: {exc}")
         except CatalogStorageError:
-            return _STORAGE_FAILED
+            return _failed(_STORAGE_FAILED)
 
         if len(catalog) == 0:
-            return (
+            # Not a failure, but nothing to show: the model relays it, and
+            # can offer to build one.
+            return _failed(
                 "The catalog is empty. Run `/recycle build_catalog` with a room "
                 "video or some photos first."
             )
@@ -716,7 +765,14 @@ def _make_show_catalog(*, catalog_repository: CatalogRepository) -> CommandHandl
                 f"{metadata.dimensions} | "
                 f"{metadata.material or '?'} |"
             )
-        return "\n".join(lines)
+
+        included = sum(1 for item in catalog if not item.excluded)
+        return RecycleOutcome(
+            markdown="\n".join(lines),
+            model_summary=prompts.show_catalog_summary(
+                total=len(catalog), collectable=included, excluded=len(catalog) - included
+            ),
+        )
 
     return show_catalog
 
@@ -726,30 +782,30 @@ def _make_show_catalog(*, catalog_repository: CatalogRepository) -> CommandHandl
 # --------------------------------------------------------------------------
 
 
-def make_recycle_commands(
+def make_recycle_runners(
     *,
     client: OpenAI,
     model: str,
     file_repository: FileRepository,
     file_storage: FileStorage,
     catalog_repository: CatalogRepository,
-) -> tuple[PluginCommand, ...]:
-    """Build the /recycle command with its dependencies bound in — same
-    closure-factory shape as make_document_tools and make_attachment_tools.
+) -> dict[str, RecycleRunner]:
+    """Every subcommand's implementation, keyed by canonical name, with its
+    dependencies bound in — same closure-factory shape as
+    make_document_tools. Shared by the /recycle command and the agent tools
+    (tools.py), so a scan has one implementation and two ways in.
     """
-    scan_handler = _make_scan(
-        client=client,
-        model=model,
-        file_repository=file_repository,
-        file_storage=file_storage,
-        catalog_repository=catalog_repository,
-    )
-
     # Canonical names only: ChatService resolves the scan_image / scan_video
     # aliases from SUBCOMMANDS before the handler runs. They are pure
     # aliases — `scan_video` with photos attached scans the photos.
-    subcommands: dict[str, CommandHandler] = {
-        "scan": scan_handler,
+    return {
+        "scan": _make_scan(
+            client=client,
+            model=model,
+            file_repository=file_repository,
+            file_storage=file_storage,
+            catalog_repository=catalog_repository,
+        ),
         "build_catalog": _make_build_catalog(
             client=client,
             model=model,
@@ -769,9 +825,14 @@ def make_recycle_commands(
         "show_catalog": _make_show_catalog(catalog_repository=catalog_repository),
     }
 
+
+def make_recycle_commands(runners: dict[str, RecycleRunner]) -> tuple[PluginCommand, ...]:
+    """The /recycle slash command over the shared runners. A command always
+    writes the outcome's Markdown as the message, success or not."""
+
     async def handle_recycle(context: CommandContext) -> str:
         start = time.perf_counter()
-        handler = subcommands.get(context.subcommand)
+        runner = runners.get(context.subcommand)
 
         logger.info(
             "Command started | command=/recycle %s conversation=%s",
@@ -779,7 +840,7 @@ def make_recycle_commands(
             context.conversation_id,
         )
 
-        if handler is None:
+        if runner is None:
             # Unreachable through ChatService, which answers unknown
             # subcommands itself; kept for a caller that bypasses it.
             result = (
@@ -787,7 +848,7 @@ def make_recycle_commands(
                 + render_subcommand_lines("recycle", SUBCOMMANDS)
             )
         else:
-            result = await handler(context)
+            result = (await runner(context)).markdown
 
         logger.info(
             "Command completed | command=/recycle %s elapsed=%.2fs",

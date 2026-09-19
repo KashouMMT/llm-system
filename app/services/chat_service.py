@@ -38,6 +38,7 @@ from app.runtime.event_bus import (
     EventBus,
 )
 from app.services.conversation_title_service import ConversationTitleService
+from app.services.reply_blocks import ReplyBlocks
 from app.services.summarization_service import SummarizationService
 from app.storage.base import FileStorage
 from app.utils import conversation_log
@@ -123,9 +124,13 @@ class ChatService:
         event_bus: EventBus,
         conversation_lock: ConversationLock,
         spawn: Callable[[Coroutine[Any, Any, None]], asyncio.Task],
+        reply_blocks: ReplyBlocks,
         commands: Mapping[str, PluginCommand] | None = None,
     ) -> None:
         self.agent_graph = agent_graph
+        # Shared with the tools through ToolContext: generate() attaches a
+        # writer per assistant message, tools publish into it.
+        self.reply_blocks = reply_blocks
         self.conversation_repository = conversation_repository
         self.message_repository = message_repository
         self.file_repository = file_repository
@@ -595,6 +600,7 @@ class ChatService:
     async def generate(
         self,
         conversation_id: UUID,
+        user: User,
         user_message_id: int,
         assistant_message_id: int,
         user_input: str,
@@ -621,6 +627,30 @@ class ChatService:
         seq = 0
         status = "failed"
 
+        def emit(text: str) -> None:
+            nonlocal seq
+
+            buffer.append(text)
+            seq += 1
+
+            self.event_bus.publish(
+                Event(
+                    type=EVENT_MESSAGE_DELTA,
+                    conversation_id=conversation_id,
+                    payload={
+                        "message_id": assistant_message_id,
+                        "seq": seq,
+                        "text": text,
+                    },
+                )
+            )
+
+        def emit_block(markdown: str) -> None:
+            # A block is its own paragraph whatever the model wrote before
+            # it; a table glued onto the end of a sentence does not render.
+            separator = "\n\n" if buffer and not buffer[-1].endswith("\n\n") else ""
+            emit(f"{separator}{markdown.strip()}\n\n")
+
         try:
             human_message, image_blocks = await self._build_turn_input(
                 conversation_id=conversation_id,
@@ -628,35 +658,27 @@ class ChatService:
                 user_input=user_input,
             )
 
-            async for message_chunk, metadata in self.agent_graph.stream(
-                input_messages=[human_message],
-                thread_id=str(conversation_id),
-                current_user_message_id=user_message_id,
-                assistant_message_id=assistant_message_id,
-                current_turn_image_blocks=image_blocks,
-            ):
-                if metadata.get("langgraph_node") != "agent":
-                    continue
+            # Tools write deterministic blocks (a scan table) through
+            # emit_block, into the same buffer and delta stream as the
+            # model's tokens — see app/services/reply_blocks.py.
+            with self.reply_blocks.attach(assistant_message_id, emit_block):
+                async for message_chunk, metadata in self.agent_graph.stream(
+                    input_messages=[human_message],
+                    thread_id=str(conversation_id),
+                    current_user_message_id=user_message_id,
+                    assistant_message_id=assistant_message_id,
+                    current_turn_image_blocks=image_blocks,
+                    user=user,
+                ):
+                    if metadata.get("langgraph_node") != "agent":
+                        continue
 
-                content = message_chunk.content
+                    content = message_chunk.content
 
-                if not content or not isinstance(content, str):
-                    continue
+                    if not content or not isinstance(content, str):
+                        continue
 
-                buffer.append(content)
-                seq += 1
-
-                self.event_bus.publish(
-                    Event(
-                        type=EVENT_MESSAGE_DELTA,
-                        conversation_id=conversation_id,
-                        payload={
-                            "message_id": assistant_message_id,
-                            "seq": seq,
-                            "text": content,
-                        },
-                    )
-                )
+                    emit(content)
 
             if buffer:
                 status = "complete"

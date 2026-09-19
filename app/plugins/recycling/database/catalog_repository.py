@@ -48,6 +48,9 @@ _COLUMNS = (
     "source",
 )
 
+# Everything a single-row update rewrites: all but the key and the order.
+_DATA_COLUMNS = _COLUMNS[2:]
+
 
 def _to_row(item: CatalogItem, position: int) -> tuple:
     metadata = item.metadata
@@ -195,4 +198,114 @@ class CatalogRepository:
             CATALOG_TABLE,
             self._tenant,
             len(catalog),
+        )
+
+    # ---- single rows ---------------------------------------------------
+    #
+    # For the catalog-editing tools: one row per call, never a whole-catalog
+    # rewrite, so an edit cannot disturb rows it did not name. Each write
+    # logs what it touched at INFO — the audit trail for model-made edits.
+
+    async def get(self, item_id: str) -> CatalogItem | None:
+        try:
+            async with (
+                self._pool.connection() as conn,
+                conn.cursor(row_factory=dict_row) as cur,
+            ):
+                await cur.execute(
+                    f"SELECT {', '.join(_COLUMNS)} FROM {CATALOG_TABLE} "
+                    "WHERE tenant = %s AND id = %s",
+                    (self._tenant, item_id),
+                )
+                row = await cur.fetchone()
+
+            return None if row is None else _from_row(row)
+        except (psycopg.Error, ValidationError) as exc:
+            logger.exception(
+                "Catalog get failed | table=%s tenant=%s id=%s",
+                CATALOG_TABLE,
+                self._tenant,
+                item_id,
+            )
+            raise CatalogStorageError(str(exc)) from exc
+
+    async def insert(self, item: CatalogItem) -> None:
+        """Append one row after the current last position."""
+        placeholders = ", ".join(["%s"] * (len(_COLUMNS) + 1))
+
+        try:
+            async with self._pool.connection() as conn, conn.transaction():
+                cur = await conn.execute(
+                    f"SELECT COALESCE(MAX(position) + 1, 0) FROM {CATALOG_TABLE} "
+                    "WHERE tenant = %s",
+                    (self._tenant,),
+                )
+                (position,) = await cur.fetchone()
+                await conn.execute(
+                    f"INSERT INTO {CATALOG_TABLE} (tenant, {', '.join(_COLUMNS)}) "
+                    f"VALUES ({placeholders})",
+                    (self._tenant, *_to_row(item, position)),
+                )
+        except psycopg.Error as exc:
+            self._log_write_failure("insert", item.id)
+            raise CatalogStorageError(str(exc)) from exc
+
+        logger.info(
+            "Catalog row inserted | table=%s tenant=%s id=%s", CATALOG_TABLE, self._tenant, item.id
+        )
+
+    async def update(self, item: CatalogItem) -> bool:
+        """Rewrite one row's data columns. False when no row has that id."""
+        assignments = ", ".join(f"{column} = %s" for column in _DATA_COLUMNS)
+
+        try:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    f"UPDATE {CATALOG_TABLE} SET {assignments}, updated_at = NOW() "
+                    "WHERE tenant = %s AND id = %s",
+                    (*_to_row(item, 0)[2:], self._tenant, item.id),
+                )
+                updated = cur.rowcount == 1
+        except psycopg.Error as exc:
+            self._log_write_failure("update", item.id)
+            raise CatalogStorageError(str(exc)) from exc
+
+        logger.info(
+            "Catalog row updated | table=%s tenant=%s id=%s found=%s",
+            CATALOG_TABLE,
+            self._tenant,
+            item.id,
+            updated,
+        )
+        return updated
+
+    async def delete(self, item_id: str) -> bool:
+        """Remove one row. False when no row has that id."""
+        try:
+            async with self._pool.connection() as conn:
+                cur = await conn.execute(
+                    f"DELETE FROM {CATALOG_TABLE} WHERE tenant = %s AND id = %s",
+                    (self._tenant, item_id),
+                )
+                deleted = cur.rowcount == 1
+        except psycopg.Error as exc:
+            self._log_write_failure("delete", item_id)
+            raise CatalogStorageError(str(exc)) from exc
+
+        logger.info(
+            "Catalog row deleted | table=%s tenant=%s id=%s found=%s",
+            CATALOG_TABLE,
+            self._tenant,
+            item_id,
+            deleted,
+        )
+        return deleted
+
+    def _log_write_failure(self, operation: str, item_id: str) -> None:
+        logger.exception(
+            "Catalog %s failed | table=%s tenant=%s id=%s",
+            operation,
+            CATALOG_TABLE,
+            self._tenant,
+            item_id,
         )

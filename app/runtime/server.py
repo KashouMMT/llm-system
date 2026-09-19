@@ -537,6 +537,7 @@ def create_api(application: Application) -> FastAPI:
             application.spawn(
                 application.chat_service.generate(
                     conversation_id=conversation_id,
+                    user=user,
                     user_message_id=turn.user_message_id,
                     assistant_message_id=turn.assistant_message_id,
                     user_input=request.message,

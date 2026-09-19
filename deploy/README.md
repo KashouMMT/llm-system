@@ -72,8 +72,9 @@ deltas:
 | `CONVERSATION_LOG` | `false` |
 | `ALLOW_REGISTRATION` | `false` once the accounts this deployment needs exist — `POST /auth/register` is public with no invite flow, so left open on a reachable IP/domain it lets anyone create an account and start filling disk via uploads |
 | `EXCLUDED_TOOL_PLUGINS` | **`recycling`** — see below. |
+| `DB_AGENT_PASSWORD` | leave unset or empty here. The agent database role (the login model-written SQL runs as) is created only when a loaded plugin grants it a table, and with `recycling` excluded nothing does — so this server never gets the role. On a deployment that *does* load recycling, set a real password: the built-in default is for local runs only (startup warns while it is in use). |
 
-No `DB_*` split parts — `DATABASE_URL` wins whenever it is set.
+No `DB_*` split parts — `DATABASE_URL` wins whenever it is set. (`DB_AGENT_USER` / `DB_AGENT_PASSWORD` are separate: they name a second role, not parts of `DATABASE_URL`.)
 
 ### `EXCLUDED_TOOL_PLUGINS` is not optional here
 

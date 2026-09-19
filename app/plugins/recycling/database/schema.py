@@ -10,7 +10,11 @@ A failure here is logged by the plugin loader, which then leaves the whole
 plugin out rather than loading commands against a missing table.
 """
 
+import psycopg
 from psycopg_pool import AsyncConnectionPool
+
+from app.database.agent_role import AgentRole
+from app.utils.logger import logger
 
 CATALOG_TABLE = "recycling_catalog_items"
 
@@ -62,6 +66,61 @@ CREATE TABLE IF NOT EXISTS {CATALOG_TABLE} (
 """
 
 
+# What the model's SQL sees, instead of the table. Three jobs:
+# - Tenant isolation. The agent role is granted this view only, never the
+#   table, so model-written SQL cannot read another tenant's rows. The
+#   tenant is a literal because there is one today; per-tenant access for
+#   agent SQL (a view per tenant, or row-level security) is unsolved and
+#   must be decided before a second tenant exists.
+# - Internals hidden: `tenant` and `position` mean nothing to an analyst.
+# - security_barrier, so a function in the model's WHERE clause is never
+#   evaluated against rows the tenant filter would have removed.
+#
+# Dropped and recreated on every start: CREATE OR REPLACE VIEW refuses a
+# changed column list, and the database is disposable anyway.
+CATALOG_VIEW = "recycling_catalog"
+
+_CREATE_CATALOG_VIEW = f"""
+CREATE VIEW {CATALOG_VIEW} WITH (security_barrier) AS
+SELECT id, canonical_label, aliases, visual_class, excluded, exclusion_reason,
+       observations, weight_kg, weight_kg_min, weight_kg_max,
+       length_cm, width_cm, height_cm, volume_m3, material, nestable, stackable,
+       unit_price, currency, extra, source, updated_at
+FROM {CATALOG_TABLE}
+WHERE tenant = '{DEFAULT_TENANT}'
+"""
+
+
 async def ensure_schema(pool: AsyncConnectionPool) -> None:
     async with pool.connection() as conn:
         await conn.execute(_CREATE_CATALOG_TABLE)
+        await conn.execute(f"DROP VIEW IF EXISTS {CATALOG_VIEW}")
+        await conn.execute(_CREATE_CATALOG_VIEW)
+
+    await _try_enable_trigram(pool)
+
+
+async def _try_enable_trigram(pool: AsyncConnectionPool) -> None:
+    """
+    pg_trgm gives the model similarity(a, b) for near-duplicate labels —
+    "office chair" / "office-chair" / "officechair" — which exact GROUP BY
+    cannot find, and which matters more the larger the catalog grows.
+
+    Best effort: CREATE EXTENSION needs privileges a managed database may
+    not grant. Without it the query tool still works; the model just gets
+    an "unknown function" error if it tries similarity(), and falls back.
+    """
+    try:
+        async with pool.connection() as conn:
+            await conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    except psycopg.Error as exc:
+        logger.warning(
+            "pg_trgm not available; near-duplicate search disabled | error=%s",
+            str(exc).strip().splitlines()[0] if str(exc).strip() else type(exc).__name__,
+        )
+
+
+async def grant_agent_read(agent_role: AgentRole) -> bool:
+    """Let model-written SQL read the catalog view — the view, never the
+    table, so the tenant filter cannot be bypassed."""
+    return await agent_role.grant_select(CATALOG_VIEW)

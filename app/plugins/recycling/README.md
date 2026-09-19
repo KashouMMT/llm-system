@@ -1,12 +1,12 @@
 # recycling
 
-`/recycle` — the recyclable-item scanner. Today it has only slash
-commands and no tools. That is a stage, not the design: the plugin is
-heading toward agent tools (see **Direction: agent tools** below).
-**Must be named in `EXCLUDED_TOOL_PLUGINS` on the deploy branch** — the
-production job-application service must never load it, and once the
-plugin has tools that exclusion is the only thing keeping them out of the
-`anna` persona's tool schema. See
+The recyclable-item scanner, reachable two ways: the `recycle_*` agent
+tools (the model calls them from plain chat) and the `/recycle` slash
+commands (a user types them). Both run the same code — see **Agent
+tools**. **Must be named in `EXCLUDED_TOOL_PLUGINS` on the deploy
+branch** — the production job-application service must never load it, and
+that exclusion is the only thing keeping these tools out of the `anna`
+persona's tool schema. See
 `documentation/claude/Recycling_Estimator_TODO.md`, the context-restore
 document this plugin is built from; read that before changing anything
 here.
@@ -15,8 +15,12 @@ here.
 
 | File / folder | Contents |
 |---|---|
-| `__init__.py` | `PLUGIN` — `initialize` creates the catalog table; builds one `openai` client at startup (from `ToolContext.llm`, overridable by `RECYCLING_VISION_MODEL`), registers `/recycle`, exposes no tools yet |
-| `commands.py` | Subcommand dispatch, attachment handling, Markdown rendering, the durable-context file attachment |
+| `__init__.py` | `PLUGIN` — `initialize` creates the catalog table and view and grants the view to the agent database role; builds the `openai` client (from `ToolContext.llm`, overridable by `RECYCLING_VISION_MODEL`) and the shared runners; registers `/recycle` and the `recycle_*` tools |
+| `commands.py` | The runners (`make_recycle_runners` → `RecycleOutcome`), `/recycle` dispatch, attachment handling, Markdown rendering, the durable-context file attachment |
+| `tools.py` | `recycle_scan`, `recycle_build_catalog`, `recycle_show_catalog` — thin adapters over the runners |
+| `catalog_tools.py` | `recycle_query_catalog` (read, SQL) and `recycle_create/update/delete_catalog_item` (write, typed) — see **Catalog knowledge tools** |
+| `prompts.py` | The chat agent's side: tool descriptions, refusals, the summaries a tool returns. `pipeline/prompts.py` is the vision model's side |
+| `plugin_prompt.txt` | Rides every request: attachments-of-this-message rule, never restate a table, call catalog tools without gatekeeping the role, build immediately (no confirmation round), SQL analysis at scale + the anomaly checklist + edit rules, force stays a command, recording rules |
 | `runner.py` | Async glue the pipeline itself doesn't have — fires consensus runs concurrently via `asyncio.to_thread` |
 | `database/` | Everything this plugin does with Postgres — see **Catalog storage** |
 | `pipeline/` | The detection pipeline — see below |
@@ -62,9 +66,8 @@ erroring. See `pipeline/build.py`'s `merge_into_catalog` for the exact
 merge rules.
 
 `edit_catalog` as a slash command was scoped and deliberately **not
-built**. Editing the catalog from chat is now planned as an admin-only
-agent tool instead (see **Direction: agent tools**). Until that exists,
-edit rows in the table directly (psql).
+built**. Editing the catalog from chat is done by the admin-only catalog
+tools instead (see **Catalog knowledge tools**); psql still works too.
 
 ## Catalog storage
 
@@ -81,6 +84,8 @@ plugin's database code lives in its own `database/` folder.
 | `position` column | Keeps build order, the order `show_catalog` has always listed |
 | `CatalogRepository.save` replaces the tenant's whole catalog in one transaction | `merge_into_catalog` already returns the complete merged catalog; a failed write leaves the old catalog intact |
 | No seed file | The table is the only catalog. A fresh database starts empty and `/recycle build_catalog` fills it. Two sources of truth (a file and a table) would need syncing on every edit |
+| View `recycling_catalog` (`WITH (security_barrier)`, `WHERE tenant = 'default'`) is what model-written SQL reads; the agent role is granted the view, **never the table** | Tenant isolation for agent SQL, and `tenant`/`position` hidden from the model. Dropped and recreated on every start (so the grant is re-applied after it). The tenant is a literal because there is one: per-tenant access for agent SQL (a view per tenant, or row-level security) is **unsolved** and must be decided before a second tenant exists |
+| `pg_trgm` created best-effort | Gives the model `similarity(a, b)` for near-duplicate labels, which grows more important with catalog size. Needs privileges a managed database may not grant; without it only that function is missing |
 
 `CatalogRepository` speaks `Catalog` in and out, so the pipeline and the
 commands never see rows. **Why the move:** the catalog used to be a
@@ -136,9 +141,97 @@ Catalog tools that read or write staff data are **admin-only**, checked
 inside the tool against the user taken from the run configuration, never
 from a tool argument.
 
-The first step, moving the catalog into Postgres, is done (see **Catalog
-storage**). The phase plan and its open questions are in
+Both goals are built: goal 1 in **Agent tools**, goal 2 in **Catalog
+knowledge tools**. Next is permission modes (Manual / Accept edits /
+Auto). The phase plan and its open questions are in
 `documentation/claude/Recycling_Agent_Tools_Plan.md`.
+
+## Agent tools
+
+| Tool | Runner | Who | Confirmation |
+|---|---|---|---|
+| `recycle_scan(frames?)` | `scan` | anyone | none — the user asked for it |
+| `recycle_build_catalog(frames?)` | `build_catalog` | admin | **none — runs in the same turn.** A confirmation round was tried and dropped: the capture is only readable on the message it came with, so by the "yes" it was gone. Control will come from permission modes (Manual / Accept edits / Auto), not the prompt |
+| `recycle_show_catalog()` | `show_catalog` | admin | none |
+| — | `build_catalog_force` | admin | **not a tool.** The model suggests the command and warns it overwrites hand-corrected rows |
+
+How one call runs (`tools.py`):
+
+1. `run_identity(config)` — who, from the run config.
+2. Admin check against the subcommand's own `SubcommandSpec.admin_only`,
+   so a tool and its command cannot disagree.
+3. The runner gets `who.command_context(subcommand, frames)` — the same
+   context `/recycle scan 20` builds, so it reads the attachments of the
+   user's **current** message and validates `frames` the same way.
+4. The runner returns a `RecycleOutcome`:
+   - **ok** → `markdown` is published as a reply block (the user sees the
+     exact table); the model gets `model_summary` — counts and the
+     instruction not to restate the table.
+   - **not ok** ("nothing to scan", catalog empty, database error) → the
+     text goes to the model to explain; nothing is published.
+
+The slash command runs the same runner and writes `markdown` as the
+message whatever `ok` is — its behaviour is unchanged.
+
+**Precondition split:** the model decides whether the user *wants* a scan
+and whether something is attached (it sees the attachment list); the
+runner decides whether the attachment is actually scannable. A scan asked
+for about a video sent in an earlier message is refused by the prompt rule
+— the runner only ever looks at the current message.
+
+**Known cost:** a video attached to a normal chat message is also turned
+into frames for the chat model to see (core attachment handling), so a
+tool scan extracts frames twice — once for the model, once for the
+pipeline.
+
+## Catalog knowledge tools
+
+`catalog_tools.py`. All admin-only (admin or root), checked in the tool.
+
+| Tool | Path | Output |
+|---|---|---|
+| `recycle_query_catalog(sql)` | One read-only query over the view `recycling_catalog`, run as the agent database role (`ToolContext.agent_role`, core) | Rows **to the model** (pipe-separated, `NULL` spelled out), at most 200 rows / 20,000 characters, with the cut stated |
+| `recycle_create_catalog_item(canonical_label, copy_from_id?, values?)` | Typed; id derived with `make_id(label)`; `copy_from_id` copies every value except id, aliases and observations | Whole new row as a reply block |
+| `recycle_update_catalog_item(item_id, changes)` | Typed; only the fields in `changes`; `null` clears | Before/after of changed fields as a reply block |
+| `recycle_delete_catalog_item(item_id)` | Typed | Whole removed row as a reply block |
+
+**Reads are SQL, writes are not.** Analysis questions are open-ended, so
+reads take free-form SQL — safe because the agent role can read the view
+and nothing else. Writes never do: a raw `UPDATE` missing its `WHERE`
+rewrites every row, and no permission can tell that from a correct one. A
+typed call names one row; every value passes the pipeline's own
+`CatalogItem` model; the catalog is rebuilt in memory with the change, so
+`Catalog`'s alias index rejects a name claimed by two rows — the same check
+scans rely on, so an edit can never leave the catalog unloadable. Every
+write shows its exact effect to the user and logs `Catalog row
+inserted/updated/deleted | id=…` — nothing the model writes is invisible to
+a human.
+
+**System-managed:** `id` (the key scan results reference — change the
+label instead), `observations` (a harvest count), `updated_at`.
+
+**Why the fields are nested** (`changes` / `values`), not top-level
+arguments: LangChain 1.6 fills every omitted top-level argument with its
+default, so "not sent" and "sent as null" arrive identical, and an update
+of one field would try to null the rest. A nested model keeps Pydantic's
+`model_fields_set`. Found by test, not by reading.
+
+**Scale.** At 10k+ rows the model must never read the catalog row by row.
+The row cap is applied *inside* the database (the query is wrapped in
+`LIMIT`), so a large table costs nothing extra; the cut message and the
+plugin prompt steer the model to `COUNT` / `GROUP BY` / `HAVING` and to
+`similarity()` for near-duplicates, and to `LIMIT`/`OFFSET` paging only
+when rows must be listed. Anomaly checks are named in `plugin_prompt.txt`
+(shared labels/aliases, weight outside min–max, implausible metadata,
+volume vs dimensions, missing metadata, excluded with no reason,
+non-English text). The model proposes fixes and never changes a row it was
+not asked to change.
+
+**Cost.** Measured as sent to OpenAI (2026-09-19): create ≈1,040 tokens,
+update ≈740, query ≈310; all seven recycling tools ≈2,700, riding every
+request (provider prompt caching absorbs most of it). The loader's startup
+estimate undercounts the edit tools — their fields sit in a nested `$defs`
+it does not expand. Excluding the plugin removes all of it.
 
 ## Model and credentials
 

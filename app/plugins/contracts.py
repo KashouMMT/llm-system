@@ -21,8 +21,10 @@ from langchain_core.tools import BaseTool
 from psycopg_pool import AsyncConnectionPool
 
 from app.authentication.models import User
+from app.database.agent_role import AgentRole
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.file_repository import FileRepository
+from app.services.reply_blocks import ReplyBlocks
 from app.storage.base import FileStorage
 from app.utils.logger import logger
 
@@ -127,6 +129,15 @@ class ToolContext:
     # that knows the tables exist. The tables themselves stay behind;
     # accepted, the database is disposable.
     db_pool: AsyncConnectionPool
+    # Where a tool puts Markdown the user must see exactly (a scan table),
+    # bypassing the model. Pair with app.plugins.run_context for the
+    # assistant_message_id to publish into.
+    reply_blocks: ReplyBlocks
+    # The only way model-written SQL reaches the database: a separate login
+    # role that can read exactly what plugins grant it. A plugin grants its
+    # own table or view from initialize (agent_role.grant_select) and runs
+    # queries with agent_role.query — never through db_pool.
+    agent_role: AgentRole
 
 
 @dataclass(frozen=True)
