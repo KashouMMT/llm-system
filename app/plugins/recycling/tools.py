@@ -119,6 +119,12 @@ def make_recycle_tools(
             _CaptureArgs,
         ),
         build(
+            "recycle_catalog_health",
+            "health",
+            prompts.HEALTH_DESCRIPTION,
+            _NoArgs,
+        ),
+        build(
             "recycle_show_catalog",
             "show_catalog",
             prompts.SHOW_CATALOG_DESCRIPTION,

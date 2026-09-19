@@ -1,5 +1,5 @@
 """The /recycle command namespace: scan (aliases scan_image, scan_video),
-build_catalog, build_catalog_force, show_catalog. scan and both
+build_catalog, build_catalog_force, show_catalog, health. scan and both
 build_catalog variants take one room video or one or more photos.
 
 Each subcommand is a runner returning a RecycleOutcome, built once by
@@ -35,6 +35,7 @@ from app.plugins.contracts import (
     SubcommandSpec,
 )
 from app.plugins.recycling import prompts
+from app.plugins.recycling.health import KIND_TITLES, HealthReport, check_catalog
 from app.plugins.recycling.database import (
     CatalogRepository,
     CatalogStorageError,
@@ -173,6 +174,16 @@ SUBCOMMANDS = (
             "Show the item catalog as a table: label, excluded, weight, "
             "dimensions, material, and links to the evidence images each row "
             "was detected in."
+        ),
+        admin_only=True,
+    ),
+    SubcommandSpec(
+        name="health",
+        summary=(
+            "Check the catalog against fixed rules — names used by two rows, "
+            "near-duplicate labels, impossible weight ranges or densities, "
+            "weights far from their class, missing metadata, excluded rows "
+            "without a reason, non-English text. Reports; changes nothing."
         ),
         admin_only=True,
     ),
@@ -999,6 +1010,78 @@ def _make_catalog_link(*, catalog_repository: CatalogRepository) -> RecycleRunne
     return catalog_link
 
 
+# Findings listed per kind in the chat; the rest are counted. A 10k-row
+# catalog missing metadata on half its rows must not become a 5k-line
+# message — the counts carry the scale, the examples show what to fix.
+HEALTH_EXAMPLES_SHOWN = 10
+
+
+def _render_health(report: HealthReport) -> str:
+    grouped = report.by_kind()
+
+    if not grouped:
+        lines = [f"**Catalog health — {report.checked} rows checked, no rule findings.**"]
+    else:
+        # A heading and a bullet list per check, not a table: the chat
+        # renders no raw HTML (so no line breaks inside a cell), and its
+        # table cells never wrap, so ten examples in one cell would be one
+        # very long line.
+        lines = [
+            f"**Catalog health — {report.checked} rows checked, "
+            f"{report.flagged_rows} flagged, {len(report.findings)} finding(s).**"
+        ]
+        for kind, findings in grouped.items():
+            lines += ["", f"**{KIND_TITLES[kind]}** ({len(findings)})"]
+            lines += [
+                f"- `{finding.item_id}` — {finding.detail}"
+                for finding in findings[:HEALTH_EXAMPLES_SHOWN]
+            ]
+            if len(findings) > HEALTH_EXAMPLES_SHOWN:
+                lines.append(f"- … and {len(findings) - HEALTH_EXAMPLES_SHOWN} more")
+
+    lines += ["", "_Fixed rule checks only; whether a value is plausible for what "
+              "the label names is a judgement these rules do not make._"]
+
+    if report.notes:
+        lines += ["", *(f"- {note}" for note in report.notes)]
+
+    return "\n".join(lines)
+
+
+def _make_health(*, catalog_repository: CatalogRepository) -> RecycleRunner:
+    async def health(context: CommandContext) -> RecycleOutcome:
+        try:
+            items = await catalog_repository.load_items()
+        except CatalogStorageError:
+            return _failed(_STORAGE_FAILED)
+
+        if not items:
+            return _failed(
+                "The catalog is empty. Run `/recycle build_catalog` with a room "
+                "video or some photos first."
+            )
+
+        report = check_catalog(items)
+
+        logger.info(
+            "Catalog health checked | rows=%s flagged=%s findings=%s kinds=%s",
+            report.checked,
+            report.flagged_rows,
+            len(report.findings),
+            {kind: len(found) for kind, found in report.by_kind().items()},
+        )
+
+        return RecycleOutcome(
+            markdown=_render_health(report),
+            model_summary=prompts.health_summary(report),
+            # The table is for review now; later turns keep the counts, and
+            # re-run the check (it is free) for anything more.
+            context=prompts.health_placeholder(report),
+        )
+
+    return health
+
+
 # --------------------------------------------------------------------------
 # Dispatch
 # --------------------------------------------------------------------------
@@ -1055,6 +1138,7 @@ def make_recycle_runners(
         # _make_catalog_link). ChatService only dispatches names listed in
         # SUBCOMMANDS, so a user cannot reach it by typing.
         "catalog_link": _make_catalog_link(catalog_repository=catalog_repository),
+        "health": _make_health(catalog_repository=catalog_repository),
     }
 
 

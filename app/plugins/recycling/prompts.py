@@ -6,6 +6,8 @@ the pipeline sends the *vision* model (detection, clustering, enrichment).
 This file is the chat agent's side.
 """
 
+from app.plugins.recycling.health import KIND_TITLES, HealthReport
+
 # Tool results are English whatever the conversation is in; a model
 # relaying one drifted into the wrong language in testing. Every text a
 # tool returns therefore restates the rule.
@@ -169,6 +171,69 @@ _CHANGE_SHOWN = (
 
 def edit_summary(*, action: str, item_id: str, detail: str) -> str:
     return f"{action} `{item_id}`: {detail}\n\n{_CHANGE_SHOWN}"
+
+
+HEALTH_DESCRIPTION = """\
+Run the catalog's fixed health checks and show the report to the user: \
+names used by two rows, near-duplicate labels, impossible weight ranges, \
+implausible density (weight for its size), weights far from their \
+visual_class median, volume larger than the box, extreme dimensions, \
+collectable rows missing weight or size, excluded rows with no reason, \
+non-English text. Call it FIRST whenever the user asks what is wrong with, \
+or to check, audit or clean up the catalog — never re-implement these \
+checks in SQL. Changes nothing. The tool checks the user's role itself \
+(admin or root)."""
+
+# Findings per kind handed to the model, enough to propose fixes for; the
+# counts say how many more there are.
+_HEALTH_FINDINGS_FOR_MODEL = 15
+
+
+def health_summary(report: HealthReport) -> str:
+    grouped = report.by_kind()
+
+    if not grouped:
+        findings_text = "No rule findings."
+    else:
+        blocks = []
+        for kind, findings in grouped.items():
+            shown = findings[:_HEALTH_FINDINGS_FOR_MODEL]
+            lines = [f"{KIND_TITLES[kind]} ({len(findings)}):"]
+            lines += [f"- {finding.item_id}: {finding.detail}" for finding in shown]
+            if len(findings) > len(shown):
+                lines.append(
+                    f"- …{len(findings) - len(shown)} more; list them with "
+                    "recycle_query_catalog if needed"
+                )
+            blocks.append("\n".join(lines))
+        findings_text = "\n\n".join(blocks)
+
+    notes = "".join(f"\nNote: {note}" for note in report.notes)
+
+    return (
+        f"Health checks ran over all {report.checked} rows; "
+        f"{report.flagged_rows} flagged. The report is displayed to the user "
+        f"above your reply.\n\n{findings_text}{notes}\n\n"
+        "Do not repeat the report. In a few sentences, say which findings "
+        "matter most and propose a concrete fix per row where the fix is "
+        "clear. These rules do not judge whether a value is plausible for what "
+        "the label names; if the user wants that too, do the plausibility "
+        "read described in your instructions. Change no row the user did not "
+        "ask you to change. " + _LANGUAGE
+    )
+
+
+def health_placeholder(report: HealthReport) -> str:
+    """What later turns remember instead of the health report itself."""
+    counts = ", ".join(
+        f"{KIND_TITLES[kind].lower()}: {len(findings)}"
+        for kind, findings in report.by_kind().items()
+    )
+    return (
+        f"[Catalog health report shown here: {report.checked} rows checked, "
+        f"{report.flagged_rows} flagged ({counts or 'no findings'}). Run "
+        "recycle_catalog_health again for the details — it is free.]"
+    )
 
 
 def catalog_link_summary(*, total: int, collectable: int, excluded: int) -> str:

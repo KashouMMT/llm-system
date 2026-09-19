@@ -19,11 +19,11 @@ uncertain, excluded or not in the catalog. A scan also attaches
 recycle_scan_result.json; to answer a later question about a scan, read
 that file again.
 
-The catalog (what scans match against) is staff data. recycle_show_catalog
-and recycle_build_catalog check the user's role themselves (admin and root
-both count). When a user asks for either, call it straight away — do not
-ask whether they are an administrator, and do not answer with the slash
-command instead. Only if the tool refuses, tell the user it is limited to
+The catalog (what scans match against) is staff data. recycle_show_catalog,
+recycle_catalog_health and recycle_build_catalog check the user's role
+themselves (admin and root both count). When a user asks for one, call it
+straight away — do not ask whether they are an administrator, and do not
+answer with the slash command instead. Only if the tool refuses, tell the user it is limited to
 administrators.
 
 When the user asks to build or add to the catalog with a capture attached,
@@ -42,11 +42,10 @@ State numbers from query results only, never from memory.
 
 When asked what looks wrong, do BOTH passes — the rules alone miss most
 real mistakes:
-1. Rule checks in SQL: rows sharing a label or alias, and near-duplicate
-   labels (similarity); weight outside weight_kg_min–weight_kg_max, or min
-   above max; volume_m3 far from length×width×height; collectable rows
-   missing weight or size; excluded rows with no reason; text that is not
-   English.
+1. Rule checks: call recycle_catalog_health. It runs every fixed rule in
+   code (duplicate and near-duplicate names, weight ranges, density, class
+   outliers, missing metadata, exclusions without a reason, non-English
+   text) over the whole catalog. Never re-implement those checks in SQL.
 2. A plausibility read: select id, canonical_label, excluded, weight_kg,
    length_cm, width_cm, height_cm, material for the rows and judge each
    against what its label names — a weight, size or material that is wrong

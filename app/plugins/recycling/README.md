@@ -17,7 +17,8 @@ here.
 |---|---|
 | `__init__.py` | `PLUGIN` — `initialize` creates the catalog table and view and grants the view to the agent database role; builds the `openai` client (from `ToolContext.llm`, overridable by `RECYCLING_VISION_MODEL`) and the shared runners; registers `/recycle` and the `recycle_*` tools |
 | `commands.py` | The runners (`make_recycle_runners` → `RecycleOutcome`), `/recycle` dispatch, attachment handling, Markdown rendering, the durable-context file attachment |
-| `tools.py` | `recycle_scan`, `recycle_build_catalog`, `recycle_show_catalog` — thin adapters over the runners |
+| `tools.py` | `recycle_scan`, `recycle_build_catalog`, `recycle_catalog_health`, `recycle_show_catalog` — thin adapters over the runners |
+| `health.py` | `check_catalog(items) → HealthReport` — the fixed rule checks, pure (no I/O); see **Catalog health** |
 | `routes.py` | `GET /plugins/recycling/catalog` (admin; the plugin's `router_factory`): a filtered page (`CatalogRepository.page` — search over id/label/aliases, `visual_class`, `excluded`, paged in SQL) plus each row's evidence. Feeds the catalog browser, `ui/src/plugins/recycling/`, under Settings → Plugins; typing bare `/recycle show_catalog` in the web chat opens that page instead of sending. Read-only: edits stay with the catalog tools |
 | `catalog_tools.py` | `recycle_query_catalog` (read, SQL) and `recycle_create/update/delete_catalog_item` (write, typed) — see **Catalog knowledge tools** |
 | `prompts.py` | The chat agent's side: tool descriptions, refusals, the summaries a tool returns. `pipeline/prompts.py` is the vision model's side |
@@ -59,6 +60,7 @@ exposes that staff data. `ChatService` refuses them for any other user;
 | `/recycle scan [frames]` | One room video **or** one or more photos (`_attached_media` decides; the app refuses a video sent with anything else). **Photos:** non-images ignored and *reported*, `runner.scan` against the catalog. **Video:** `runner.scan_video` → core `extract_frames` (ffmpeg keyframes; blurry/dark/overexposed/blank/duplicate frames dropped and counted; portrait/short/low-res/glare warned; refused under 4 usable frames with a remedy) → the same `scan`; header states frames used, skipped per reason, warnings — above the table. `frames` = 4–40, default 12, video only (an error with photos, not ignored). Renders every section: Collectable, Totals, Excluded by catalog, Not in catalog, Low agreement. JSON carries `source` (`video` / `images`) and, for video, `frame_check`. `scan_image` and `scan_video` are aliases of this handler |
 | `/recycle build_catalog [frames]` | Same video-or-photos input as `scan`. Runs harvest → cluster → enrich → assemble, then **merges additively**: new items are added, but anything that already matches an existing catalog row (by canonical label or alias) is left completely untouched. Safe to run repeatedly without eroding hand-reviewed data. Records **evidence** after the catalog is saved: each harvested label → the row it matches → the photo or frame it was seen in (`runner.harvest` now returns `sightings`). An evidence failure is reported and never undoes the build |
 | `/recycle build_catalog_force` | Same pipeline, but a match **replaces** the existing row instead of being skipped — the newer scan's canonical label, metadata, and excluded/exclusion_reason win. The existing row's `id` is kept (nothing referencing it breaks), aliases are the union of old and new, and `observations` is summed rather than reset |
+| `/recycle health` | Runs the fixed catalog rule checks (see **Catalog health**) over every row — no LLM call — and lists findings per kind with counts. Changes nothing. Display-only: later turns remember a one-line count placeholder |
 | `/recycle show_catalog` | Renders the current catalog as a Markdown table — no LLM call — with an **Evidence** column: `[img]` / `[f<frame>]` links to `/files/<id>` (the frontend points them at the API; admins may download any file). **Display-only:** later turns remember a one-line placeholder, not the table (`CommandReply` / reply-block `context=`). In the web UI the bare typed command never reaches here — the frontend opens the catalog browser instead; the CLI still renders this table. The `recycle_show_catalog` tool does not use this runner: it runs `catalog_link` (one `COUNT` query, `CatalogRepository.counts`) and posts a link to the page (`CATALOG_PAGE_PATH`, which must match the frontend section's route) |
 
 Both build commands tolerate an empty catalog — an empty table is an
@@ -163,6 +165,7 @@ Auto). The phase plan and its open questions are in
 | `recycle_scan(frames?)` | `scan` | anyone | none — the user asked for it |
 | `recycle_build_catalog(frames?)` | `build_catalog` | admin | **none — runs in the same turn.** A confirmation round was tried and dropped: the capture is only readable on the message it came with, so by the "yes" it was gone. Control will come from permission modes (Manual / Accept edits / Auto), not the prompt |
 | `recycle_show_catalog()` | `catalog_link` (not a subcommand; admin rule taken from `show_catalog`) | admin | none. Posts a link to the catalog page with counts — a chat table stops being usable long before the catalog stops growing |
+| `recycle_catalog_health()` | `health` | admin | none — reads only |
 | — | `build_catalog_force` | admin | **not a tool.** The model suggests the command and warns it overwrites hand-corrected rows |
 
 How one call runs (`tools.py`):
@@ -193,6 +196,40 @@ for about a video sent in an earlier message is refused by the prompt rule
 into frames for the chat model to see (core attachment handling), so a
 tool scan extracts frames twice — once for the model, once for the
 pipeline.
+
+## Catalog health
+
+`health.py`, run by `/recycle health` and the `recycle_catalog_health`
+tool (admin). Tier 1 of the catalog-scale plan: a live test showed the
+model inventing thresholds and writing broken SQL when asked "what looks
+wrong?", so the rules that *can* be rules are code — deterministic, free,
+any catalog size — and the model keeps only the plausibility read.
+
+| Check (kind) | Rule | Why this threshold |
+|---|---|---|
+| `duplicate_name` | A name (label, alias or id, as `collapse_key` folds it) claimed by 2+ rows | `Catalog()` refuses to load this; scans cannot match reliably |
+| `near_duplicate` | `difflib` ratio ≥ 0.88 between labels in the same visual_class | "office chair"/"office chairs" ≈ 0.96, "desk"/"disk" 0.75. Pairwise per class; a class over 300 rows is skipped and noted |
+| `weight_range` | min > max, or weight outside min–max | Inconsistent by definition |
+| `density` | weight ÷ box volume outside 2–3,000 kg/m³ | Box is mostly air (a chair ≈ 19); stone/concrete ≈ 2,400 |
+| `class_outlier` | weight > 4× or < ¼ of its visual_class median, class of 4+ | Room for real size spread, still catches a unit mistake (1000×) |
+| `volume_over_box` | explicit `volume_m3` > box × 1.05 | Explicit volume is for items *smaller* than their box |
+| `dimension_extreme` | an axis ≤ 0 or > 1,000 cm | Nothing a crew carries is 10 m long |
+| `missing_metadata` | collectable row without weight or volume | `ItemMetadata.missing_fields()` — what an estimate relies on |
+| `excluded_without_reason` | excluded, empty reason | A reviewer cannot audit an unexplained exclusion |
+| `non_english` | non-ASCII in label, aliases, class, material, reason, extra | The catalog is English-only |
+
+Weight/size rules apply to **collectable** rows only — an excluded row is
+never estimated. Rows are read with `CatalogRepository.load_items()`, not
+`load()`: `Catalog()` raises on an alias conflict, and this check must
+report one. Nothing is changed. The chat shows up to 10 examples per kind
+(the model gets 15) with counts for the rest; later turns remember only a
+one-line count placeholder, since re-running is free. The report also
+states what it could **not** check — e.g. no visual_class with 4+ rows,
+which is the case today (every collectable row is its own class), so the
+class comparison has nothing to compare yet.
+
+Findings are not stored yet: the findings table, accept/dismiss in the
+catalog page, and the incremental model audit are R5–R6.
 
 ## Catalog knowledge tools
 

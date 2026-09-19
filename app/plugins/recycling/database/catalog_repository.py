@@ -155,6 +155,15 @@ class CatalogRepository:
         Raises CatalogError on an alias conflict, from Catalog itself, and
         CatalogStorageError when the query fails or a row is invalid.
         """
+        return Catalog(await self.load_items())
+
+    async def load_items(self) -> list[CatalogItem]:
+        """Every row, validated, in catalog order — without building the
+        Catalog index. For the health check, which must report an alias
+        conflict rather than fail on it the way Catalog() does.
+
+        Raises CatalogStorageError when the query fails or a row is invalid.
+        """
         try:
             async with (
                 self._pool.connection() as conn,
@@ -176,7 +185,7 @@ class CatalogRepository:
             )
             raise CatalogStorageError(str(exc)) from exc
 
-        return Catalog(items)
+        return items
 
     async def save(self, catalog: Catalog) -> None:
         """Make the tenant's stored catalog equal `catalog`, in one
